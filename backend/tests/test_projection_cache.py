@@ -17,7 +17,6 @@ from sqlalchemy import event, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api import projection as projection_api
-from app.api.app_settings import _read_espp_ticker
 from app.api.espp import _espp_quote
 from app.api.projection import ProjectionKnobs, projection_json, run_projection
 from app.limit_keys import LIMIT_401K_ELECTIVE
@@ -366,13 +365,13 @@ async def test_the_narrowed_cells_cover_every_setting_and_quote_the_build_reads(
     ],
 )
 async def test_the_bound_ticker_is_the_one_the_build_prices(db, stored):
-    # The latest_prices cell is restricted with the ticker the route resolves BEFORE the build
-    # (api/app_settings._read_espp_ticker); the build prices vests with _espp_quote's. Pinned
-    # equal on every envelope shape, so the cell can never cover a different security.
+    # The latest_prices cell is restricted with the ticker the cache resolves BEFORE the build
+    # (read_cache._employer_ticker); the build prices vests with _espp_quote's. Pinned equal on
+    # every envelope shape, so the cell can never cover a different security.
     if stored is not None:
         db.add(AppSetting(key="espp_ticker", value=stored))
         await db.commit()
-    assert await _read_espp_ticker(db) == (await _espp_quote(db))[0]
+    assert await read_cache._employer_ticker(db) == (await _espp_quote(db))[0]
 
 
 async def test_422s_and_404s_are_never_cached(auth_client, db):

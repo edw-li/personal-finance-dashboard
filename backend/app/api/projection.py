@@ -50,8 +50,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# The employer ticker exactly as the vests' quote resolves it, for the cache's quote cell.
-from app.api.app_settings import _read_espp_ticker
 from app.api.deps import get_current_user
 
 # The espp router owns the espp_ticker -> securities -> latest_prices soft link; the vests
@@ -867,9 +865,7 @@ async def projection_json(db: AsyncSession, knobs: ProjectionKnobs) -> bytes:
         model = await _build(db, knobs, today)
         return model.model_dump_json(by_alias=True).encode()
 
-    return await cached_projection(
-        db, (today, knobs.cache_key()), build, employer_ticker=_read_espp_ticker
-    )
+    return await cached_projection(db, (today, knobs.cache_key()), build)
 
 
 async def run_projection(db: AsyncSession, knobs: ProjectionKnobs) -> ProjectionOut:

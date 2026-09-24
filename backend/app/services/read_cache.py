@@ -421,25 +421,21 @@ _PROJECTION_FINGERPRINT = _fingerprint_statement(PROJECTION_TABLES, _PROJECTION_
 
 
 async def cached_projection(
-    db: AsyncSession,
-    key: Hashable,
-    build: Callable[[], Awaitable[bytes]],
-    *,
-    employer_ticker: Callable[[AsyncSession], Awaitable[str | None]],
+    db: AsyncSession, key: Hashable, build: Callable[[], Awaitable[bytes]]
 ) -> bytes:
     """The projection's bytes for `key` (the product day and the normalized knobs), built
     once per data version of what it reads: stable-store, single-flight and the pending-
     changes bypass are `_memoised`'s. A build that raises (a 422, the empty book's 404) is
     never stored — its waiters look again.
 
-    `employer_ticker` resolves the ticker the quote cell is restricted to, exactly as the build
-    resolves it (the route passes api/app_settings._read_espp_ticker; a service may not import a
-    router), and only AFTER the pending-changes check — its read would autoflush them. The key
-    carries it: a ticker changed between the two fingerprints changes the settings cell as well,
-    so such a build is never filed (rule 1)."""
+    The quote cell is restricted to the employer ticker as the build resolves it —
+    `_employer_ticker`, the withholding cache's own reader of the same rule — read only AFTER the
+    pending-changes check, since its read would autoflush them. The key carries it: a ticker
+    changed between the two fingerprints changes the settings cell as well, so such a build is
+    never filed (rule 1)."""
     if _has_pending_changes(db):
         return await build()
-    ticker = await employer_ticker(db)
+    ticker = await _employer_ticker(db)
     statement = _PROJECTION_FINGERPRINT.bindparams(ticker=ticker)
     before = await _fingerprint(db, statement)
     return await _memoised(
