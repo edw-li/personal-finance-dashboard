@@ -490,6 +490,19 @@ async def test_projection_section_carries_money_lasts_phases_vests_and_the_base(
     assert section["base_provisional"] is False
 
 
+async def test_the_projection_section_says_which_p10_is_which(db):
+    # 2026-09-24 review minor 9: the payload keeps its keys, and "p10" is the OPTIMISTIC edge of
+    # the reach dates but the PESSIMISTIC edge of the depletion months — so the section says how
+    # the page speaks of each, and the model answers in "1 in 10 / 9 in 10".
+    await _seed_investable_base(db)
+    note = (await build_context(db, route="/projection", search={}, view={}))["projection"][
+        "paths_note"
+    ]
+    assert "fi_month_p10" in note and "optimistic" in note and "1 in 10 paths reach FI" in note
+    assert "lasts_until_p10" in note and "pessimistic" in note and "in 9 of 10 paths" in note
+    assert "Never say p10, p50 or p90" in note and len(note) < 500
+
+
 async def test_a_refused_plan_until_is_the_sections_error_not_a_crash(db):
     await _seed_investable_base(db)
     section = (

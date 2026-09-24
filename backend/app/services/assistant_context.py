@@ -37,6 +37,15 @@ LIVING_NOTE = (
     "force; 'average' = the Spending page's previous-12-months living average. A month absent "
     "from the list has no estimate, which is not zero."
 )
+# How the model reads the projection's path figures (2026-09-24 review minor 9): the payload keeps
+# its keys, and "p10" is the optimistic edge of the reach dates but the pessimistic edge of the
+# depletion months — so the section says each the page's way.
+PATHS_NOTE = (
+    "Speak of simulated paths as the page does. fi_month_p10 is the optimistic edge: 1 in 10 "
+    "paths reach FI by then; fi_month_p50 is the headline FI date (half of paths); fi_month_p90 "
+    "is the late edge (9 in 10 paths by then). money_lasts.lasts_until_p10 is the pessimistic "
+    "edge: in 9 of 10 paths the money lasts at least until then. Never say p10, p50 or p90."
+)
 # The knobs a Projection URL can carry — the page's own vocabulary
 # (src/components/projection/projectionScenario.ts KNOBS) and the router's. Seven decode as
 # Decimals; `years` and `plan_until` are integers and `vests` a 0/1 flag, each decoded beside
@@ -622,6 +631,7 @@ async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
     # So the model knows a scenario is in play and can name it: without this every figure
     # below reads as the household's derived plan rather than the what-if on screen.
     payload["scenario_entries"] = honored
+    payload["paths_note"] = PATHS_NOTE
     # Decimate month-grain series to year-grain: the model reads trends, not 360 points.
     # Every series is sampled at the SAME indices, so index i still names one month across
     # all of them — and the horizon's last month survives (see _decimate).
