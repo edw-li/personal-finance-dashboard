@@ -12,16 +12,19 @@ profile in force on it, so a mid-year raise is visible and the two figures are h
 which is history and which is a projection.
 
 Every figure is a STATED ESTIMATE, never a ledger (spec §5): the app has no per-paycheck
-history, so a past payday is priced from the profile in force on it, and paydays before the
-person's earliest profile borrow that earliest profile — `backfilled_from` says so out loud,
-and only when a payday actually had to borrow.
+history, so a past payday is priced from the profile in force on it. A payday ON OR BEFORE the
+person's earliest profile's date credits NOTHING, on both sides of today (2026-09-23 spec §W1 —
+the "Will I owe?" card's own rule, so the pace strip and the tax card count the same checks):
+it used to borrow that earliest profile, which stretched a September job back to January.
+`starts_on` names the start whenever it cut a payday out of the window; `backfilled_from` stays
+on the result for older readers and is always None.
 """
 
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_CEILING, Decimal
 
-from app.services.business_days import previous_business_day, semi_monthly_paydays
+from app.services.business_days import semi_monthly_paydays
 from app.services.paycheck_calc import MONTHS_PER_YEAR, half_up2
 
 ZERO = Decimal("0")
@@ -47,10 +50,13 @@ class Walked:
     so_far: dict[str, Decimal]
     projected: dict[str, Decimal]
     basis: str
+    # Always None since 2026-09-23 spec §W1 (nothing borrows any more); kept so a reader that
+    # still looks for it reads "nothing borrowed" rather than a KeyError.
     backfilled_from: date | None
-    # Has the YEAR's first payday gone by? The employer's HSA deposit rides that check
-    # (spec §2.6) and `limit_check.paycheck_pace` is pure — it has no clock of its own, so
-    # the walk answers it here, where `today` and the cadence are both already in hand.
+    # Has the person's first CREDITED payday of the window gone by? The employer's HSA deposit
+    # rides that check (spec §2.6) — the year's first payday for anyone employed in January,
+    # their first real check for a job that starts later (§W1: nothing is paid before it).
+    # `limit_check.paycheck_pace` is pure and has no clock, so the walk answers it here.
     first_payday_passed: bool
     # What the window still has AHEAD of it — the paychecks left from `today` onward and the
     # gross they pay, priced by the SCENARIO like every other future payday (2026-09-09 audit
@@ -72,18 +78,10 @@ class Walked:
     # stays constructible; `walk` always states both.
     remaining_checks: Decimal = ZERO
     remaining_gross: Decimal = ZERO
-
-
-def first_payday(year: int, pay_periods: int) -> date:
-    """The day the year's first money lands — the HSA row's test for "has the employer's
-    January deposit happened yet".
-
-    Semi-monthly payroll pays the 15th, pulled BACK over weekends and holidays
-    (`semi_monthly_paydays`' own convention). Any other cadence has no payday calendar in
-    this app, so it credits the month on the 15th, which is the day the month basis probes.
-    """
-    mid = date(year, 1, 15)
-    return previous_business_day(mid) if pay_periods == SEMI_MONTHLY else mid
+    # The person's first profile's date when at least one payday inside the window fell on or
+    # before it and so credited nothing (2026-09-23 spec §W1) — "Nothing counts before Sep 1".
+    # None when the whole window is on a profile that was already in force.
+    starts_on: date | None = None
 
 
 def months(start: date, end: date):
@@ -97,7 +95,8 @@ def months(start: date, end: date):
 def in_force(profiles: list, day: date):
     """The latest profile effective on or before `day` — `_default_profile`'s rule without
     the DB. Before the earliest profile there is nothing to read, so the earliest one stands
-    in: the strip's "at this rate" posture, applied backwards."""
+    in — for a CADENCE probe or an employer policy only: the walk never credits a payday on or
+    before the earliest profile (2026-09-23 spec §W1)."""
     eligible = [p for p in profiles if p.effective_date <= day]
     if eligible:
         return max(eligible, key=lambda p: p.effective_date)
@@ -157,7 +156,10 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
     so_far = dict.fromkeys(LEGS, ZERO)
     projected = dict.fromkeys(LEGS, ZERO)
     by_month = False
-    backfilled: date | None = None
+    # §W1: the first profile's date once a payday inside the window fell on or before it, and
+    # the first payday that really paid — the one the employer's HSA deposit rides.
+    starts: date | None = None
+    first_credited: date | None = None
     # Summed in the same pass, on the far side of `today`: the paydays left and their gross.
     remaining_checks = ZERO
     remaining_gross = ZERO
@@ -166,17 +168,16 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
         """Who prices `day` — PURE, so asking the question never records an answer."""
         return scenario if day >= today else in_force(profiles, day)
 
-    def borrowed(day: date) -> bool:
-        """Did `priced_by` have to reach forward for a profile that did not exist yet?
-
-        Asked only where a figure was actually PRICED, never on the cadence probe below: a
-        window opening after the earliest profile has one real payday inside it and has
-        borrowed nothing, and must not say it did.
-        """
-        return day < today and day < earliest
-
     def credit(day: date, legs: dict[str, Decimal], gross: Decimal, checks: Decimal) -> None:
-        nonlocal remaining_checks, remaining_gross
+        nonlocal remaining_checks, remaining_gross, starts, first_credited
+        if day <= earliest:
+            # Before the job (2026-09-23 spec §W1): nothing was paid, so nothing is credited or
+            # counted — on EITHER side of today, the scenario's included, because a knob moved
+            # now cannot pay a check from before the first profile. The window says so instead.
+            starts = earliest
+            return
+        if first_credited is None:
+            first_credited = day
         for name, value in legs.items():
             projected[name] += value
             if day < today:
@@ -187,25 +188,19 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
             remaining_gross += gross
             remaining_checks += checks
 
-    # The cadence pricing the window's opening is the one the year's first check rides.
-    opener = first_payday(start.year, priced_by(start).pay_periods_per_year)
     for year, month in months(start, end):
         mid = date(year, month, 15)
         # Clamped so a window that opens after the 15th still probes a date inside it. This
-        # read decides the CADENCE only — it prices nothing, so it flags nothing.
+        # read decides the CADENCE only — it prices nothing.
         monthly = priced_by(min(max(mid, start), end))
         if monthly.pay_periods_per_year == SEMI_MONTHLY:
             for day in semi_monthly_paydays(year, month):
                 if start <= day <= end:
-                    if borrowed(day):
-                        backfilled = earliest
                     payer = priced_by(day)
                     credit(day, _per_payday(payer), _payday_gross(payer), ONE)
         else:
             by_month = True
             if start <= mid <= end:
-                if borrowed(mid):
-                    backfilled = earliest
                 # A month is one credit but `pay_periods_per_year / 12` CHECKS: the HSA leg
                 # is per-check dollars, so a divisor counted in months would under-fill by
                 # exactly the cadence.
@@ -222,11 +217,12 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
         so_far={name: half_up2(value) for name, value in so_far.items()},
         projected={name: half_up2(value) for name, value in projected.items()},
         basis="months" if by_month else "paydays",
-        backfilled_from=backfilled,
-        first_payday_passed=opener < today,
+        backfilled_from=None,
+        first_payday_passed=first_credited is not None and first_credited < today,
         # The count stays exact (it is a divisor); the gross rounds UP to the cent, which can
         # only make a rate smaller — a projection that lands a hair under the cap is the one
         # that reads 100 %.
         remaining_checks=remaining_checks,
         remaining_gross=remaining_gross.quantize(CENTS, rounding=ROUND_CEILING),
+        starts_on=starts,
     )

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { FilingStatus, TaxBracketsOut } from '../../types/api'
@@ -104,6 +104,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // Unsaved tables are mirrored to sessionStorage (§W9): no test inherits another's draft.
+  sessionStorage.clear()
 })
 
 describe('BracketsEditor', () => {
@@ -425,8 +427,174 @@ describe('BracketsEditor', () => {
   })
 })
 
+describe('BracketsEditor — unsaved tables survive (2026-09-23 spec §W9)', () => {
+  // bracketsFixture()'s tables as the boxes hold them: rates in percent, thresholds verbatim.
+  const LOADED = {
+    federal: [
+      { rate: '10', threshold: '0.00' },
+      { rate: '37', threshold: '100000.00' },
+    ],
+    state: [{ rate: '9.3', threshold: '0.00' }],
+    medicare: [{ rate: '1.45', threshold: '0.00' }],
+    social_security: [],
+    disability: [{ rate: '1', threshold: '0.00' }],
+    capital_gains: [],
+  }
+  const EDITED = {
+    ...LOADED,
+    federal: [
+      { rate: '10', threshold: '0.00' },
+      { rate: '35', threshold: '100000.00' },
+    ],
+  }
+  const SINGLE = 'finance-tax-brackets-draft:2024:single'
+  const MFJ = 'finance-tax-brackets-draft:2024:married_joint'
+  const stored = (key: string) => JSON.parse(sessionStorage.getItem(key) ?? 'null') as unknown
+  const seed = (key: string, draft: unknown) => sessionStorage.setItem(key, JSON.stringify(draft))
+
+  it('writes the tab’s draft under its year and status, with the tables it was typed over', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(sessionStorage.getItem(SINGLE)).toBeNull()
+    fireEvent.change(rate('Federal', 2), { target: { value: '35' } })
+    expect(stored(SINGLE)).toEqual({ loaded: LOADED, edited: EDITED })
+  })
+
+  it('restores it on the next mount, naming the year and the status; Discard puts the saved tables back', () => {
+    seed(MFJ, { loaded: LOADED, edited: EDITED })
+    render(
+      <BracketsEditor
+        brackets={statusFixture('married_joint', ['single', 'married_joint'])}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+    expect(rate('Federal', 2).value).toBe('35%')
+    expect(
+      screen.getByText('Restored unsaved tax tables for 2024 (MFJ) — they are not saved yet.'),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard restored entries' }))
+    expect(rate('Federal', 2).value).toBe('37%')
+    expect(sessionStorage.getItem(MFJ)).toBeNull()
+    expect(screen.queryByText(/Restored unsaved/)).toBeNull()
+  })
+
+  it('drops a draft typed over tables the server has since changed, and says why', () => {
+    seed(SINGLE, { loaded: { ...LOADED, state: [{ rate: '9', threshold: '0.00' }] }, edited: EDITED })
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(rate('Federal', 2).value).toBe('37%')
+    expect(
+      screen.getByText(
+        'Unsaved tax tables for 2024 (Single) were discarded: the saved values changed since you typed them.',
+      ),
+    ).toBeTruthy()
+    expect(sessionStorage.getItem(SINGLE)).toBeNull()
+  })
+
+  it('re-judges a restored draft when a newer payload lands for the same tab (review finding 5)', () => {
+    seed(SINGLE, { loaded: LOADED, edited: EDITED })
+    const { rerender } = render(
+      <BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />,
+    )
+    expect(rate('Federal', 2).value).toBe('35%')
+    rerender(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(rate('Federal', 2).value).toBe('35%') // same tables in a new object: kept
+
+    const moved = bracketsFixture()
+    moved.jurisdictions.state = [{ bracket_index: 1, rate: '0.0900', threshold: '0.00' }]
+    rerender(<BracketsEditor brackets={moved} yearStatus="single" onSaved={vi.fn()} />)
+    expect(rate('Federal', 2).value).toBe('37%')
+    expect(rate('State', 1).value).toBe('9%')
+    expect(
+      screen.getByText(
+        'Unsaved tax tables for 2024 (Single) were discarded: the saved values changed since you typed them.',
+      ),
+    ).toBeTruthy()
+    expect(sessionStorage.getItem(SINGLE)).toBeNull()
+  })
+
+  it('lets the discarded-draft note go once the user edits a table (code-quality nit)', () => {
+    seed(SINGLE, { loaded: { ...LOADED, state: [{ rate: '9', threshold: '0.00' }] }, edited: EDITED })
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(screen.getByText(/^Unsaved tax tables for 2024 \(Single\) were discarded/)).toBeTruthy()
+    fireEvent.change(rate('Federal', 1), { target: { value: '11' } })
+    expect(screen.queryByText(/were discarded: the saved values changed/)).toBeNull()
+  })
+
+  it('restores another status’ draft when its tab is opened', async () => {
+    // The MFJ tab's server tables are six empty ones (the file's fetch mock), and this draft
+    // was typed over exactly those.
+    const empty = {
+      federal: [], state: [], medicare: [], social_security: [], disability: [], capital_gains: [],
+    }
+    seed(MFJ, { loaded: empty, edited: { ...empty, federal: [{ rate: '12', threshold: '0.00' }] } })
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText(/Restored unsaved/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Married filing jointly' }))
+    await waitFor(() => expect(rate('Federal', 1).value).toBe('12%'))
+    expect(
+      screen.getByText('Restored unsaved tax tables for 2024 (MFJ) — they are not saved yet.'),
+    ).toBeTruthy()
+  })
+
+  it('an accepted discard on a tab switch forgets the tab being left', async () => {
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+    fireEvent.change(rate('Federal', 2), { target: { value: '35' } })
+    expect(sessionStorage.getItem(SINGLE)).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Married filing jointly' }))
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved Single bracket changes for 2024?')
+    await waitFor(() => expect(sessionStorage.getItem(SINGLE)).toBeNull())
+  })
+
+  it('a save that leaves nothing unsaved clears the draft', async () => {
+    const echo = bracketsFixture()
+    echo.jurisdictions.federal[1] = { bracket_index: 2, rate: '0.3500', threshold: '100000.00' }
+    vi.mocked(putTaxBrackets).mockResolvedValue(echo)
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    fireEvent.change(rate('Federal', 2), { target: { value: '35' } })
+    expect(sessionStorage.getItem(SINGLE)).not.toBeNull()
+    fireEvent.click(save('Federal'))
+    await waitFor(() => expect(sessionStorage.getItem(SINGLE)).toBeNull())
+  })
+})
+
 describe('BracketsEditor — filing-status tabs', () => {
-  const tab = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+  // A tab by its status label, with or without the "(this year’s status)" mark (§W8).
+  const tab = (name: string) =>
+    screen.getByRole('button', { name: new RegExp(`^${name}( \\(this year’s status\\))?$`) }) as HTMLButtonElement
+
+  it('says what the tabs are for and marks the year’s own status (2026-09-23 spec §W8)', () => {
+    render(
+      <BracketsEditor
+        brackets={statusFixture('married_joint', ['single', 'married_separate'])}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+    // Not "Filing status": this control picks the tables a Save rewrites; the year's status is
+    // the scope row's Change… dialog.
+    const group = screen.getByRole('group', { name: 'Tables for status' })
+    expect(group.closest('.bracket-status-row')?.querySelector('.eyebrow')?.textContent).toBe(
+      'Tables for status',
+    )
+    expect(
+      within(group).getByRole('button', { name: 'Married filing jointly (this year’s status)' }),
+    ).toBeTruthy()
+    // Only the year's own status carries the mark.
+    expect(within(group).getByRole('button', { name: 'Single' })).toBeTruthy()
+    expect(within(group).getByRole('button', { name: 'Married filing separately' })).toBeTruthy()
+  })
 
   it('offers Single alone when nothing else has tables and the year is filed single', () => {
     render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
@@ -853,7 +1021,8 @@ describe('BracketsEditor — per-person tables', () => {
     // it wrote and re-seats the payload. Landing that on another status' tables would file
     // one status' rows under another's name, so the tabs wait for the flight.
     expect(tab('Married filing jointly').disabled).toBe(true)
-    expect(tab('Single').disabled).toBe(true)
+    // The year's own status wears its mark (2026-09-23 spec §W8).
+    expect(tab('Single (this year’s status)').disabled).toBe(true)
     expect(vi.mocked(fetchTaxBrackets)).not.toHaveBeenCalled()
   })
 
@@ -902,7 +1071,7 @@ describe('BracketsEditor — per-person tables', () => {
     // to read as clean, or the next tab press asks to discard the server's own rows.
     expect(onDirtyChange).toHaveBeenLastCalledWith(false)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Single' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Single (this year’s status)' }))
     // And back: Sam is not on a single return at all, so neither is their table.
     await waitFor(() => expect(screen.queryByText('Disability — Sam')).toBeNull())
     expect(addFor('Disability', 'Alex')).toBeTruthy()
@@ -932,7 +1101,7 @@ describe('BracketsEditor — per-person tables', () => {
     expect(disability.textContent).not.toMatch(/Per-worker tax/)
     // The editor's status control says what it is FOR, so it cannot be mistaken for the year's
     // filing status in the scope row (audit S3).
-    const row = screen.getByText('Editing tables for').closest('.bracket-status-row') as HTMLElement
-    expect(row.contains(screen.getByRole('group', { name: 'Bracket filing status' }))).toBe(true)
+    const row = screen.getByText('Tables for status').closest('.bracket-status-row') as HTMLElement
+    expect(row.contains(screen.getByRole('group', { name: 'Tables for status' }))).toBe(true)
   })
 })

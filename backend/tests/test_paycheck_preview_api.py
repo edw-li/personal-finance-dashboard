@@ -128,18 +128,17 @@ async def test_preview_selects_the_base_exactly_as_the_breakdown_does(auth_clien
     assert resp.json()["detail"] == "person not found"
 
 
-def _without_history(rows: list[dict]) -> list[dict]:
-    """The pace rows minus the one field that reads the person's stored TIMELINE rather
-    than the profile in hand. The ESPP row prices past paydays from whichever profile was
-    in force on each, so creating a twin row changes what history says — every FIGURE the
-    two doors compute is still compared here, field for field."""
-    return [{key: value for key, value in row.items() if key != "backfilled_from"} for row in rows]
-
-
 async def test_preview_scenario_equals_a_real_profile_with_those_values(auth_client, me):
     """Parity with the real compute: the scenario half equals GET /breakdown of a profile
-    CREATED with the overridden values, then deleted — one arithmetic, two doors."""
-    await create_profile(auth_client)
+    CREATED with the overridden values, then deleted — one arithmetic, two doors.
+
+    The base profile starts 2025-01-01 so that every window the strip walks — this calendar
+    year, and the ESPP purchase year that opens Sep 1 of LAST year — lies after the first
+    profile. Since 2026-09-23 spec §W1 a payday on or before a person's first profile credits
+    nothing, so a twin back-dated to 2019 would otherwise give the GET door a history the
+    preview door does not have. The twin is dated BEFORE the base, so the base stays the
+    profile in force on every past payday of both doors."""
+    await create_profile(auth_client, effective_date="2025-01-01")
     overrides = {"trad_401k_pct": "0.15", "hsa_per_check": "250", "hsa_coverage": "family"}
     body = await preview(auth_client, overrides=overrides)
 
@@ -148,19 +147,9 @@ async def test_preview_scenario_equals_a_real_profile_with_those_values(auth_cli
     for key in WATERFALL:
         assert body["per_check"]["scenario"][key] == shown[key]
     assert body["monthly"]["scenario"]["net_pay"] == shown["monthly_net"]
-    assert _without_history(body["pace"]["scenario"]) == _without_history(shown["pace"])
-    # ...and the ONE field the twin cannot reproduce is the one it created: back-dating a
-    # profile to 2019 gives this person a timeline that reaches behind the ESPP window,
-    # which the preview (whose earliest profile is the payload's 2026-01-01) had to borrow
-    # forwards. Computed, not pinned: the window opens Sep 1 of LAST year, so from the 2027
-    # strip onward it no longer reaches behind that profile and nothing is borrowed.
-    espp = {row["key"]: row for row in shown["pace"]}["limit_espp_423"]
-    assert espp["backfilled_from"] is None
-    borrowed = (
-        "2026-01-01" if date(clock.product_today().year - 1, 9, 1) < date(2026, 1, 1) else None
-    )
-    previewed = {row["key"]: row for row in body["pace"]["scenario"]}["limit_espp_423"]
-    assert previewed["backfilled_from"] == borrowed
+    assert body["pace"]["scenario"] == shown["pace"]
+    # Neither door cut a payday at a first profile: both windows start after it.
+    assert [row["starts_on"] for row in shown["pace"]] == [None] * len(shown["pace"])
     assert (await auth_client.delete(f"{PROFILES}/{twin['id']}")).status_code == 204
     # The preview modelled nothing into the database: the same request answers the same.
     assert (await preview(auth_client, overrides=overrides)) == body

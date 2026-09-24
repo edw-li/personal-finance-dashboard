@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, apiWithHeaders } from './client'
 import type {
   DerivedPreviewOut,
   FilingStatus,
@@ -7,6 +7,7 @@ import type {
   TaxBracketsUpdate,
   TaxInputsOut,
   TaxInputsUpdate,
+  TaxStatusOptions,
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
@@ -77,12 +78,25 @@ export function fetchTaxYears(): Promise<TaxYearOut[]> {
 // tables are stored per (jurisdiction, status), the inputs grow a second person column, and
 // the summary is computed against the status-selected tables — so the caller reloads all
 // three of the year's payloads once this resolves. PATCH, and no auto-create: a status is a
-// statement ABOUT a year that must already exist (404 otherwise).
-export function patchTaxYear(year: number, body: TaxYearUpdate): Promise<TaxYearOut> {
-  return api<TaxYearOut>(`/taxes/years/${year}`, {
+// statement ABOUT a year that must already exist (404 otherwise). Change-logged since
+// 2026-09-23 spec §W8: the batch id rides `X-Change-Batch` (null when nothing changed), which
+// is what the page's Undo toast undoes.
+export async function patchTaxYear(
+  year: number,
+  body: TaxYearUpdate,
+): Promise<{ year: TaxYearOut; batchId: string | null }> {
+  const { data, headers } = await apiWithHeaders<TaxYearOut>(`/taxes/years/${year}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
   })
+  return { year: data, batchId: headers.get('X-Change-Batch') }
+}
+
+// What each filing status would mean for the year (2026-09-23 spec §W8): whose rows count on
+// the return and which tables the engine would refuse it without — the server's own rules,
+// read when the Change… dialog opens.
+export function fetchStatusOptions(year: number): Promise<TaxStatusOptions> {
+  return api<TaxStatusOptions>(`/taxes/years/${year}/status-options`)
 }
 
 export function fetchTaxInputs(year: number): Promise<TaxInputsOut> {

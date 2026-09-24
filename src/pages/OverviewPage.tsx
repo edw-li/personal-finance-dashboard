@@ -19,6 +19,7 @@ import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems, reviewAttentionItems } from '../components/overview/attention'
 import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
+import { useTaxDrift } from '../components/overview/taxDrift'
 import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import {
@@ -81,7 +82,7 @@ import type {
   TaxYearOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../utils/format'
-import { todayIso } from '../utils/months'
+import { currentYear, todayIso } from '../utils/months'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
@@ -381,8 +382,12 @@ export default function OverviewPage() {
   const dayChangeWhen =
     quoteDay === null ? '' : quoteDay === todayIso() ? ' today' : ` on ${formatDate(quoteDay)}`
   const stats = data.matrix ? spendStats(data.matrix, notEntered) : null
-  const currentYear = new Date().getFullYear()
-  const tax = data.taxes ? pickTaxSummary(data.taxes.years, currentYear) : null
+  // The SERVER's year (2026-09-23 spec §W11): the product clock's, never the browser's.
+  const taxYear = currentYear()
+  const tax = data.taxes ? pickTaxSummary(data.taxes.years, taxYear) : null
+  // The tax to-do (2026-09-23 spec §W4): one line when this year's typed inputs differ from the
+  // records — read after first paint, only once the year is known to exist (the planning group).
+  const taxDrift = useTaxDrift(taxYear, data.taxYears?.some((year) => year.year === taxYear) ?? false)
   // Plain consts like their siblings (the memo rule below covers CHART options only) —
   // the strip's and the YTD card's rules are cheap math over the snapshot.
   // Review rows lead (they are this household's own ritual), then the feed checks; both are
@@ -393,6 +398,7 @@ export default function OverviewPage() {
       months: data.ts?.months, holdings: data.holdings, lots: data.lots,
       taxYears: data.taxYears, system: data.system, coverage: data.coverage,
     }, todayIso()).filter(item => item.key !== 'espp-qualifying'),
+    ...(taxDrift === null ? [] : [taxDrift]),
   ]
   const ytd = data.ts && data.yearly && data.dividends && data.coverage ? ytdStats(data.ts, data.yearly, data.dividends, data.coverage, todayIso()) : null
   // Shown once ANY feed has history — on a fresh database the empty states below carry
@@ -449,9 +455,9 @@ export default function OverviewPage() {
     tax === null
       ? 'Estimated tax'
       : `Estimated tax — ${tax.year}${
-          tax.year < currentYear
+          tax.year < taxYear
             ? ' (latest)'
-            : tax.year > currentYear
+            : tax.year > taxYear
               ? ' (planned)'
               : ' (est.)'
         }`

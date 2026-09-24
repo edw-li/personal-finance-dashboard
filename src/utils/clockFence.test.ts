@@ -30,8 +30,7 @@ const EXCEPTIONS: Record<string, number> = {
 /** Reads another lane fixes (spec §K1), counted. The lane that fixes a read lowers its count —
  *  or deletes the entry — in the same change; the exact-count test fails until it does. */
 const ALLOWLIST: Record<string, number> = {
-  'pages/TaxesPage.tsx': 3, // W11 — the Will I owe? mount and the new-year default
-  'pages/OverviewPage.tsx': 1, // W11 — the tax year read
+  // TaxesPage.tsx and OverviewPage.tsx: struck off by lane W (W11) — both read currentYear().
   'pages/MonthlyUpdatePage.tsx': 2, // M1 — the wizard's private todayIso and its new Date()
 }
 /** The allowlist when lane K landed (2026-09-24). It may only shrink: no file joins it and no

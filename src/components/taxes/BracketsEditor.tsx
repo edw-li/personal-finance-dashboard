@@ -24,6 +24,13 @@ import { canonicalAmount, parseAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import { FeedBanner } from '../shell/Feed'
+import {
+  bracketsDraftKey,
+  clearTaxDraft,
+  resumeDraft,
+  sameRecord,
+  writeTaxDraft,
+} from './taxDrafts'
 import './taxes.css'
 
 // The six jurisdictions' human names live in src/api/taxes.ts beside JURISDICTIONS, so this
@@ -70,6 +77,33 @@ function tablesOf(brackets: TaxBracketsOut): Record<string, RowState[]> {
     }
   }
   return tables
+}
+
+/** A draft's tables as the boxes hold them — the shape check a stored draft must pass. */
+function isTables(value: unknown): value is Record<string, RowState[]> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every(
+      (rows) =>
+        Array.isArray(rows) &&
+        rows.every(
+          (row: unknown) =>
+            typeof row === 'object' &&
+            row !== null &&
+            typeof (row as RowState).rate === 'string' &&
+            typeof (row as RowState).threshold === 'string',
+        ),
+    )
+  )
+}
+
+// The status a draft note names, short: "tax tables for 2026 (MFJ)" (2026-09-23 spec §W9).
+const STATUS_SHORT: Record<FilingStatus, string> = {
+  single: 'Single',
+  married_joint: 'MFJ',
+  married_separate: 'MFS',
 }
 
 // Dirty is a text comparison of the tables on screen against the payload they came from, and
@@ -230,7 +264,28 @@ export default function BracketsEditor({
   // tables alone; only a save echo, a tab switch, or a remount re-adopts the server's rows.
   const [activeStatus, setActiveStatus] = useState<FilingStatus>(brackets.filing_status)
   const [payload, setPayload] = useState<TaxBracketsOut>(brackets)
-  const [tables, setTables] = useState<Record<string, RowState[]>>(() => tablesOf(brackets))
+  // What the last sitting left unsaved on this tab (2026-09-23 spec §W9), read once per mount
+  // (and once per tab load, below): restored while the server still returns the tables it was
+  // typed over, dropped with a note once they have changed. A pure read — the write effect
+  // forgets a draft that is not put back, because the boxes then match the server.
+  const [mountResume] = useState(() =>
+    resumeDraft(
+      bracketsDraftKey(brackets.year, brackets.filing_status),
+      tablesOf(brackets),
+      isTables,
+      sameRecord,
+    ),
+  )
+  const [tables, setTables] = useState<Record<string, RowState[]>>(() =>
+    mountResume.kind === 'restored' ? mountResume.edited : tablesOf(brackets),
+  )
+  // Which tab's draft the note is about, and what became of it.
+  const [draftNote, setDraftNote] = useState<{
+    status: FilingStatus
+    kind: 'restored' | 'dropped'
+  } | null>(
+    mountResume.kind === 'none' ? null : { status: brackets.filing_status, kind: mountResume.kind },
+  )
   // Single-flight across the whole editor: one jurisdiction saves at a time, and the
   // in-flight table's key is what disables the others' buttons — the tabs included, since a
   // tab switch replaces the very tables a save is about to re-sync. `removing` is which
@@ -247,6 +302,25 @@ export default function BracketsEditor({
   // tab: cleared when another status is opened, and per-table when that table is saved (a
   // reviewed table has nothing left to be told about).
   const [reviewFlags, setReviewFlags] = useState<BracketCloneReviewFlags | null>(null)
+  // A newer payload for the tab on screen re-judges a RESTORED draft (§W9; review finding 5),
+  // exactly as InputsForm does: the tables the draft was checked against are replaced by what
+  // the server now returns, and a restore over different ones would revert them on Save. Any
+  // other prop replacement is ignored, as it always was. Adjusted during render.
+  const [seenBrackets, setSeenBrackets] = useState(brackets)
+  if (brackets !== seenBrackets) {
+    setSeenBrackets(brackets)
+    if (
+      draftNote?.kind === 'restored' &&
+      draftNote.status === activeStatus &&
+      brackets.filing_status === activeStatus &&
+      serialize(tablesOf(brackets)) !== serialize(tablesOf(payload))
+    ) {
+      setPayload(brackets)
+      setTables(tablesOf(brackets))
+      setErrors({})
+      setDraftNote({ status: activeStatus, kind: 'dropped' })
+    }
+  }
 
   // JURISDICTIONS is a readonly tuple, so its .includes() takes the literal union — the
   // house cast (MonthlyUpdatePage's `STEPS.includes(stepParam as Step)`). An importer can
@@ -281,6 +355,23 @@ export default function BracketsEditor({
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
 
+  // The tab's draft mirrors "what would be lost" continuously (§W9): the tables on screen
+  // with the payload they were typed over, forgotten the moment they match it again — after a
+  // save, a clone, a discard. Filed under the ACTIVE status, which moves in the same batch as
+  // the payload and the tables, so a tab switch never files one status' rows under another.
+  useEffect(() => {
+    const key = bracketsDraftKey(brackets.year, activeStatus)
+    if (!dirty) clearTaxDraft(key)
+    else writeTaxDraft(key, { loaded: tablesOf(payload), edited: tables })
+  }, [dirty, tables, payload, activeStatus, brackets.year])
+
+  // The restore note's exit: the saved tables back, the draft forgotten.
+  const discardRestored = () => {
+    setTables(tablesOf(payload))
+    setErrors({})
+    setDraftNote(null)
+  }
+
   // Switching tabs replaces every table on screen, so it asks the same question the page's
   // reload doors ask — and it asks it BEFORE the request, so a declined confirm cannot leave
   // a fetch in flight against a tab nobody opened. A save in flight closes the door too (the
@@ -289,13 +380,16 @@ export default function BracketsEditor({
   // status' tables the tab switch had meanwhile put on screen.
   const openStatus = (status: FilingStatus) => {
     if (status === activeStatus || tabBusy || saving !== null) return
-    if (
-      dirty &&
-      !window.confirm(
-        `Discard unsaved ${FILING_STATUS_LABELS[activeStatus]} bracket changes for ${brackets.year}?`,
-      )
-    ) {
-      return
+    if (dirty) {
+      if (
+        !window.confirm(
+          `Discard unsaved ${FILING_STATUS_LABELS[activeStatus]} bracket changes for ${brackets.year}?`,
+        )
+      ) {
+        return
+      }
+      // Discarded on purpose: the tab being left keeps no draft to resurrect later (§W9).
+      clearTaxDraft(bracketsDraftKey(brackets.year, activeStatus))
     }
     const seq = ++tabSeqRef.current
     setTabBusy(true)
@@ -304,12 +398,21 @@ export default function BracketsEditor({
     // about to be replaced, and the review badges describe a clone into another status.
     setErrors({})
     setReviewFlags(null)
+    setDraftNote(null)
     fetchTaxBrackets(brackets.year, status)
       .then((next) => {
         if (seq !== tabSeqRef.current) return
+        // A tab load is a load: that status' draft comes back on the same terms as a mount's.
+        const resumed = resumeDraft(
+          bracketsDraftKey(brackets.year, status),
+          tablesOf(next),
+          isTables,
+          sameRecord,
+        )
         setActiveStatus(status)
         setPayload(next)
-        setTables(tablesOf(next))
+        setTables(resumed.kind === 'restored' ? resumed.edited : tablesOf(next))
+        setDraftNote(resumed.kind === 'none' ? null : { status, kind: resumed.kind })
       })
       .catch((err: unknown) => {
         if (seq !== tabSeqRef.current) return
@@ -340,6 +443,7 @@ export default function BracketsEditor({
         if (seq !== tabSeqRef.current) return
         setPayload(next)
         setTables(tablesOf(next))
+        setDraftNote(null)
         setReviewFlags(next.review_flags)
         // The year's bracket count moved, and when this IS the year's status the summary
         // moved with it: the page owns both refreshes, through the same door a save uses.
@@ -375,7 +479,13 @@ export default function BracketsEditor({
   const clearError = (key: string) =>
     setErrors((current) => (current[key] ? { ...current, [key]: '' } : current))
 
+  // Any edit is new work: a note about a DISCARDED draft has said what it had to say
+  // (code-quality nit). A restored draft's note stays — it is still unsaved.
+  const clearDroppedNote = () =>
+    setDraftNote((note) => (note?.kind === 'dropped' ? null : note))
+
   const setRow = (key: string, index: number, field: keyof RowState, value: string) => {
+    clearDroppedNote()
     clearError(key)
     setTables((current) => ({
       ...current,
@@ -384,6 +494,7 @@ export default function BracketsEditor({
   }
 
   const addRow = (key: string) => {
+    clearDroppedNote()
     clearError(key)
     setTables((current) => {
       const rows = current[key] ?? []
@@ -393,6 +504,7 @@ export default function BracketsEditor({
   }
 
   const removeRow = (key: string, index: number) => {
+    clearDroppedNote()
     clearError(key)
     setTables((current) => ({
       ...current,
@@ -404,6 +516,7 @@ export default function BracketsEditor({
   // person's table is nearly always the default with one number moved, so a blank grid would
   // be a transcription job. Client-side only — nothing is written until its own Save.
   const addPersonTable = (name: string, personId: number) => {
+    clearDroppedNote()
     setTables((current) => ({
       ...current,
       [tableKey(name, personId)]: (current[name] ?? []).map((row) => ({ ...row })),
@@ -501,6 +614,9 @@ export default function BracketsEditor({
           return next
         })
         setPayload(echo)
+        // A dropped draft is history once something is saved; a restored one stays named for
+        // as long as any of it is still unsaved (the note reads `dirty`).
+        setDraftNote((current) => (current?.kind === 'dropped' ? null : current))
         // The badge asked for a review of the DEFAULT table; a person's copy of it is not
         // that review, so it leaves the badge standing.
         if (person === undefined) {
@@ -655,15 +771,15 @@ export default function BracketsEditor({
       </p>
       {/* One tab per status this year can be filed as. The same six tables exist behind each
           one — a full replace is per (jurisdiction, status) — so the tab is what decides
-          which of them a Save rewrites. Labelled, because the scope row above carries the
-          YEAR's filing status in the same segmented look (audit S3): that one PATCHes the
-          year; this one only picks the tables this card edits. */}
+          which of them a Save rewrites. "Tables for status", and the year's own status marked
+          (2026-09-23 spec §W8): the YEAR's filing status is the scope row's Change… dialog;
+          this control only picks the tables this card edits. */}
       <div className="bracket-status-row">
-        <span className="eyebrow">Editing tables for</span>
+        <span className="eyebrow">Tables for status</span>
         <div
           className="segmented bracket-status-tabs"
           role="group"
-          aria-label="Bracket filing status"
+          aria-label="Tables for status"
         >
           {tabs.map((status) => (
             <button
@@ -675,12 +791,31 @@ export default function BracketsEditor({
               onClick={() => openStatus(status)}
             >
               {FILING_STATUS_LABELS[status]}
+              {status === yearStatus ? ' (this year’s status)' : ''}
             </button>
           ))}
         </div>
-        <InfoHint text="Which status' tables this card's Saves rewrite. The year's own filing status — the tables the engine walks — is set in the scope row at the top of the page." />
+        <InfoHint text="Which status' tables this card's Saves rewrite. The year's own filing status — the tables the engine walks — is changed with Change… in the scope row at the top of the page." />
       </div>
       <FeedBanner error={tabError} />
+      {/* Advisory, never an error: nothing failed — work was preserved (the wizard's note). */}
+      {draftNote?.kind === 'restored' && draftNote.status === activeStatus && dirty && (
+        <div className="tax-draft-note" role="status">
+          <span>
+            Restored unsaved tax tables for {brackets.year} ({STATUS_SHORT[activeStatus]}) — they
+            are not saved yet.
+          </span>
+          <button type="button" className="button" onClick={discardRestored}>
+            Discard restored entries
+          </button>
+        </div>
+      )}
+      {draftNote?.kind === 'dropped' && draftNote.status === activeStatus && (
+        <p className="tax-draft-note" role="status">
+          Unsaved tax tables for {brackets.year} ({STATUS_SHORT[activeStatus]}) were discarded: the
+          saved values changed since you typed them.
+        </p>
+      )}
       {activeStatus !== 'single' && isEmpty && (
         <div className="bracket-clone">
           <p className="drill-hint">

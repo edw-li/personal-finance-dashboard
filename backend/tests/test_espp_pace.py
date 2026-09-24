@@ -2,9 +2,11 @@
 
 Pure module, so no database: plain objects stand in for the profile rows. The golden is
 production's own timeline — 11 % until 2026-08-17 then 12 % on 188,930 over 24 checks, no
-stored periods, today 2026-09-06 — and each half is twelve semi-monthly paydays priced by
-whichever profile was in force on each. H1's twelve are all at 11 %; H2's are all at 11 %
-except Aug 31, the first payday on or after the raise.
+stored periods, today 2026-09-06 — with the 2025 job on it too (`EDWARD_SINCE_2025`), and each
+half is twelve semi-monthly paydays priced by whichever profile was in force on each. H1's
+twelve are all at 11 %; H2's are all at 11 % except Aug 31, the first payday on or after the
+raise. Since 2026-09-23 spec §W1 a payday on or before a person's first profile credits
+nothing, which the timeline that starts in 2026 (`EDWARD`) pins below.
 """
 
 from dataclasses import dataclass
@@ -38,6 +40,10 @@ EDWARD = [
     FakeProfile(effective_date=date(2026, 1, 1)),
     FakeProfile(effective_date=date(2026, 8, 17), espp_pct=D("0.120000000")),
 ]
+# The golden's timeline with the 2025 job on it too: H1 opens 2025-09-01, and since 2026-09-23
+# spec §W1 a payday on or before a person's FIRST profile credits nothing — so the golden
+# carries the 11 % profile that was really in force then, and every one of its paydays counts.
+EDWARD_SINCE_2025 = [FakeProfile(effective_date=date(2025, 1, 1)), *EDWARD]
 
 
 def rows_for(year: int, stored: list | None = None):
@@ -48,7 +54,7 @@ def rows_for(year: int, stored: list | None = None):
 def item(**kwargs):
     args = {
         "rows": rows_for(2026),
-        "profiles": EDWARD,
+        "profiles": EDWARD_SINCE_2025,
         "scenario_from_today": EDWARD[-1],
         "limit": LIMIT,
         "discount": DISCOUNT,
@@ -92,10 +98,20 @@ def test_the_golden_window_and_verdict():
     assert row.projected_full_year == D("22671.60")
     assert row.projected_excess == D("1421.60")
     assert row.current_rate == D("0.120000000")  # the scenario's rate, so the note can say "12%"
-    # H1 opens 2025-09-01, four months before EDWARD's earliest profile, so its first eight
-    # paydays BORROW that profile — which is exactly what the 10,391.15 above is made of.
-    # The flag exists to say so out loud rather than let the figure pass as observed.
-    assert row.backfilled_from == date(2026, 1, 1)
+    # Every payday of both halves is on a profile that was in force: nothing to say.
+    assert row.backfilled_from is None
+    assert row.starts_on is None
+
+
+def test_paydays_before_the_first_profile_count_nothing_in_the_window():
+    """2026-09-23 spec §W1: EDWARD's timeline starts 2026-01-01, so H1's eight 2025 paydays
+    credit nothing — only Jan 15, Jan 30, Feb 13 and Feb 27 count, at 11 % — and the row says
+    when the job starts rather than pricing a year that has no profile behind it."""
+    row = item(profiles=EDWARD)
+    assert [h.amount for h in row.halves] == [D("3463.72"), D("10469.87")]
+    assert row.annualized == D("13933.59")
+    assert row.backfilled_from is None
+    assert row.starts_on == date(2026, 1, 1)
 
 
 def test_a_stored_half_wins_only_once_its_purchase_has_happened():
@@ -118,10 +134,14 @@ def test_a_stored_half_wins_only_once_its_purchase_has_happened():
     assert item(rows=rows_for(2026, stored), today=date(2026, 1, 5)).halves[0].source == "estimated"
 
 
-def test_paydays_before_the_earliest_profile_borrow_it_and_say_so():
+def test_a_job_that_starts_late_in_the_window_counts_from_its_first_payday():
+    # From Aug 17 only Aug 31 pays into this purchase year: 12 % of 188,930 / 24.
     row = item(profiles=EDWARD[1:], scenario_from_today=EDWARD[1])
-    assert row.backfilled_from == date(2026, 8, 17)
-    assert row.annualized == D("22671.60")  # 24 paydays at 12 % of 188,930 / 24
+    assert row.backfilled_from is None
+    assert row.starts_on == date(2026, 8, 17)
+    assert row.annualized == D("944.65")
+    # The forward sentence still prices a full purchase year at the current rate.
+    assert row.projected_full_year == D("22671.60")
 
 
 def test_a_non_semi_monthly_cadence_estimates_by_month():
@@ -192,6 +212,8 @@ def test_a_window_that_opens_after_the_earliest_profile_borrows_nothing():
     )
     assert row.halves[0].source == "estimated"  # the February purchase has not happened yet
     assert row.backfilled_from is None
+    # …and no payday inside the window falls on or before the profile: nothing was cut.
+    assert row.starts_on is None
 
 
 def test_the_window_says_how_much_of_it_is_already_behind_today():
