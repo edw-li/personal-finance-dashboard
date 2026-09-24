@@ -1417,9 +1417,7 @@ it('the save toast carries the coordinated batch Undo', async () => {
 })
 
 it('an all-unchanged save toasts nothing and offers no Undo', async () => {
-  vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
-    month: '2026-08-01', snapshot_created: false, created: 0, updated: 0, unchanged: 1, batch_id: null,
-  })
+  // Only the spending part changed, so only its leg goes out — and the server logged nothing.
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
     month: '2026-08-01', created: 0, updated: 0, unchanged: 1, net_pay_set: false, skipped_blank: 0, net_pay_cleared: false, batch_id: null,
   })
@@ -1428,10 +1426,22 @@ it('an all-unchanged save toasts nothing and offers no Undo', async () => {
   fireEvent.click(screen.getByRole('button', { name: /^next: [a-z]+ spending$/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  const reads = vi.mocked(fetchCoverage).mock.calls.length
   fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await screen.findByText(/progress saved/i)
+  // A toast is raised once the post-save /coverage read lands: wait for that, or this check would
+  // pass before any toast could exist (review M23).
+  await refreshLanded(reads)
   expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
 })
+
+/** The post-save refresh has answered: /coverage was read again and every step chained on it ran. */
+async function refreshLanded(readsBefore: number) {
+  await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(readsBefore))
+  await act(async () => {
+    await Promise.resolve()
+  })
+}
 
 // --- per-step saves (2026-09-04 honest-numbers spec §4) -----------------------------------
 
@@ -3200,7 +3210,7 @@ describe("what's due (2026-09-23 spec §M2)", () => {
       time: { ...TIME_OCT_3, balances: { ...TIME_OCT_3.balances, status: 'final' } },
     })
     fireEvent.click(confirm)
-    expect(await screen.findByText('Confirmed Oct 1 balances · Next due: September spending & take-home →')).toBeTruthy()
+    expect(await screen.findByText('Confirmed Oct 1 balances · Next due: September spending & take-home')).toBeTruthy()
     const strip = screen.getByRole('navigation', { name: "What's due" })
     expect(within(strip).queryByRole('link', { name: /^Oct 1 balances/ })).toBeNull()
     fireEvent.click(screen.getByRole('link', { name: 'Next due: September spending & take-home →' }))
@@ -3301,6 +3311,21 @@ describe("the month's story (2026-09-23 spec §M5)", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Sep 1 balances' }))
     fireEvent.click(await screen.findByRole('button', { name: /^3\s*review$/i }))
     expect(await screen.findByText("September's change: ▲ $126,000.00 (Sep 1 → Oct 1)")).toBeTruthy()
+  })
+
+  // Review M1/M8: the toast names what is due next, which /coverage alone decides — so it waits for
+  // that one read and never for the story's, and its words carry no arrow (they are not a link).
+  it('raises the toast from /coverage alone — a story read that never answers holds nothing back', async () => {
+    septemberStory('final')
+    vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
+      month: '2026-09-01', snapshot_created: false, created: 0, updated: 1, unchanged: 0, batch_id: 'b-sep',
+    })
+    renderWizardAt('/update?month=2026-09-01&step=balances')
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1520.00' } })
+    vi.mocked(netWorthApi.fetchSummary).mockImplementation(() => new Promise(() => {}))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Sep 1 balances' }))
+    const said = await screen.findByText('Saved Sep 1 balances · Next due: Oct 1 balances')
+    expect(within(said.closest('.toast') as HTMLElement).getByRole('button', { name: 'Undo' })).toBeTruthy()
   })
 
   // Saving Sep 1 balances cannot create Oct 1's, so the refresh after the save skips the story's

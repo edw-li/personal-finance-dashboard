@@ -961,30 +961,35 @@ function MonthlyUpdateWizard() {
     setCoverageNonce((n) => n + 1)
   }
 
-  // After a save the wizard re-reads what the server now says (spec §M1, §M4): /coverage, so what is
-  // due — the partial banner, the Confirm, "Next" — follows the server's word; and, when balances
-  // went out, the month's snapshot dates, which the server stamped (a Confirm turns "recorded early,
-  // on Sep 22" into "recorded Oct 1"). The /coverage read runs beside the scope row's own, and the
-  // api client joins the two GETs.
-  const refreshAfterSave = async (loaded: LoadedMonth, sentBalances: boolean): Promise<CoverageOut | null> => {
-    // New balances also move the month's story (spec §M5): the next 1st's delta compares with them.
-    // Saving this 1st never records the next one, so a next 1st /coverage lacks stays unasked-for,
-    // as at load — its 404 would be a console error in the browser.
-    const askNext = sentBalances && (coverage === null || coverage.balances.includes(addMonths(loaded.month, 1)))
-    const [fresh, thisMonth, story] = await Promise.all([
-      fetchCoverage().catch((): CoverageOut | null => null),
-      sentBalances ? fetchMonthBalances(loaded.month).catch((): MonthBalances | null => null) : null,
-      askNext ? fetchNextSnapshot(loaded.month) : null,
-    ])
-    if (loadedMonth.current === loaded) {
-      if (fresh !== null) setCoverage(fresh)
-      if (thisMonth !== null) {
-        setBalancesMeta(metaOf(thisMonth))
-        setSavedBalances(byAccount(thisMonth.balances))
-      }
-      if (story !== null) setNext(story)
+  // After a save the wizard re-reads what the server now says (spec §M1, §M4, §M5), in two reads
+  // that never wait for each other. /coverage says what is due — the partial banner, the Confirm,
+  // "Next", and the part the toast names — so the toast waits for it alone (the api client joins it
+  // with the scope row's own GET). When balances went out, the month's snapshot dates, which the
+  // server stamped (a Confirm turns "recorded early, on Sep 22" into "recorded Oct 1"), and the
+  // month's story, whose next 1st compares with them.
+  const refreshAfterSave = (loaded: LoadedMonth, sentBalances: boolean): Promise<CoverageOut | null> => {
+    if (sentBalances) {
+      // Saving this 1st never records the next one, so a next 1st /coverage lacks stays
+      // unasked-for, as at load — its 404 would be a console error in the browser.
+      const askNext = coverage === null || coverage.balances.includes(addMonths(loaded.month, 1))
+      void Promise.all([
+        fetchMonthBalances(loaded.month).catch((): MonthBalances | null => null),
+        askNext ? fetchNextSnapshot(loaded.month) : null,
+      ]).then(([thisMonth, story]) => {
+        if (loadedMonth.current !== loaded) return
+        if (thisMonth !== null) {
+          setBalancesMeta(metaOf(thisMonth))
+          setSavedBalances(byAccount(thisMonth.balances))
+        }
+        if (story !== null) setNext(story)
+      })
     }
-    return fresh
+    return fetchCoverage()
+      .catch((): CoverageOut | null => null)
+      .then((fresh) => {
+        if (fresh !== null && loadedMonth.current === loaded) setCoverage(fresh)
+        return fresh
+      })
   }
 
   const save = async (kind: SaveKind) => {
@@ -1067,7 +1072,8 @@ function MonthlyUpdateWizard() {
       setLastSave(receipt)
       // Coverage moved: the scope row re-reads it, and so does the wizard — whose answer names the
       // part due next (spec §M2), which the toast and the receipt then point at. The toast keeps its
-      // Undo for exactly this save's batch; it waits the one GET for the "Next due" words.
+      // Undo for exactly this save's batch and waits for that one /coverage read, never the story's.
+      // Its words carry no arrow: the toast's one action is Undo, and the receipt holds the link.
       setCoverageNonce((n) => n + 1)
       const closed = result.review.state === 'closed'
       const batchId = result.batch_id
@@ -1077,7 +1083,7 @@ function MonthlyUpdateWizard() {
           setLastSave((current) => (current === receipt ? { ...receipt, nextDue } : current))
         }
         if (batchId !== null) {
-          toast.success(`${saveMessage(receipt, closed)}${nextDue === null ? '' : ` · Next due: ${nextDue.name} →`}`, {
+          toast.success(`${saveMessage(receipt, closed)}${nextDue === null ? '' : ` · Next due: ${nextDue.name}`}`, {
             action: {
               label: 'Undo',
               onAction: () => void undoBatches([batchId], `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
