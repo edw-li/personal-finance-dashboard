@@ -16,6 +16,7 @@ import ScopeBar from '../components/shell/ScopeBar'
 import Segmented from '../components/shell/Segmented'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
+import TableScroll from '../components/TableScroll'
 import { metricReceipt } from '../utils/metricReceipt'
 import { chartCardBox, ghostCardBody } from '../components/skeletonMetrics'
 import { useArrivalValue } from '../components/useArrivalParam'
@@ -867,6 +868,7 @@ export default function NetWorthPage() {
                     Accounts — {viewedLabel}
                     <InfoHint text="Each account's balance for the month named above and its change from the one before. Component accounts live inside a parent aggregate and are excluded from totals." />
                   </h2>
+                  <TableScroll label="Accounts table">
                   <table className="data-table">
                     <thead>
                       <tr>
@@ -933,6 +935,7 @@ export default function NetWorthPage() {
                       </tfoot>
                     )}
                   </table>
+                  </TableScroll>
                   <p className="drill-hint" style={{ marginTop: '0.5rem' }}>
                     Component accounts are tracked inside an aggregate account and are excluded
                     from group totals and net worth.

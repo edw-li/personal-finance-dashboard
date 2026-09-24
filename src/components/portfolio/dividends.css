@@ -1,0 +1,111 @@
+/* The dividend ledger by month (2026-09-24 table-scroll spec §4). Imported by DividendsPanel after
+   portfolio.css; the capped box itself is TableScroll's (tableScroll.css). */
+
+/* "14 months · 378 entries" and the Expand all door, on the line above the box. */
+.dividend-months-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.75rem 0 0.4rem;
+}
+
+.dividend-months-bar .hint {
+  margin: 0;
+}
+
+/* A month line: an opaque band — a sticky cell needs a solid fill or the rows would ghost through —
+   pinned just under the column header while its month scrolls (TableScroll measures that header into
+   --table-head-h). z 1 like the header cells; later in the DOM, so it paints over the rows passing
+   under it. Its bottom hairline is an OUTER shadow, the pinned totals row's idiom (tableScroll.css)
+   turned downward: in the light theme the band is only 1.05:1 against the card, so without it a
+   pinned line had no edge where the rows slide under it (Task 8 review). No text selection: the whole
+   line is a toggle, and a double-click would toggle twice and select the label (the Disclosure
+   summary's rule). */
+.dividend-month-row > th,
+.dividend-month-row > td {
+  position: sticky;
+  top: var(--table-head-h, 0px);
+  z-index: 1;
+  background: var(--surface-2);
+  box-shadow: 0 1px 0 var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The Disclosure summary's hover fill: opaque in both themes (a translucent wash would let the rows
+   under a pinned line show through), and the muted count keeps AA on it — 4.59:1 dark, 4.53:1 light,
+   where the 6% text wash it replaces left 4.40:1 in dark (Task 8 review). */
+.dividend-month-row:hover > th,
+.dividend-month-row:hover > td {
+  background: var(--fill);
+}
+
+.dividend-month-row > th {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dividend-month-row > td.num {
+  font-weight: 600;
+}
+
+/* The toggle reads as the line's text, not as button chrome; index.css still draws the house focus
+   ring on it. */
+.dividend-month-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* …OUTSIDE it, as the capped tables' other padding-free text buttons keep theirs (tableScroll.css,
+   Task 6 review): index.css's inset ring for controls in a clipping box (outline-offset: -2px) drew
+   across the chevron and the count's last letter (Edge, 2026-09-24), and the line's padded cell has
+   room for the 4px an outside ring takes. (0,4,0) outranks the inset rule's (0,3,0) whatever order
+   the sheets load in. */
+.table-scroll > .dividend-table .dividend-month-toggle:focus-visible {
+  outline-offset: 2px;
+}
+
+.dividend-month-count {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* The Disclosure grammar's chevron (disclosure.css), turned by the button's own state. */
+.dividend-month-chevron {
+  flex: none;
+}
+
+.dividend-month-toggle[aria-expanded="true"] .dividend-month-chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dividend-month-chevron {
+    transition: transform var(--t-fast) var(--ease-out);
+  }
+}
+
+/* Entries read as their month's children: the Ticker column steps in (component-row's 1.6rem), the
+   header with it so the column still lines up. */
+.dividend-table > thead th:first-child,
+.dividend-table > tbody > tr:not(.dividend-month-row) > td:first-child {
+  padding-left: 1.6rem;
+}
+
+/* An entry row sits under TWO pinned lines — the column header and its month's line — so a Tab, a
+   keyboard move or a scrollIntoView lands it clear of both (2.5rem is at least one month line). A
+   scroll MARGIN on the entry rows, never scroll padding on the box: padding would count the pinned
+   lines' own toggles as out of view and jump the box whenever one takes focus (TableScroll's review,
+   485287d0). (0,3,2) outranks tableScroll.css's (0,1,2) tbody margin and its (0,2,2) `tbody [id]`
+   twin. */
+.table-scroll > .dividend-table > tbody > tr:not(.dividend-month-row) * {
+  scroll-margin-top: calc(var(--table-head-h, 0px) + 2.5rem);
+}
