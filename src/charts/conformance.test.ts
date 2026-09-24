@@ -22,6 +22,8 @@ const ROSTER = [
   'grammar-heatmap',
   // C2 — Net worth + Overview
   'netWorthStack',
+  // …and with a snapshot typed early (2026-09-23 spec §T7): the provisional point on the line.
+  'netWorthStackProvisional',
   'netWorthStackShare',
   'netWorthDrill',
   'netWorthMovers',

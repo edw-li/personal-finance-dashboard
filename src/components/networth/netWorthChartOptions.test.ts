@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { setServerToday } from '../../utils/productToday'
 import { netWorthCsv } from './netWorthChartOptions'
 
 describe('netWorthCsv', () => {
@@ -56,7 +57,7 @@ describe('marriageMarkLine', () => {
 
 // ── The three builders lifted out of NetWorthPage (charts C2) ────────────────────────────
 import { tooltipRows } from '../../testing/tooltipRows'
-import { GRID_VARIANTS, compactMoney, percentLabel } from '../../charts/grammar'
+import { GRID_VARIANTS, compactMoney, partialItemStyle, percentLabel } from '../../charts/grammar'
 import { GROUP_COLORS, INK, MUTED, PALETTE } from '../../charts/theme'
 import type { AccountGroup, AccountOut, NetWorthTimeseries, PersonOut } from '../../types/api'
 import { liabilitiesMaterial, netWorthStackOption } from './netWorthChartOptions'
@@ -436,14 +437,91 @@ describe('netWorthMoversCsv', () => {
 
 describe('netWorthMoversLede', () => {
   it('reads the two totals and the percent off the payload, and tones the move', () => {
+    // Named by the day each balance describes (2026-09-23 spec §T7), not by the month key.
+    setServerToday('2026-09-01')
     expect(netWorthMoversLede(MOVED, 2)).toEqual({
-      fromLabel: 'Jul 2026', fromValue: '$590.00', toLabel: 'Aug 2026', toValue: '$690.00',
+      fromLabel: 'Jul 1', fromValue: '$590.00', toLabel: 'Aug 1', toValue: '$690.00',
       // The SERVER's mom_pct — deliberately NOT 100/590, what re-deriving it here would print.
       delta: '+$100.00', pct: '+6.8%', tone: 'positive',
     })
     expect(netWorthMoversLede(MOVED, 0)).toBeNull()
     expect(netWorthMoversLede(ts({ mom_pct: [null, null, null] }), 2)?.pct).toBeNull()
     expect(netWorthMoversLede(FLAT, 2)?.tone).toBe('neutral')
+  })
+
+  it('names a provisional end by the day it was typed', () => {
+    setServerToday('2026-08-02')
+    const early = { ...MOVED, as_of: ['2026-06-01', '2026-07-01', '2026-07-24'], provisional: [false, false, true] }
+    expect(netWorthMoversLede(early, 2)).toMatchObject({ fromLabel: 'Jul 1', toLabel: 'Jul 24 (provisional)' })
+  })
+})
+
+// 2026-09-23 spec §T7: Aug 1 balances typed early on Jul 24 are provisional — the stack draws that
+// point on the net-worth line with the partial look, both charts' tooltips say why, and the range
+// chips cut on the dates the balances describe.
+describe('the Net worth charts and a provisional snapshot (2026-09-23 spec §T7)', () => {
+  beforeEach(() => setServerToday('2026-07-26'))
+  const early = ts({
+    as_of: ['2026-06-01', '2026-07-01', '2026-07-24'],
+    recorded_on: ['2026-06-01', '2026-07-01', '2026-07-24'],
+    provisional: [false, false, true],
+  })
+  const headAt = (option: unknown, label: string, dataIndex: number) =>
+    tooltipRows(
+      read(option).tooltip.formatter([
+        { seriesName: 'Net worth', seriesType: 'line', axisValueLabel: label, dataIndex, value: 630, color: INK },
+      ]),
+    ).head
+
+  it('draws the provisional point on the net-worth line and says why on hover', () => {
+    const option = read(netWorthStackOption({ ts: early, mode: 'group', ...base }))
+    const line = option.series.find((series) => series.name === 'Net worth')
+    expect(line?.data).toEqual([
+      550,
+      590,
+      { value: 630, symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(INK, false) },
+    ])
+    expect(headAt(option, 'Aug 2026', 2)).toBe('Aug 2026 — Aug 1 balances recorded early, on Jul 24 — provisional')
+    expect(headAt(option, 'Jul 2026', 1)).toBe('Jul 2026')
+    // The owner and share readings say it on hover too.
+    expect(headAt(netWorthStackOption({ ts: early, mode: 'share', ...base }), 'Aug 2026', 2)).toMatch(/— provisional$/)
+  })
+
+  it('draws plain points once final, and without the lists', () => {
+    const plain = read(netWorthStackOption({ ts: ts(), mode: 'group', ...base }))
+    expect(plain.series.find((series) => series.name === 'Net worth')?.data).toEqual([550, 590, 630])
+  })
+
+  it('says it in the drill chart’s tooltip head', () => {
+    const drill = netWorthDrillOption({
+      ts: { ...DRILL_TS, as_of: early.as_of, recorded_on: early.recorded_on, provisional: early.provisional },
+      drill: [{ accountId: 10, slot: 0 }],
+      range: { preset: 'all' },
+      selected: {},
+    })
+    expect(headAt(drill, 'Aug 2026', 2)).toBe('Aug 2026 — Aug 1 balances recorded early, on Jul 24 — provisional')
+  })
+
+  it('cuts the range chips on as-of dates: early Jan 1 balances typed in December stay in the old year', () => {
+    setServerToday('2026-12-29')
+    const months = ['2025-12-01', '2026-01-01', '2026-12-01', '2027-01-01']
+    const yearEnd = ts({
+      months,
+      group_totals: Object.fromEntries(
+        Object.entries(ts().group_totals).map(([group]) => [group, ['1.00', '1.00', '1.00', '1.00']]),
+      ) as NetWorthTimeseries['group_totals'],
+      net_worth: ['1.00', '2.00', '3.00', '4.00'],
+      mom_pct: [null, null, null, null],
+      notes: [null, null, null, null],
+      owner_series: [],
+      as_of: ['2025-12-01', '2026-01-01', '2026-12-01', '2026-12-28'],
+      recorded_on: ['2025-12-01', '2026-01-01', '2026-12-01', '2026-12-28'],
+      provisional: [false, false, false, true],
+    })
+    const zoom = (option: unknown) => (option as { dataZoom: { startValue: number }[] }).dataZoom[0].startValue
+    // YTD from Jan 1 2026 — month keys would have started at Jan 1 2027 and shown one point.
+    expect(zoom(netWorthStackOption({ ts: yearEnd, mode: 'group', ...base, range: { preset: 'ytd' } }))).toBe(1)
+    expect(zoom(netWorthStackOption({ ts: { ...yearEnd, as_of: undefined }, mode: 'group', ...base, range: { preset: 'ytd' } }))).toBe(3)
   })
 })
 
