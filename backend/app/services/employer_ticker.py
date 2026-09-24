@@ -15,6 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AppSetting
 
+# The setting's key, spelled once: the reader below, the read caches' narrowed settings cells and
+# the Settings PUT that writes it all name it through this constant.
+ESPP_TICKER_KEY = "espp_ticker"
+
 
 async def read_employer_ticker(db: AsyncSession) -> str | None:
     """The ticker the app resolves, or None when unconfigured.
@@ -25,7 +29,7 @@ async def read_employer_ticker(db: AsyncSession) -> str | None:
     ticker). A string is trimmed and upper-cased, as portfolio._normalize_ticker does to a
     typed one, so a hand-stored "nvda" still meets the NVDA securities row. A blank one is
     unconfigured: the Settings PUT stores "" when the ticker is cleared."""
-    setting = await db.get(AppSetting, "espp_ticker")
+    setting = await db.get(AppSetting, ESPP_TICKER_KEY)
     if setting is None or not isinstance(setting.value, dict):
         return None
     raw = setting.value.get("value")

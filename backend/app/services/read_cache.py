@@ -61,7 +61,7 @@ from app.models import (
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock
-from app.services.employer_ticker import read_employer_ticker
+from app.services.employer_ticker import ESPP_TICKER_KEY, read_employer_ticker
 from app.services.month_review import ReviewBook, load_review_book, load_review_book_snapshot
 from app.services.net_worth_calc import PLAN_UNTIL_KEY
 from app.services.savings import MonthSavings, load_month_savings
@@ -116,7 +116,7 @@ WITHHOLDING_TABLES: tuple[str, ...] = tuple(
 # writes its own bookkeeping keys and every holding's quote and bars; none of that can move the
 # card, so none of it costs the card its memo. The employer's own quote and bars still do.
 # Pinned complete by test_withholding_cache's capture of every setting and quote a build reads.
-WITHHOLDING_SETTING_KEYS: tuple[str, ...] = ("espp_ticker", "espp_discount_pct")
+WITHHOLDING_SETTING_KEYS: tuple[str, ...] = (ESPP_TICKER_KEY, "espp_discount_pct")
 
 type Fingerprint = tuple[str, ...]
 type BookKey = tuple[Fingerprint, date, tuple[date, ...]]
@@ -399,7 +399,7 @@ PROJECTION_TABLES: tuple[str, ...] = tuple(
 # own bookkeeping keys and every holding's quote; none of that can move a projection, so none of
 # it costs the cache its entries. Pinned complete by test_projection_cache's capture of every
 # setting and quote a build reads.
-PROJECTION_SETTING_KEYS: tuple[str, ...] = ("swr_pct", "espp_ticker", PLAN_UNTIL_KEY)
+PROJECTION_SETTING_KEYS: tuple[str, ...] = ("swr_pct", ESPP_TICKER_KEY, PLAN_UNTIL_KEY)
 _PROJECTION_NARROWED = {
     AppSetting.__tablename__: _setting_rows(PROJECTION_SETTING_KEYS),
     # A NULL ticker matches no security: no quote, as the build (no ticker, no vests) reads none.

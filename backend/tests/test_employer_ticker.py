@@ -14,7 +14,7 @@ import pytest
 from app.api.espp import _espp_quote
 from app.models import AppSetting
 from app.services import read_cache
-from app.services.employer_ticker import read_employer_ticker
+from app.services.employer_ticker import ESPP_TICKER_KEY, read_employer_ticker
 from app.services.price_service import backfill_employer_history
 from tests.test_price_service import FakeProvider, bar, rsu_grant, seed_security
 
@@ -73,11 +73,28 @@ async def test_the_employer_backfill_reads_the_same_ticker(db, stored, expected)
     assert written == (0 if expected is None else 1)
 
 
-# A direct read of the setting: by primary key (how all four copies read it) or by a filter.
-_DIRECT_READ = re.compile(
-    r"""AppSetting\s*,\s*["']espp_ticker["']"""
-    r"""|AppSetting\.key\s*==\s*["']espp_ticker["']"""
-)
+# A direct read of the setting: by primary key (how all four copies read it) or by a filter,
+# with the key spelled as the literal or as the reader module's constant.
+_KEY = r"""(?:["']espp_ticker["']|ESPP_TICKER_KEY)"""
+_DIRECT_READ = re.compile(rf"AppSetting\s*,\s*{_KEY}|AppSetting\.key\s*==\s*{_KEY}")
+
+
+def test_the_fence_sees_both_spellings_of_a_direct_read():
+    for read in (
+        'await db.get(AppSetting, "espp_ticker")',
+        "await db.get(AppSetting, ESPP_TICKER_KEY)",
+        "select(AppSetting).where(AppSetting.key == 'espp_ticker')",
+        "select(AppSetting.value).where(AppSetting.key == ESPP_TICKER_KEY)",
+    ):
+        assert _DIRECT_READ.search(read), read
+    # The Settings PUT's write loop reads whichever key it is writing: not a reader of this one.
+    assert not _DIRECT_READ.search("setting = await db.get(AppSetting, key)")
+
+
+def test_the_key_is_one_constant_everywhere_it_is_named():
+    assert ESPP_TICKER_KEY == "espp_ticker"
+    assert ESPP_TICKER_KEY in read_cache.WITHHOLDING_SETTING_KEYS
+    assert ESPP_TICKER_KEY in read_cache.PROJECTION_SETTING_KEYS
 
 
 def test_one_module_reads_the_employer_ticker_setting():

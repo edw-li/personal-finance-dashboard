@@ -23,7 +23,7 @@ from app.database import get_db
 from app.models import AppSetting
 from app.schemas.app_settings import AppSettingsOut, AppSettingsUpdate
 from app.services import clock
-from app.services.employer_ticker import read_employer_ticker
+from app.services.employer_ticker import ESPP_TICKER_KEY, read_employer_ticker
 from app.services.money import quantize_pct
 
 # The update reminder's day moved to the service that reads it (2026-09-23 spec §K3: a service
@@ -189,7 +189,7 @@ async def put_settings(
             if body.espp_ticker is None or not body.espp_ticker.strip()
             else _normalize_ticker(body.espp_ticker)
         )
-        updates["espp_ticker"] = {"value": ticker}
+        updates[ESPP_TICKER_KEY] = {"value": ticker}
     if "espp_discount_pct" in provided and body.espp_discount_pct is not None:
         updates["espp_discount_pct"] = {
             "value": format(_validated_discount(body.espp_discount_pct), "f")
