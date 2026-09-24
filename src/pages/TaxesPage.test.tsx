@@ -1568,6 +1568,49 @@ describe('TaxesPage', () => {
     expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
   })
 
+  // Found on the real-data walk (2026-09-24): the card is mounted once and kept mounted while
+  // the other views are open, so it went on showing the answer from BEFORE a save or a status
+  // change — the reconciliation strip's "Your inputs" column still reading a line the user had
+  // just fixed in Inputs, and a year changed to MFS (no tables) still showing MFJ's figures under
+  // a dialog that had just said Will I owe? would be unavailable.
+  it('reloads the card when the year’s inputs are saved in the form', async () => {
+    const thisYear = new Date().getFullYear()
+    vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear)])
+    renderPage('/taxes?section=summary')
+    await screen.findByText(`Will I owe? — ${thisYear}`)
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    fireEvent.change(await screen.findByLabelText('Annual Salary'), { target: { value: '$210,000' } })
+    fireEvent.click(screen.getByRole('button', { name: /save inputs/i }))
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
+  })
+
+  it('reloads the card when the year’s status changes, and again when the change is undone', async () => {
+    const thisYear = new Date().getFullYear()
+    vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear)])
+    renderPage('/taxes?section=summary')
+    await screen.findByText(`Will I owe? — ${thisYear}`)
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change…' }))
+    const dialog = screen.getByRole('dialog', { name: `Filing status for ${thisYear}` })
+    fireEvent.click(within(dialog).getByRole('radio', { name: /^Married filing separately/ }))
+    const confirm = () =>
+      within(dialog).getByRole('button', { name: 'Change to Married filing separately' }) as HTMLButtonElement
+    await waitFor(() => expect(confirm().disabled).toBe(false))
+    fireEvent.click(confirm())
+    await waitFor(() => expect(vi.mocked(patchTaxYear)).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const options = toast.success.mock.calls[0][1] as { action: { onAction: () => void } }
+    options.action.onAction()
+    await waitFor(() => expect(vi.mocked(undoBatch)).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(3))
+  })
+
   it('vest Apply writes through the page: PUT, remounted form, fresh totals', async () => {
     const thisYear = new Date().getFullYear()
     vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear)])

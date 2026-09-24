@@ -822,8 +822,10 @@
 .filing-status-popover {
   top: calc(100% + 6px);
   left: 0;
-  min-width: 24rem;
-  max-width: min(32rem, calc(100vw - 2rem));
+  /* Wide enough that "Change to Married filing separately" and "Keep Married filing jointly"
+     share one row (the real-data walk wrapped them at 24rem). */
+  min-width: min(29rem, calc(100vw - 2rem));
+  max-width: min(34rem, calc(100vw - 2rem));
 }
 
 .filing-status-options {

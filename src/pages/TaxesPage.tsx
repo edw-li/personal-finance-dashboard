@@ -215,6 +215,11 @@ export default function TaxesPage() {
   // external echo must REMOUNT it — this rides its key. The chip confirmed any discard
   // before PUTting, so the remount never eats work silently.
   const [inputsEpoch, setInputsEpoch] = useState(0)
+  // The Will I owe? card reads the year's inputs, tables and status on the server, and stays
+  // mounted while the other views are open: every write that moves them bumps this, and the
+  // card reloads its feed (2026-09-23 spec §W4 — the strip must show a fix made in Inputs). Bumped
+  // in the same batch as the card's own post-Apply reload, so an Apply spends one request.
+  const [withholdingRefresh, setWithholdingRefresh] = useState(0)
   // Year chips can be clicked faster than three requests come back — a slow earlier year
   // must never overwrite a later one (PortfolioPage's guard).
   const seqRef = useRef(0)
@@ -476,6 +481,7 @@ export default function TaxesPage() {
       .then(() => {
         toast.success(`Undone — ${year} is filed ${FILING_STATUS_LABELS[restored]} again.`)
         setTrendRefresh((n) => n + 1)
+        setWithholdingRefresh((n) => n + 1)
         return reconcileYears().catch((err: unknown) => {
           setError(describeError(err, 'the tax years'))
         })
@@ -511,6 +517,7 @@ export default function TaxesPage() {
         // moves the year's column in the all-years trend — a status change is a save as far
         // as CompositionPanel's feed is concerned (2026-08-31 review round).
         setTrendRefresh((n) => n + 1)
+        setWithholdingRefresh((n) => n + 1)
         // The change log's own words. No batch, no Undo (the wizard's contract).
         const done = `Changed ${year} filing status to ${FILING_STATUS_LABELS[row.filing_status]}`
         toast.success(
@@ -569,6 +576,7 @@ export default function TaxesPage() {
       current !== null && current.inputs.year === echo.year ? { ...current, inputs: echo } : current,
     )
     if (isStaleEcho(echo.year)) return
+    setWithholdingRefresh((n) => n + 1)
     refreshSummary(echo.year)
     // The chips carry input/bracket counts, and this save just moved one of them.
     refreshYearCounts()
@@ -652,6 +660,8 @@ export default function TaxesPage() {
         : current,
     )
     if (isStaleEcho(echo.year)) return
+    // Only the year's OWN status' tables are the ones the engine walks.
+    if (echo.filing_status === filingStatus) setWithholdingRefresh((n) => n + 1)
     refreshSummary(echo.year)
     refreshYearCounts()
   }
@@ -960,6 +970,7 @@ export default function TaxesPage() {
                     inputsDirty={inputsDirty}
                     onVestApplied={onVestApplied}
                     goTo={goTo}
+                    refreshKey={withholdingRefresh}
                   />
                 )}
                 <MarginalPanel summary={d.summary} brackets={d.brackets} />

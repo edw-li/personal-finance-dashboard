@@ -333,6 +333,7 @@ export default function WithholdingPanel({
   inputsDirty = false,
   onVestApplied,
   goTo,
+  refreshKey = 0,
 }: {
   year: number
   /** The PRIMARY person's stored w2_stock_rsus_sold (the 4dp echo), null when unset —
@@ -347,6 +348,12 @@ export default function WithholdingPanel({
   /** The page's view switch (2026-09-13 polish spec §14): the partner note's "Open Inputs" and
    *  the missing-tables "Open Tax tables" doors. Absent → the sentences alone. */
   goTo?: (section: TaxSection) => void
+  /** Bumped by the page when the year's answer moved under this card — an inputs or tables
+   *  save, a filing-status change or its Undo; each new value reloads the feed, keeping the
+   *  figures on screen until the fresh ones land. The card stays mounted while the other
+   *  views are open, so without this the strip would go on showing a line the user had just
+   *  fixed in Inputs (2026-09-23 spec §W4). */
+  refreshKey?: number
 }) {
   // null = the feed has not answered yet (never a zeroed payload — "not loaded" and "nothing
   // withheld" say very different things under this heading).
@@ -385,7 +392,7 @@ export default function WithholdingPanel({
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
       })
-  }, [year, reload])
+  }, [year, reload, refreshKey])
 
   const retry = () => {
     setBusy(true)
