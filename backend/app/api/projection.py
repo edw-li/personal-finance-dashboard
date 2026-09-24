@@ -35,11 +35,10 @@ model for direct callers (the assistant), so every caller gets its own copy.
 import math
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from functools import partial
 from typing import Annotated
-from zoneinfo import ZoneInfo
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -565,13 +564,13 @@ def _one_year_on(day: date) -> date:
         return day.replace(year=day.year + 1, day=28)
 
 
-def _product_date(instant: datetime | None) -> date | None:
-    """A stored instant as the calendar day the product lives in (clock.PRODUCT_TIMEZONE)."""
+def quote_date(instant: datetime | None) -> date | None:
+    """The day a stored quote belongs to: its UTC date — the app's quote convention (staleness is
+    judged in UTC, services/clock.py), and a daily close is stored at midnight UTC, which Pacific
+    time would date the day before."""
     if instant is None:
         return None
-    if instant.tzinfo is None:
-        return instant.date()
-    return instant.astimezone(ZoneInfo(clock.PRODUCT_TIMEZONE)).date()
+    return instant.astimezone(UTC).date() if instant.tzinfo is not None else instant.date()
 
 
 async def _scheduled_vests(
@@ -654,7 +653,7 @@ async def _scheduled_vests(
     echo = VestsOut(
         included=included,
         price=price,
-        price_as_of=_product_date(quoted_at),
+        price_as_of=quote_date(quoted_at),
         withholding_rate=SUPPLEMENTAL,
         next_12_months=next_12_months,
         by_year=[

@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.api.projection import ProjectionKnobs, money_lasts_verdict, run_projection
+from app.api.projection import ProjectionKnobs, money_lasts_verdict, quote_date, run_projection
 from app.models import (
     Account,
     AccountBalance,
@@ -1750,3 +1750,11 @@ async def test_a_grant_that_will_not_schedule_is_skipped_with_the_comp_warning(a
 async def test_without_grants_there_is_no_vests_echo(auth_client, db):
     await _seed_book(db)
     assert (await auth_client.get("/api/v1/projection")).json()["vests"] is None
+
+
+def test_a_quote_is_dated_by_its_utc_day_the_apps_quote_convention():
+    # A daily close is stored at midnight UTC (the copy's NVDA quote: 2026-09-22 00:00 UTC); read
+    # in Pacific time it would be dated the day before. Quote staleness is UTC by design too.
+    assert quote_date(datetime(2026, 9, 22, 0, 0, tzinfo=UTC)) == date(2026, 9, 22)
+    assert quote_date(datetime(2026, 9, 21, 20, 10, tzinfo=UTC)) == date(2026, 9, 21)
+    assert quote_date(None) is None
