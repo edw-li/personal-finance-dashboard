@@ -2000,7 +2000,15 @@ function MonthlyUpdateWizard() {
               <div className="wizard-footer-actions">
                 {/* Moving on saves nothing — the typed balances stay as a draft — so it is never
                     gated on them (plan decision 6). */}
-                <button className="button" disabled={loading} onClick={nextFromBalances.go}>
+                <button
+                  className="button"
+                  disabled={loading}
+                  onClick={() => {
+                    // Moving on saves nothing, so edited balances are said to wait (review M7).
+                    if (balancesDirty) toast.info(`${balancesPartName(month)} not saved — kept as a draft.`)
+                    nextFromBalances.go()
+                  }}
+                >
                   {nextFromBalances.label}
                 </button>
                 {/* The step's primary IS its part's save (spec §M1), so Enter-Enter from the last

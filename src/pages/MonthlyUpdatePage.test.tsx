@@ -2862,6 +2862,23 @@ describe('two parts, each saving only itself (2026-09-23 spec §M1)', () => {
     expect(sentBody(1).spending).toEqual({ amounts: [{ category_id: 7, amount: '250.00' }] })
   })
 
+  it('leaving edited balances by Next says they are kept as a draft, not saved (review M7)', async () => {
+    renderWizardAt('/update?month=2026-08-01')
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Next: August spending' }))
+    expect(await screen.findByText('Aug 1 balances not saved — kept as a draft.')).toBeTruthy()
+    expect(monthReviewApi.saveMonthReview).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).not.toBeNull()
+  })
+
+  it('leaving untouched balances by Next says nothing', async () => {
+    renderWizardAt('/update?month=2026-08-01')
+    await screen.findByLabelText('Checking')
+    fireEvent.click(screen.getByRole('button', { name: 'Next: August spending' }))
+    await screen.findByLabelText('Food')
+    expect(screen.queryByText(/kept as a draft/)).toBeNull()
+  })
+
   it('a second Ctrl+S while the first save is in flight sends nothing more (review M22)', async () => {
     const pending = pendingMonthSave()
     vi.mocked(monthReviewApi.saveMonthReview).mockImplementationOnce(() => pending.promise)
