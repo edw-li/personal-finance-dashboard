@@ -96,6 +96,24 @@ class DrawdownOut(BaseModel):
     annual_withdrawal: Decimal
 
 
+class MoneyLastsOut(BaseModel):
+    """Does the money last through the plan-until year (2026-09-23 spec §R3)? From the SAME
+    simulation as the FI dates. `probability` is the share of paths never depleted through
+    December of `plan_until` (a depletion in ANY phase fails — the clamp holds everywhere);
+    `verdict` reads it (≥ 0.90 on_track, ≥ 0.75 borderline, else at_risk); `lasts_until_p10`
+    is the month 9 in 10 paths last at least until (null beyond the axis); both are null
+    with volatility 0, when only the constant-return line's `deterministic_depleted_month`
+    speaks. With no drawdown every figure is null and `reason` says what is missing."""
+
+    plan_until: int
+    probability: Decimal | None = None
+    verdict: Literal["on_track", "borderline", "at_risk"] | None = None
+    lasts_until_p10: date | None = None
+    horizon_end: date
+    deterministic_depleted_month: date | None = None
+    reason: str | None = None
+
+
 class ProjectionOut(BaseModel):
     # Echoed knobs — the values the model actually ran with (the ESPP modeler's posture:
     # the echo IS what the page's form seeds from).
@@ -163,3 +181,6 @@ class ProjectionOut(BaseModel):
     # year past the default horizon lengthens it (`years` echoes the effective horizon).
     plan_until: int | None = None
     plan_until_source: Literal["knob", "setting", "default"] | None = None
+    # Always present from this server (spec §R3); nullable so an older stored payload still
+    # validates.
+    money_lasts: MoneyLastsOut | None = None

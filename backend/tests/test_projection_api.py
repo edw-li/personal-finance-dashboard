@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.api.projection import ProjectionKnobs, run_projection
+from app.api.projection import ProjectionKnobs, money_lasts_verdict, run_projection
 from app.models import (
     Account,
     AccountBalance,
@@ -1416,3 +1416,162 @@ async def test_retirement_months_are_validated_against_the_lengthened_axis(auth_
         f"/api/v1/projection?volatility=0&plan_until={this_month.year + 49}&retire={alex.id}:{far}"
     )
     assert ok.status_code == 200, ok.text
+
+
+# --- "money lasts" (2026-09-23 spec §R3) ---
+
+
+def test_the_verdict_boundaries_sit_exactly_on_ninety_and_seventy_five():
+    assert money_lasts_verdict(Decimal("1")) == "on_track"
+    assert money_lasts_verdict(Decimal("0.9")) == "on_track"
+    assert money_lasts_verdict(Decimal("0.898")) == "borderline"
+    assert money_lasts_verdict(Decimal("0.75")) == "borderline"
+    assert money_lasts_verdict(Decimal("0.748")) == "at_risk"
+    assert money_lasts_verdict(Decimal("0")) == "at_risk"
+
+
+async def test_money_lasts_is_null_with_the_reason_until_everyone_has_retired(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo)
+    none = (await auth_client.get("/api/v1/projection")).json()["money_lasts"]
+    assert none["reason"] == "Set retirement months to see whether the money lasts."
+    assert none["probability"] is None and none["verdict"] is None
+    assert none["lasts_until_p10"] is None and none["deterministic_depleted_month"] is None
+    assert none["plan_until"] == latest_december_year(this_month, 360)
+    one = (
+        await auth_client.get(
+            f"/api/v1/projection?retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()["money_lasts"]
+    assert one["reason"] == (
+        "Withdrawals start once everyone with a paycheck has a retirement month — Bo has none."
+    )
+
+
+async def test_the_reason_names_every_earner_without_a_month(auth_client, db):
+    this_month = await _seed_book(db)
+    people = [await _seed_person(db, name, primary=name == "Ann") for name in ("Ann", "Bo", "Cy")]
+    for person in people:
+        await _seed_profile(db, person)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?retire={people[0].id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    assert body["money_lasts"]["reason"] == (
+        "Withdrawals start once everyone with a paycheck has a retirement month — "
+        "Bo and Cy have none."
+    )
+
+
+async def test_money_lasts_needs_an_annual_spend(auth_client, db):
+    this_month = await _seed_book(db, with_history=False)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    assert body["money_lasts"]["reason"] == (
+        "Withdrawals need an annual spend — type one or enter spending history."
+    )
+    assert body["drawdown"] is None
+    assert [phase["kind"] for phase in body["phases"]] == ["working", "retired"]
+    assert body["phases"][1]["monthly_withdrawal"] is None
+
+
+async def test_a_plan_until_before_the_drawdown_names_both(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    retires = month_add(this_month, 30)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?plan_until={this_month.year}"
+            f"&retire={alex.id}:{_month_param(retires)}"
+        )
+    ).json()
+    lasts = body["money_lasts"]
+    assert lasts["reason"] == (
+        f"{this_month.year} is before withdrawals begin ({retires:%b %Y}) — choose a later year."
+    )
+    assert lasts["probability"] is None and lasts["verdict"] is None
+    assert lasts["deterministic_depleted_month"] is None
+
+
+async def test_success_is_counted_through_december_of_the_plan_until_year(auth_client, db):
+    # A near-deterministic run (sigma 1e-6) that runs out in the JANUARY after the plan-until
+    # year: every path survives through December (success), and a year later none does.
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    july = date(this_month.year + (1 if this_month.month >= 6 else 0), 7, 1)
+    k = december_index(this_month, july.year) - 5  # July's index
+    before = Decimal(100000 + (k - 1) * 4000)  # the balance the month before the withdrawals
+    annual_spend = (before * 12 / Decimal("6.5")).quantize(Decimal("0.01"))  # 7th month runs out
+    url = (
+        "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0"
+        f"&volatility=0.000001&annual_spend={annual_spend}&retire={alex.id}:{_month_param(july)}"
+    )
+    through = (await auth_client.get(f"{url}&plan_until={july.year}")).json()["money_lasts"]
+    january = date(july.year + 1, 1, 1)
+    assert through["deterministic_depleted_month"] == january.isoformat()
+    assert through["probability"] == "1.000000" and through["verdict"] == "on_track"
+    assert through["lasts_until_p10"] == january.isoformat()
+    later = (await auth_client.get(f"{url}&plan_until={july.year + 1}")).json()["money_lasts"]
+    assert later["probability"] == "0.000000" and later["verdict"] == "at_risk"
+
+
+async def test_lasts_until_p10_is_null_when_fewer_than_one_in_ten_paths_run_out(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?annual_spend=100"
+            f"&retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    lasts = body["money_lasts"]
+    assert lasts["reason"] is None
+    assert lasts["probability"] == "1.000000" and lasts["verdict"] == "on_track"
+    assert lasts["lasts_until_p10"] is None
+    assert lasts["deterministic_depleted_month"] is None
+    assert lasts["horizon_end"] == body["months"][-1]
+
+
+async def test_volatility_zero_reports_only_the_constant_return_month(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}&retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    lasts = body["money_lasts"]
+    assert lasts["probability"] is None and lasts["verdict"] is None
+    assert lasts["lasts_until_p10"] is None and lasts["reason"] is None
+    # 144,000 the month before; 5,000 a month out from month 12: below zero in month 40.
+    assert lasts["deterministic_depleted_month"] == month_add(this_month, 40).isoformat()
+
+
+async def test_a_negative_contribution_that_empties_the_balance_fails_too(auth_client, db):
+    # The clamp holds in every phase, and success counts a depletion in ANY phase (§R1, §R3).
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?monthly_contribution=-50000&annual_spend=100"
+            f"&retire={alex.id}:{_month_param(month_add(this_month, 24))}"
+        )
+    ).json()
+    lasts = body["money_lasts"]
+    assert lasts["probability"] == "0.000000" and lasts["verdict"] == "at_risk"
+    assert date.fromisoformat(lasts["lasts_until_p10"]) < month_add(this_month, 24)
+    assert body["projected"][3] == "0.00"  # 100,000 cannot survive -50,000 a month for three

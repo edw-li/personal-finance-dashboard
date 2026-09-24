@@ -58,6 +58,7 @@ from app.schemas.projection import (
     ContributionBreakdownOut,
     DerivedWindowOut,
     DrawdownOut,
+    MoneyLastsOut,
     PayrollSavingOut,
     PhaseOut,
     ProjectionOut,
@@ -68,7 +69,13 @@ from app.services.budgets import living_budget_total
 from app.services.limit_check import employer_match
 from app.services.metrics import planning_window
 from app.services.money import quantize_money, quantize_pct
-from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
+from app.services.montecarlo import (
+    SIMULATIONS,
+    MonteCarloResult,
+    reach_percentile,
+    simulate,
+    survival_count,
+)
 from app.services.net_worth_calc import INVESTABLE_GROUPS, get_swr_pct
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people
@@ -512,6 +519,84 @@ def _plan_phases(
     )
 
 
+# The user's cut-offs (2026-09-23 spec §R3): the share of paths that last through the plan-until
+# year reads on track from 90 %, borderline from 75 %, at risk below.
+ON_TRACK_FROM = Decimal("0.90")
+BORDERLINE_FROM = Decimal("0.75")
+SET_RETIREMENTS_REASON = "Set retirement months to see whether the money lasts."
+NEEDS_SPEND_REASON = "Withdrawals need an annual spend — type one or enter spending history."
+
+
+def money_lasts_verdict(probability: Decimal) -> str:
+    """Judged on the EXACT fraction of paths (k / 500), so 450 paths is exactly on track."""
+    if probability >= ON_TRACK_FROM:
+        return "on_track"
+    if probability >= BORDERLINE_FROM:
+        return "borderline"
+    return "at_risk"
+
+
+def _money_lasts(
+    plan: _Plan,
+    retirements: list[RetirementOut],
+    plan_until: int,
+    months: list[date],
+    line_depletion: int | None,
+    mc: MonteCarloResult | None,
+) -> MoneyLastsOut:
+    """ "Money lasts" from the SAME simulation as the FI dates (spec §R3).
+
+    With no drawdown there is nothing to judge, and `reason` says what is missing — in the
+    order the user would fix it: retirement months first (none at all, then the earners
+    without one), then the annual spend the withdrawal is. A plan-until year whose December
+    comes before the withdrawals begin is refused the same way. Otherwise the success share
+    counts every path never depleted through December of the plan-until year — a depletion
+    in ANY phase fails, since the clamp holds everywhere (a negative typed contribution can
+    empty the balance before retirement) — and the 9-in-10 month is the 10th percentile of
+    the depletion months ("never" = +∞, reach_percentile's rule).
+    """
+    horizon_end = months[-1]
+    if plan.drawdown is None:
+        if not retirements:
+            reason = SET_RETIREMENTS_REASON
+        elif plan.missing:
+            verb = "has" if len(plan.missing) == 1 else "have"
+            reason = (
+                "Withdrawals start once everyone with a paycheck has a retirement month — "
+                f"{names_phrase(plan.missing)} {verb} none."
+            )
+        else:
+            reason = NEEDS_SPEND_REASON
+        return MoneyLastsOut(plan_until=plan_until, horizon_end=horizon_end, reason=reason)
+    if date(plan_until, 12, 1) < plan.drawdown.start_month:
+        return MoneyLastsOut(
+            plan_until=plan_until,
+            horizon_end=horizon_end,
+            reason=(
+                f"{plan_until} is before withdrawals begin "
+                f"({plan.drawdown.start_month:%b %Y}) — choose a later year."
+            ),
+        )
+    deterministic = None if line_depletion is None else months[line_depletion]
+    if mc is None:
+        return MoneyLastsOut(
+            plan_until=plan_until,
+            horizon_end=horizon_end,
+            deterministic_depleted_month=deterministic,
+        )
+    through = december_index(months[0], plan_until)
+    probability = Decimal(survival_count(mc.depletion_indices, through)) / Decimal(SIMULATIONS)
+    p10 = reach_percentile(mc.depletion_indices, 10)
+    return MoneyLastsOut(
+        plan_until=plan_until,
+        probability=quantize_pct(probability),
+        verdict=money_lasts_verdict(probability),
+        lasts_until_p10=None if p10 is None else months[min(p10, len(months) - 1)],
+        horizon_end=horizon_end,
+        deterministic_depleted_month=deterministic,
+    )
+
+
 async def _resolve_plan_until(
     db: AsyncSession,
     knob: int | None,
@@ -895,6 +980,7 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
     fi_month_p10: date | None = None
     fi_month_p50: date | None = None
     fi_month_p90: date | None = None
+    mc: MonteCarloResult | None = None
     if volatility > 0:
         mc = simulate(
             starting,
@@ -919,6 +1005,8 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
             fi_month_p10 = None if p10 is None else months[min(p10, month_count)]
             fi_month_p50 = None if p50 is None else months[min(p50, month_count)]
             fi_month_p90 = None if p90 is None else months[min(p90, month_count)]
+
+    money_lasts = _money_lasts(plan, retirements, plan_until, months, line.depletion_index, mc)
 
     # The budgets' own annual figure rides beside the derived one (spec §4): a preset the
     # card can offer, never a replacement for what the data derived. The echo keeps THIS
@@ -964,4 +1052,5 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
         drawdown=plan.drawdown,
         plan_until=plan_until,
         plan_until_source=plan_until_source,
+        money_lasts=money_lasts,
     )
