@@ -77,6 +77,22 @@
   align-items: center;
   gap: 0.35rem 0.5rem;
 }
+/* "Include scheduled vests" (2026-09-23 correctness spec §R7): a checkbox beside its words, the
+   readout under it in the derived-caption voice; "Plan until" is a plain year box. */
+.sandbox-controls .projection-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+.sandbox-controls .projection-toggle input {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+.sandbox-controls .projection-toggle:has(input:disabled) { cursor: default; color: var(--muted); }
+.sandbox-controls .projection-plan-until .field-input { width: 100%; }
 /* Assumptions hidden → the chart takes the whole width and the collapsed header card sits above it,
    where the reader left the toggle (audit P-9). Scoped to the HEADER's toggle button: the ⓘ hints
    inside the card carry aria-expanded too, and would otherwise collapse the workspace permanently. */

@@ -1,18 +1,22 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import InfoHint from '../InfoHint'
 import CompareTable from '../../sandbox/CompareTable'
 import { compareDecimals } from '../../sandbox/decimal'
 import SandboxPanel from '../../sandbox/SandboxPanel'
 import { MONTH_TOKEN } from '../../sandbox/scenarioUrl'
 import SliderBox from '../../sandbox/SliderBox'
 import { SEP, type Sandbox } from '../../sandbox/useSandbox'
-import type { PersonOut, ProjectionOut } from '../../types/api'
+import type { PersonOut, ProjectionOut, VestsOut } from '../../types/api'
 import { windowWords } from '../overview/ytd'
-import { formatCurrency, formatMonth } from '../../utils/format'
+import { formatCurrency, formatCurrencyCompact, formatMonth, formatPct } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
 import {
   COMPARE_ROWS,
   KNOBS,
+  PLAN_UNTIL_MAX,
+  PLAN_UNTIL_MIN,
+  PLAN_UNTIL_TOKEN,
   SLIDER,
   derivedOf,
   projectionValue,
@@ -40,9 +44,11 @@ const LABELS: Record<ProjectionKnob, string> = {
 
 const HINTS: Partial<Record<ProjectionKnob, string>> = {
   monthly_contribution:
-    'Derived from the months that have BOTH spending and net pay entered: (net pay − living spend − tax paid) plus every earner\'s payroll deductions — 401(k), ESPP and HSA — and their employer 401(k) match. RSU vests are not included; raise it to model them.',
+    'Derived from the months that have BOTH spending and net pay entered: (net pay − living spend − tax paid) plus every earner\'s payroll deductions — 401(k), ESPP and HSA — and their employer 401(k) match. Scheduled RSU vests are added separately (Include scheduled vests).',
   annual_spend:
-    'Derived from living spend over that same window, × 12. Tax payments and transfers to your own accounts are not living spend, so neither is in this figure. When budgets exist, "Use my budgets" sets this to twelve times the living-category budgets in force this month.',
+    'Derived from living spend over that same window, × 12. Tax payments and transfers to your own accounts are not living spend, so neither is in this figure. When budgets exist, "Use my budgets" sets this to twelve times the living-category budgets in force this month. After everyone with a paycheck has retired, this is also what the projection withdraws each year.',
+  plan_until:
+    'The year the money has to last through. Later years lengthen the horizon. Set a lasting default in Settings › Plan assumptions.',
   swr: 'Derived from Settings. The FI target is annual spend ÷ this rate.',
   volatility: 'Turns the fan on; 0 turns it off.',
   inflation: 'Annual price inflation used in the model. The chart dollar switch changes display units without changing this assumption.',
@@ -75,7 +81,15 @@ export default function ScenarioPanel({
   // URL-controlled box validated per keystroke is untypeable: "2", "20", "203" would each
   // be refused and wiped. The draft holds the half-typed month; blur and Enter commit it.
   const [drafts, setDrafts] = useState<Record<number, string>>({})
+  // The plan-until box's own half-typed text and refusal (the retire boxes' draft posture).
+  const [planDraft, setPlanDraft] = useState<string | null>(null)
+  const [planError, setPlanError] = useState<string | null>(null)
   const derived = derivedOf(baseline)
+  // The plan-until year and the vests speak for the run ON SCREEN: the horizon default moves
+  // with the Horizon knob, and the vests stop with a retirement month.
+  const live = sandbox.result ?? baseline
+  const vests = live?.vests ?? null
+  const primary = people.find((person) => person.is_primary) ?? null
   const breakdown = baseline?.contribution_breakdown ?? null
   const { scenario } = sandbox
 
@@ -88,6 +102,8 @@ export default function ScenarioPanel({
     setSeen(entriesKey)
     setDrafts({})
     setMonthError(null)
+    setPlanDraft(null)
+    setPlanError(null)
   }
 
   const knob = (key: ProjectionKnob) => (next: string, commit: boolean) =>
@@ -133,6 +149,27 @@ export default function ScenarioPanel({
     if (draft !== undefined) commitRetire(person, draft)
   }
 
+  // A year the URL can carry (the codec's 2000–2199 fence); the server answers the exact range
+  // with its own 422 in the card's error slot (2026-09-23 spec §R3).
+  const commitPlanUntil = () => {
+    if (planDraft === null) return
+    const text = planDraft.trim()
+    const year = Number(text)
+    if (text !== '' && !(PLAN_UNTIL_TOKEN.test(text) && year >= PLAN_UNTIL_MIN && year <= PLAN_UNTIL_MAX)) {
+      setPlanError(`Plan until must be a year from ${PLAN_UNTIL_MIN} through ${PLAN_UNTIL_MAX}`)
+      return
+    }
+    setPlanDraft(null)
+    setPlanError(null)
+    knob('plan_until')(text, true)
+  }
+
+  const planPlaceholder =
+    live?.plan_until == null ? undefined : live.plan_until_source === 'setting' ? `${live.plan_until} (from Settings)` : String(live.plan_until)
+
+  const vestsOn = scenario.knobs.vests === undefined ? (vests?.included ?? false) : scenario.knobs.vests !== '0'
+  const vestsHint = vests === null ? '' : vestsHintText(vests, primary?.name ?? null)
+
   return (
     <SandboxPanel
       eyebrow="Planning assumptions"
@@ -158,7 +195,73 @@ export default function ScenarioPanel({
       }
     >
       {ORDER.map((key) => {
-        if (key === 'plan_until' || key === 'vests') return null
+        if (key === 'plan_until') {
+          return (
+            <div key={key} className="slider-box projection-plan-until">
+              <div className="slider-box-head">
+                <label htmlFor="scenario-plan_until">
+                  {LABELS.plan_until}
+                  <InfoHint text={HINTS.plan_until ?? ''} />
+                </label>
+                {scenario.knobs.plan_until === undefined && live?.plan_until != null && (
+                  <span className="sandbox-badge">{live.plan_until_source === 'setting' ? 'Settings' : 'Horizon default'}</span>
+                )}
+              </div>
+              <input
+                id="scenario-plan_until"
+                className="field-input"
+                inputMode="numeric"
+                aria-label={LABELS.plan_until}
+                aria-describedby={planError !== null ? 'scenario-plan-until-error' : undefined}
+                placeholder={planPlaceholder}
+                value={planDraft ?? scenario.knobs.plan_until ?? ''}
+                onChange={(e) => {
+                  setPlanDraft(e.target.value)
+                  setPlanError(null) // the sentence described what WAS in the box
+                }}
+                onBlur={commitPlanUntil}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return
+                  e.preventDefault() // Enter inside a card must not implicit-submit
+                  commitPlanUntil()
+                }}
+              />
+              {planError !== null && (
+                <p id="scenario-plan-until-error" className="sandbox-field-error" role="alert">
+                  {planError}
+                </p>
+              )}
+            </div>
+          )
+        }
+        if (key === 'vests') {
+          // Only when there are grants to include (the echo is null without them).
+          if (vests === null) return null
+          return (
+            <div key={key} className="slider-box projection-vests">
+              <div className="slider-box-head">
+                <label htmlFor="scenario-vests" className="projection-toggle">
+                  <input
+                    id="scenario-vests"
+                    type="checkbox"
+                    checked={vestsOn}
+                    disabled={vests.excluded_reason !== null}
+                    // Checked is the default: drop the entry rather than spell `vests:1`.
+                    onChange={(e) => knob('vests')(e.target.checked ? '' : '0', true)}
+                  />
+                  {LABELS.vests}
+                </label>
+                <InfoHint text={vestsHint} />
+              </div>
+              <span className="projection-derived">
+                {vests.excluded_reason ??
+                  (vests.next_12_months === null
+                    ? null
+                    : `≈ ${formatCurrencyCompact(vests.next_12_months)} over the next 12 months, after withholding`)}
+              </span>
+            </div>
+          )
+        }
         const slider = (
           <SliderBox
             key={key}
@@ -276,28 +379,37 @@ export default function ScenarioPanel({
       <div id="scenario-retire-error">
         <FeedBanner error={monthError} />
       </div>
-      {!compact && <ScenarioHints people={people} />}
+      {!compact && <ScenarioHints people={people} vests={vests} />}
     </SandboxPanel>
   )
+}
+
+/** What the vests toggle adds, from the echo: the quote, the calendar's sell-to-cover and the
+ *  grant holder (2026-09-23 spec §R4). */
+function vestsHintText(vests: VestsOut, primaryName: string | null): string {
+  const price = vests.price === null ? 'the latest employer-stock quote' : `the latest employer-stock quote (${formatCurrency(vests.price)})`
+  const stop = primaryName === null ? 'Vests stop at the grant holder\'s retirement.' : `Vests stop at ${primaryName}'s retirement.`
+  return `Your granted, unvested RSUs, added in the month each vests at ${price} less about ${formatPct(vests.withholding_rate, { signed: false, decimals: 2 })} sell-to-cover withholding, in today's dollars. A vest already in your starting balance is not counted again. ${stop}`
 }
 
 /** The assumptions' fine print. ScenarioPanel renders it itself only when it stands alone; on the
  *  Projection page (`compact`) the PAGE renders it inside the compare card, so the knobs column
  *  ends at its last control and nothing has to be scrolled past to reach a knob (2026-09-13 polish
  *  spec §12, audit P-2). */
-export function ScenarioHints({ people }: { people: PersonOut[] }) {
+export function ScenarioHints({ people, vests = null }: { people: PersonOut[]; vests?: VestsOut | null }) {
+  const primary = people.find((person) => person.is_primary) ?? null
   return (
     <>
       {people.length > 0 && (
         // Named only where the boxes are: a roster-less database has no retirement to explain.
+        // The phases, in the user's rules (2026-09-23 spec §R2, §R7).
         <p className="drill-hint">
-          A retirement month drops that person&apos;s CURRENT monthly take-home, payroll
-          deductions and employer match — the paycheck profile in force today, not a projection
-          of it — out of the contribution stream from that month on; whatever is left keeps escalating at the
-          contribution-growth rate, so a far-off retirement&apos;s cost is slightly understated,
-          since the drop never gets that person&apos;s share of the modelled raises. Spending stays
-          a household figure, so the FI target does not move. Blank means that person works for the
-          whole horizon.
+          Retirement months split the plan into phases. While one of you works, that person&apos;s
+          401(k), HSA and ESPP deductions and employer match keep going, and their pay is assumed to
+          cover your spending — the chart&apos;s notes say when it does not, and the difference is not
+          withdrawn. From the last retirement on, the projection withdraws your annual spend each year
+          in today&apos;s dollars. Taxes on withdrawals and Social Security are not modelled.
+          {vests !== null && primary !== null && ` RSU vests stop at ${primary.name}'s retirement.`}
         </p>
       )}
       <p className="drill-hint">

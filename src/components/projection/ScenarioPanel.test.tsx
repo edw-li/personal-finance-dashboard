@@ -276,3 +276,100 @@ describe('ScenarioPanel', () => {
     expect(screen.queryByRole('button', { name: /Use my budgets|using your budgets/ })).toBeNull()
   })
 })
+
+
+const VESTS = {
+  included: true, price: '228.8700', price_as_of: '2026-09-22', withholding_rate: '0.3223',
+  next_12_months: '116234.00', by_year: [], stops: null, excluded_reason: null,
+}
+
+describe('ScenarioPanel — plan until and scheduled vests (2026-09-23 spec §R7)', () => {
+  it('shows the plan-until echo as the placeholder, naming Settings when the year came from there', async () => {
+    preview.mockImplementation(async () => ({ ...echo, plan_until: 2075, plan_until_source: 'setting' as const }))
+    mount()
+    await waitFor(() => expect((screen.getByLabelText('Plan until', { selector: 'input' }) as HTMLInputElement).placeholder).toBe('2075 (from Settings)'))
+    expect(screen.getByText('Settings', { selector: '.projection-plan-until .sandbox-badge' })).toBeTruthy()
+  })
+
+  it('shows the horizon default as a plain placeholder otherwise', async () => {
+    preview.mockImplementation(async () => ({ ...echo, plan_until: 2055, plan_until_source: 'default' as const }))
+    mount()
+    await waitFor(() => expect((screen.getByLabelText('Plan until', { selector: 'input' }) as HTMLInputElement).placeholder).toBe('2055'))
+    expect(screen.getByText('Horizon default')).toBeTruthy()
+  })
+
+  it('commits a typed year on blur, refuses what the URL could not carry, and clears on blank', async () => {
+    preview.mockImplementation(async () => ({ ...echo, plan_until: 2055, plan_until_source: 'default' as const }))
+    mount()
+    await waitFor(() => expect(screen.getAllByText('Planning default')).toHaveLength(5))
+    const year = screen.getByLabelText('Plan until', { selector: 'input' }) as HTMLInputElement
+    fireEvent.change(year, { target: { value: '20x5' } })
+    expect(url()).toBe('/projection') // never written half-typed
+    fireEvent.blur(year)
+    expect(screen.getByRole('alert').textContent).toBe('Plan until must be a year from 2000 through 2199')
+    expect(url()).toBe('/projection')
+    fireEvent.change(year, { target: { value: '2075' } })
+    fireEvent.keyDown(year, { key: 'Enter' })
+    expect(url()).toBe('/projection?whatif=plan_until%3A2075')
+    expect(screen.queryByRole('alert')).toBeNull()
+    await waitFor(() => expect(preview).toHaveBeenLastCalledWith({ knobs: { plan_until: '2075' }, retirements: {} }))
+    fireEvent.change(year, { target: { value: '' } })
+    fireEvent.blur(year)
+    expect(url()).toBe('/projection')
+  })
+
+  it('offers the vests toggle only when the echo has grants, on by default, with its readout', async () => {
+    mount()
+    await waitFor(() => expect(screen.getAllByText('Planning default')).toHaveLength(5))
+    expect(screen.queryByLabelText('Include scheduled vests')).toBeNull() // no grants: nothing to toggle
+    cleanup()
+    preview.mockImplementation(async () => ({ ...echo, vests: VESTS }))
+    mount()
+    const toggle = (await screen.findByLabelText('Include scheduled vests')) as HTMLInputElement
+    expect(toggle.checked).toBe(true)
+    expect(screen.getByText('≈ $116.2K over the next 12 months, after withholding')).toBeTruthy()
+  })
+
+  it('turning vests off writes vests:0; turning them back on drops the entry', async () => {
+    preview.mockImplementation(async (s) => ({ ...echo, vests: { ...VESTS, included: s.knobs.vests !== '0' } }))
+    mount()
+    const toggle = (await screen.findByLabelText('Include scheduled vests')) as HTMLInputElement
+    fireEvent.click(toggle)
+    expect(url()).toBe('/projection?whatif=vests%3A0')
+    await waitFor(() => expect(preview).toHaveBeenLastCalledWith({ knobs: { vests: '0' }, retirements: {} }))
+    await waitFor(() => expect((screen.getByLabelText('Include scheduled vests') as HTMLInputElement).checked).toBe(false))
+    fireEvent.click(screen.getByLabelText('Include scheduled vests'))
+    expect(url()).toBe('/projection')
+  })
+
+  it('disables the toggle and says why when the vests cannot be priced', async () => {
+    const reason = 'No NVDA quote yet — scheduled vests are left out'
+    preview.mockImplementation(async () => ({ ...echo, vests: { ...VESTS, included: false, excluded_reason: reason, next_12_months: null } }))
+    mount()
+    const toggle = (await screen.findByLabelText('Include scheduled vests')) as HTMLInputElement
+    expect(toggle.disabled).toBe(true)
+    expect(screen.getByText(reason)).toBeTruthy()
+  })
+
+  it('says vests are added separately under the contribution, and what the spend withdraws', async () => {
+    mount()
+    await waitFor(() => expect(screen.getAllByText('Planning default')).toHaveLength(5))
+    // The hint sentences ride the ⓘ buttons' bubbles; open them by their own names.
+    fireEvent.click(screen.getByRole('button', { name: /^About Derived from the months/ }))
+    expect(screen.getByRole('tooltip').textContent).toContain('Scheduled RSU vests are added separately (Include scheduled vests).')
+    fireEvent.click(screen.getByRole('button', { name: /^About Derived from living spend/ }))
+    expect(screen.getAllByRole('tooltip').map((t) => t.textContent).join(' ')).toContain(
+      'After everyone with a paycheck has retired, this is also what the projection withdraws each year.',
+    )
+  })
+
+  it('explains the phases, and names the grant holder when there are vests', async () => {
+    preview.mockImplementation(async () => ({ ...echo, vests: VESTS }))
+    mount()
+    await screen.findByLabelText('Include scheduled vests')
+    const paragraph = screen.getByText(/Retirement months split the plan into phases/)
+    expect(paragraph.textContent).toContain('the difference is not withdrawn')
+    expect(paragraph.textContent).toContain('Taxes on withdrawals and Social Security are not modelled.')
+    expect(paragraph.textContent).toContain("RSU vests stop at Edward's retirement.")
+  })
+})

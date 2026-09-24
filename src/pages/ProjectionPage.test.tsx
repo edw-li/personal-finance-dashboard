@@ -881,7 +881,8 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     expect(box('Retires — Me').value).toBe('')
     expect(box('Retires — Alex').value).toBe('')
     // Blank is a real answer here, not a derived default: nobody retires.
-    expect(screen.getByText(/Blank means that person works for the whole horizon/)).toBeTruthy()
+    expect(screen.getAllByText('works throughout')).toHaveLength(2)
+    expect(screen.getByText(/Retirement months split the plan into phases/)).toBeTruthy()
   })
 
   it('renders one knob for a single-person household — same grammar, new capability', async () => {
@@ -899,7 +900,7 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     await loaded()
 
     expect(screen.queryByLabelText(/^Retires/)).toBeNull()
-    expect(screen.queryByText(/Blank means that person works/)).toBeNull()
+    expect(screen.queryByText(/Retirement months split the plan into phases/)).toBeNull()
   })
 
   it('keeps the whole page alive when the household fetch alone fails', async () => {
@@ -985,12 +986,16 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
-  it('names the approximation the drop actually is', async () => {
+  it('explains the phases and the withdrawal after the last retirement', async () => {
     renderPage()
     await loaded()
 
-    expect(screen.getByText(/CURRENT monthly take-home/)).toBeTruthy()
-    expect(screen.getByText(/Spending stays a household figure/)).toBeTruthy()
+    // 2026-09-23 spec §R2/§R7: the working partner keeps saving and their pay covers spending;
+    // annual spend is withdrawn after the last retirement; taxes and Social Security are not modelled.
+    const paragraph = screen.getByText(/Retirement months split the plan into phases/)
+    expect(paragraph.textContent).toContain('their pay is assumed to cover your spending')
+    expect(paragraph.textContent).toContain("withdraws your annual spend each year in today's dollars")
+    expect(paragraph.textContent).toContain('Taxes on withdrawals and Social Security are not modelled.')
   })
 })
 
@@ -1056,9 +1061,9 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     expect(within(compare).getByText(/same random samples/)).toBeTruthy()
     expect(within(compare).getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
     // The household has two people in the fixture, so the retirement paragraph is there too.
-    expect(within(compare).getByText(/Blank means that person works for the whole horizon/)).toBeTruthy()
+    expect(within(compare).getByText(/Retirement months split the plan into phases/)).toBeTruthy()
     const knobs = document.getElementById('projection-assumptions') as HTMLElement
     expect(within(knobs).queryByText(/same random samples/)).toBeNull()
-    expect(within(knobs).queryByText(/Blank means that person works/)).toBeNull()
+    expect(within(knobs).queryByText(/Retirement months split the plan/)).toBeNull()
   })
 })
