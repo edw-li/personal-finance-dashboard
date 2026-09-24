@@ -85,6 +85,23 @@ class ReviewBook:
         return max(legacy) if legacy else None
 
 
+def _day(value: date, today: date) -> str:
+    """'Oct 1' — with ', 2025' outside today's year."""
+    label = f"{value:%b} {value.day}"
+    return label if value.year == today.year else f"{label}, {value.year}"
+
+
+def early_balances_blocker(month: date, recorded_on: date, today: date) -> str:
+    """K4's sentence (2026-09-23 spec): "Oct 1 balances were recorded early, on Sep 22 — save
+    them again on or after Oct 1 before closing October." """
+    name = f"{month:%B}" if month.year == today.year else f"{month:%B %Y}"
+    first = _day(month, today)
+    return (
+        f"{first} balances were recorded early, on {_day(recorded_on, today)} — "
+        f"save them again on or after {first} before closing {name}."
+    )
+
+
 def classify_month(
     month: date,
     data: dict,
@@ -97,6 +114,12 @@ def classify_month(
 ) -> MonthReviewOut:
     digest = revision(data)
     current_month = today.replace(day=1)
+    snapshot = data["snapshot"]
+    recorded_early = (
+        snapshot["recorded_on"]
+        if snapshot and snapshot["recorded_on"] and snapshot["recorded_on"] < month
+        else None
+    )
     matches_confirmation = bool(review and review.confirmation_revision == digest)
     reviewed = ReviewedFeeds(
         balances=bool(matches_confirmation and review.balances_reviewed),
@@ -138,6 +161,11 @@ def classify_month(
         blockers.append("Future months remain in progress until their month begins.")
     if not has_balances:
         blockers.append("Enter balances before closing the month.")
+    elif recorded_early is not None and not is_legacy:
+        # K4 (2026-09-23 spec): opening balances recorded before the month began are provisional
+        # and cannot be certified until saved again on or after the 1st (which restamps them).
+        # Legacy history is exempt — never restamped, never blocked — so it stays in the averages.
+        blockers.append(early_balances_blocker(month, recorded_early, today))
     if not has_spending:
         blockers.append("Enter spending, including an explicit zero when appropriate.")
     elif not complete_spending:

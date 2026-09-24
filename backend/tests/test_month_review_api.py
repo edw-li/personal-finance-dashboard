@@ -500,3 +500,82 @@ async def test_idempotency_keeps_omitted_pay_distinct_from_an_explicit_clear(aut
     assert replay.status_code == 409
     assert "different changes" in replay.json()["detail"]
     assert (await db.execute(select(MonthlyCashflow.net_pay))).scalar_one() == D("1000")
+
+
+# --- K4 (2026-09-23 spec): a month whose own balances were recorded early cannot be closed ---
+
+EARLY = (
+    "Oct 1 balances were recorded early, on Sep 22 — save them again on or after Oct 1 before "
+    "closing October."
+)
+
+
+async def seed_early_october(db):
+    account_id, category_id = await seed(db, ())
+    snapshot = NetWorthSnapshot(month=date(2026, 10, 1), recorded_on=date(2026, 9, 22))
+    db.add(snapshot)
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snapshot.id, account_id=account_id, balance=D("5000")))
+    db.add(MonthlySpending(month=date(2026, 10, 1), category_id=category_id, amount=D("100.00")))
+    db.add(MonthlyCashflow(month=date(2026, 10, 1), net_pay=D("1000.00")))
+    await db.commit()
+
+
+async def seed_month_recorded_on(db, account_id, month, recorded_on):
+    snapshot = NetWorthSnapshot(month=month, recorded_on=recorded_on)
+    db.add(snapshot)
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snapshot.id, account_id=account_id, balance=D("5000")))
+    category = (await db.execute(select(SpendingCategory))).scalars().first()
+    db.add(MonthlySpending(month=month, category_id=category.id, amount=D("100.00")))
+    db.add(MonthlyCashflow(month=month, net_pay=D("1000.00")))
+    await db.commit()
+
+
+async def test_a_provisional_month_cannot_be_closed(auth_client, db, monkeypatch):
+    await seed_early_october(db)
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 10, 5))
+    state = await get_state(auth_client, date(2026, 10, 1))
+    assert state["blockers"] == [EARLY] and not state["can_close"]
+    response = await auth_client.put(
+        f"{BASE}/months/2026-10-01",
+        json={"expected_revision": state["input_revision"], "close": True, "reviewed": CONFIRMED},
+    )
+    assert response.status_code == 422
+    assert EARLY in response.json()["detail"]["blockers"]
+
+
+async def test_before_its_month_it_carries_both_blockers(auth_client, db, monkeypatch):
+    await seed_early_october(db)
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+    blockers = (await get_state(auth_client, date(2026, 10, 1)))["blockers"]
+    assert blockers == ["Future months remain in progress until their month begins.", EARLY]
+
+
+async def test_a_final_month_is_never_blocked_by_it(auth_client, db):
+    await seed(db)  # August, recorded on its 1st
+    assert all(
+        "recorded early" not in blocker for blocker in (await get_state(auth_client))["blockers"]
+    )
+
+
+async def test_a_legacy_month_recorded_early_is_not_blocked(auth_client, db):
+    account_id, _ = await seed(db, ())
+    july = date(2026, 7, 1)
+    await seed_month_recorded_on(db, account_id, july, date(2026, 6, 28))
+    await adopt_existing_history(db, TODAY)
+    await db.commit()
+    state = await get_state(auth_client, july)
+    assert state["state"] == "unreviewed_history"
+    assert all("recorded early" not in blocker for blocker in state["blockers"])
+
+
+async def test_a_blocked_month_in_another_year_names_its_year(auth_client, db, monkeypatch):
+    account_id, _ = await seed(db, ())
+    await seed_month_recorded_on(db, account_id, date(2026, 12, 1), date(2026, 11, 28))
+    monkeypatch.setattr(clock, "product_today", lambda: date(2027, 1, 5))
+    blockers = (await get_state(auth_client, date(2026, 12, 1)))["blockers"]
+    assert blockers == [
+        "Dec 1, 2026 balances were recorded early, on Nov 28, 2026 — save them again on or "
+        "after Dec 1, 2026 before closing December 2026."
+    ]
