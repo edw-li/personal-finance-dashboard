@@ -1,6 +1,7 @@
 // The dividend ledger as months (2026-09-24 table-scroll spec §4.1) — pure, no React. Production's
 // ledger held 378 entries over 14 months; grouped, the card is one line a month.
 import type { DividendOut } from '../../types/api'
+import { toCents } from '../../utils/cents'
 import { formatMonth } from '../../utils/format'
 
 /** One month of the ledger. */
@@ -12,7 +13,8 @@ export interface DividendMonth {
   label: string
   /** The month's entries in the order given (the API's pay_date desc, id desc). */
   rows: DividendOut[]
-  /** Σ round(amount × 100): integer cents, so ten $0.10 entries total exactly $1.00. */
+  /** Σ toCents(amount): integer cents through the shared reader the charts' sums also use
+   *  (utils/cents.ts), so ten $0.10 entries total exactly $1.00. */
   totalCents: number
 }
 
@@ -27,7 +29,7 @@ export function groupDividendsByMonth(dividends: readonly DividendOut[]): Divide
       months.set(key, month)
     }
     month.rows.push(d)
-    month.totalCents += Math.round(Number(d.amount) * 100)
+    month.totalCents += toCents(d.amount)
   }
   // 'YYYY-MM' sorts as text.
   return [...months.values()].sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0))
