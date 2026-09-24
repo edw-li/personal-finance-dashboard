@@ -113,20 +113,6 @@ function overrideDefinitions(inputs: TaxInputsOut): OverrideDefinition[] {
   return definitions
 }
 
-// D4: the PRIMARY person's stored w2_stock_rsus_sold — the payload orders columns primary
-// first, and a roster-less year spells the primary as person_id null.
-function vestW2Stored(inputs: TaxInputsOut): string | null {
-  const primary = inputs.people[0]?.id ?? null
-  for (const section of inputs.sections)
-    for (const item of section.items)
-      if (
-        item.key === 'w2_stock_rsus_sold' &&
-        (item.person_id === primary || item.person_id === null)
-      )
-        return item.value
-  return null
-}
-
 function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
   // The router already orders by year; reducing makes the page independent of that.
   return years.length === 0 ? undefined : years.reduce((a, b) => (b.year > a.year ? b : a))
@@ -978,7 +964,6 @@ export default function TaxesPage() {
                   <WithholdingPanel
                     key={`withholding-${d.summary.year}`}
                     year={d.summary.year}
-                    storedVestW2={vestW2Stored(d.inputs)}
                     inputsDirty={inputsDirty}
                     onVestApplied={onVestApplied}
                     goTo={goTo}

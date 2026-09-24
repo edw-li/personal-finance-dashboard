@@ -334,21 +334,17 @@ function ReconciliationStrip({
 
 export default function WithholdingPanel({
   year,
-  storedVestW2 = null,
   inputsDirty = false,
   onVestApplied,
   goTo,
   refreshKey = 0,
 }: {
   year: number
-  /** The PRIMARY person's stored w2_stock_rsus_sold (the 4dp echo), null when unset —
-   *  what the Apply chip's already-applied check compares against. */
-  storedVestW2?: string | null
   /** The inputs form below holds unsaved edits: Apply asks before the page remounts it. */
   inputsDirty?: boolean
   /** The page's reload door: adopts the PUT echo, remounts the inputs form on it and
-   *  refreshes the totals. The chip renders ONLY when the page provides this — an Apply
-   *  that could not complete that loop would leave a stale form under a fresh number. */
+   *  refreshes the totals. The RSU row's Apply renders ONLY when the page provides this — an
+   *  Apply that could not complete that loop would leave a stale form under a fresh number. */
   onVestApplied?: (echo: TaxInputsOut) => void
   /** The page's view switch (2026-09-13 polish spec §14): the partner note's "Open Inputs" and
    *  the missing-tables "Open Tax tables" doors. Absent → the sentences alone. */
@@ -438,18 +434,10 @@ export default function WithholdingPanel({
       </p>
     )
 
-  // D4 Apply: income_projected ALONE is the full-year vest base — the backend sums past
-  // vests INTO it (withholding_calc.py: income_projected = income_ytd + future), so the
-  // spec's "ytd + projected" spelling would double-count every past vest (ratified
-  // deviation, plan 2026-08-31-tier1-d). It is also exactly the figure the prose names.
-  const vestFigure = withholding === null ? null : withholding.vest.income_projected
-  // Numeric compare across quanta: the stored echo is 4dp ("48000.0000"), the estimate
-  // 2dp ("48000.00") — string equality would re-offer an Apply that changes nothing.
-  const vestApplied =
-    vestFigure !== null && storedVestW2 !== null && Number(storedVestW2) === Number(vestFigure)
-
-  // One write door for both chips: the fallback vest sentence's (no reconciliation) and the
-  // strip's RSU row (2026-09-23 spec §W4, where it moved) — the row carries its own figure.
+  // The card's one write (2026-09-23 spec §W4): the reconciliation strip's RSU row, offered by
+  // the server only while the typed figure differs from a complete projection — the row carries
+  // its own figure. With no reconciliation (a refused year, an older payload) there is no Apply
+  // at all: nothing has checked the vest figure against the stored input.
   const writeVestIncome = (value: string) => {
     if (onVestApplied === undefined || applying) return
     if (
@@ -474,11 +462,6 @@ export default function WithholdingPanel({
         setApplyError(err instanceof ApiError ? err.message : 'Failed to apply the vest income')
       })
       .finally(() => setApplying(false))
-  }
-
-  const applyVestIncome = () => {
-    if (vestFigure === null || vestApplied) return
-    writeVestIncome(vestFigure)
   }
 
   // Which partner story this card is telling. The SOURCE picks the words (it is the
@@ -853,32 +836,14 @@ export default function WithholdingPanel({
 
           {/* The two halves of the app that both know about vest income have to agree: this
               card counts the vests, while the engine's total above it knows only what the
-              inputs form BELOW was told — which is where the reader has to go to fix it. */}
+              inputs form was told — which is where the reader has to go to fix it. Only without
+              a reconciliation (a refused year, an older payload), and a sentence only: the one
+              Apply is the RSU row's, offered while the figures differ (§W4). */}
           {reconciliation === null && Number(withholding.vest.income_projected) > 0 && (
             <p className="hint">
               {`This year's vests imply ≈${formatCurrency(
                 withholding.vest.income_projected,
               )} of W-2 income at vest prices — make sure your W-2 inputs in the Inputs view include it.`}
-              {/* The chip closes the loop the sentence opens, but ONLY when the page can
-                  complete it (onVestApplied remounts the form under a fresh number). */}
-              {onVestApplied !== undefined && (
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={applying || vestApplied}
-                  aria-label="Apply vest income to W-2 inputs"
-                  title={
-                    vestApplied
-                      ? 'Stored W-2 vest input already equals this figure'
-                      : `Set W2: Stock/RSUs Sold to ${formatCurrency(
-                          withholding.vest.income_projected,
-                        )} for the primary person`
-                  }
-                  onClick={applyVestIncome}
-                >
-                  {applying ? 'Applying…' : 'Apply'}
-                </button>
-              )}
             </p>
           )}
 

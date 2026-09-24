@@ -1659,12 +1659,33 @@ describe('TaxesPage', () => {
   it('vest Apply writes through the page: PUT, remounted form, fresh totals', async () => {
     const thisYear = new Date().getFullYear()
     vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear)])
+    // The one Apply is the RSU row's, in the reconciliation strip (2026-09-23 spec §W4).
     vi.mocked(fetchWithholding).mockImplementation(async (year: number) => ({
       ...withholdingFor(year),
       vest: {
         ...withholdingFor(year).vest,
         income_ytd: '31500.00',
         income_projected: '48000.00',
+      },
+      reconciliation: {
+        rows: [
+          {
+            key: 'rsu', person_id: 1, person_name: 'Alex', label: 'RSU income', source: 'comp',
+            typed: '0.00', typed_keys: ['w2_stock_rsus_sold'], projected: '48000.00',
+            difference: '48000.00', tax_effect: '16000.00', flagged: true,
+            facts: {
+              typed_pay_periods: null, typed_checkpoint: null, projected_checks: null,
+              projected_from: null, capped_at: null, future_vest_income: '16500.00',
+              quote_tolerance: '1650.00', reference_price: '100.0000', reference_date: null,
+            },
+            apply: { key: 'w2_stock_rsus_sold', person_id: 1, value: '48000.00' },
+          },
+        ],
+        flagged_count: 1,
+        liability_if_matched: '21000.00',
+        balance_if_matched: '17000.00',
+        flag_above: '250.00',
+        notes: [],
       },
     }))
     // The PUT echo carries a moved salary too — the remount is what puts it on screen,

@@ -835,8 +835,9 @@ describe('WithholdingPanel', () => {
   // Derived from fixture() itself: balance_projected 18,870.20 over the 24 − 16 = 8 checks
   // still to come is 2,358.775, which formatCurrency rounds half-away-from-zero to 2,358.78.
   const REMEDY = 'Add $2,358.78 per remaining paycheck (W-4 line 4c) to close the gap.'
+  // The card's one Apply: the RSU row's, inside the reconciliation strip (2026-09-23 spec §W4).
   const applyChip = () =>
-    screen.getByRole('button', { name: 'Apply vest income to W-2 inputs' }) as HTMLButtonElement
+    within(strip()).getByRole('button', { name: 'Apply vest income to W-2 inputs' }) as HTMLButtonElement
   const inputsEcho = { year: 2026, filing_status: 'single' as const, people: [], sections: [] }
 
   it("computes the per-check remedy from the payload's own fields", async () => {
@@ -859,50 +860,44 @@ describe('WithholdingPanel', () => {
     expect(screen.queryByText(/per remaining paycheck/)).toBeNull()
   })
 
-  it("applies the FULL-year vest figure to the primary's W-2 input and reloads", async () => {
+  it('Apply on the RSU row hands the echo to the page and reloads the card', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
     const onApplied = vi.fn()
-    render(
-      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={false} onVestApplied={onApplied} />,
-    )
-    await screen.findByText('$123,456.78')
+    render(<WithholdingPanel year={2026} inputsDirty={false} onVestApplied={onApplied} />)
+    await screen.findByText('Your inputs vs your records')
     fireEvent.click(applyChip())
 
-    // income_projected ALONE: the backend already sums past vests into it
-    // (withholding_calc income_projected = income_ytd + future) — ytd + projected would
-    // double-count every past vest. The values shorthand IS the primary-person write.
-    await waitFor(() =>
-      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2026, {
-        values: { w2_stock_rsus_sold: '48000.00' },
-      }),
-    )
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
     expect(onApplied).toHaveBeenCalledWith(inputsEcho)
     // The liability this card compares against just moved with the input it wrote.
     await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
   })
 
-  it('disables Apply with a title when the stored value already equals the figure', async () => {
-    // 4dp stored echo vs the estimate's 2dp: the comparison is numeric, not string.
-    render(
-      <WithholdingPanel
-        year={2026}
-        storedVestW2={'48000.0000'}
-        inputsDirty={false}
-        onVestApplied={vi.fn()}
-      />,
+  it('offers no Apply without a reconciliation — the vest sentence stands alone', async () => {
+    // A year the engine refuses (Change… → MFS with no MFS tables) or an older payload: nothing
+    // has checked the vest figure against the stored input or its completeness, so there is
+    // nothing to offer — the one Apply lives on the RSU row, and only while the figures differ
+    // (2026-09-23 spec §W4). The sentence still points at the Inputs view.
+    render(<WithholdingPanel year={2026} inputsDirty={false} onVestApplied={vi.fn()} />)
+    expect(await screen.findByText(/^This year's vests imply ≈\$48,000\.00 of W-2 income/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply vest income to W-2 inputs' })).toBeNull()
+    cleanup()
+
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      married({ brackets_missing_for_status: ['federal'], liability_total: null, balance_projected: null }),
     )
-    await screen.findByText('$123,456.78')
-    expect(applyChip().disabled).toBe(true)
-    expect(applyChip().title).toBe('Stored W-2 vest input already equals this figure')
+    render(<WithholdingPanel year={2026} inputsDirty={false} onVestApplied={vi.fn()} />)
+    await screen.findByText(/bracket table for this year’s filing status/)
+    expect(screen.queryByRole('button', { name: 'Apply vest income to W-2 inputs' })).toBeNull()
   })
 
   it('asks before clobbering unsaved input edits below, and respects a no', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    render(
-      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={true} onVestApplied={vi.fn()} />,
-    )
-    await screen.findByText('$123,456.78')
+    render(<WithholdingPanel year={2026} inputsDirty={true} onVestApplied={vi.fn()} />)
+    await screen.findByText('Your inputs vs your records')
     fireEvent.click(applyChip())
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
@@ -914,11 +909,10 @@ describe('WithholdingPanel', () => {
   })
 
   it('lands an Apply failure on its own error line, figures kept', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     vi.mocked(putTaxInputs).mockRejectedValue(new ApiError('inputs unavailable', 503))
-    render(
-      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={false} onVestApplied={vi.fn()} />,
-    )
-    await screen.findByText('$123,456.78')
+    render(<WithholdingPanel year={2026} inputsDirty={false} onVestApplied={vi.fn()} />)
+    await screen.findByText('Your inputs vs your records')
     fireEvent.click(applyChip())
 
     expect(await screen.findByText('inputs unavailable')).toBeTruthy()
@@ -931,7 +925,7 @@ describe('WithholdingPanel', () => {
     vi.mocked(fetchWithholding).mockResolvedValue(
       fixture({ warnings: ['partner checks before their first profile’s effective date use that profile'] }),
     )
-    // onVestApplied given, so the Apply chip renders — it is one of the lines that must stay OUT.
+    // onVestApplied given — and still no Apply: without a reconciliation there is none (§W4).
     render(<WithholdingPanel year={2026} onVestApplied={vi.fn()} />)
     await screen.findByText('$123,456.78')
 
@@ -947,10 +941,11 @@ describe('WithholdingPanel', () => {
         screen.getByText('Partner checks before their first profile’s effective date use that profile.'),
       ),
     ).toBe(true)
-    // The status line, the remedy and the vest Apply stay outside it.
+    // The status line, the remedy and the vest sentence stay outside it.
     expect(details.contains(screen.getByText(/withheld so far/))).toBe(false)
     expect(details.contains(screen.getByText(/per remaining paycheck/))).toBe(false)
-    expect(details.contains(screen.getByRole('button', { name: 'Apply vest income to W-2 inputs' }))).toBe(false)
+    expect(details.contains(screen.getByText(/vests imply/))).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Apply vest income to W-2 inputs' })).toBeNull()
   })
 
   it('calls the page’s goTo from the Inputs and Tax tables doors', async () => {
