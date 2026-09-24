@@ -287,3 +287,24 @@ async def test_no_non_zero_amount_and_no_confirmed_zero_is_missing(db, monkeypat
     await db.commit()
     on(monkeypatch, date(2026, 10, 5))
     assert await state(db) == "missing"
+
+
+async def test_an_undone_confirm_leaves_it_partial(auth_client, db, september, monkeypatch):
+    """M1's Confirm is change-logged like any PUT: its Undo marks the batch undone, and clause
+    (d) stops counting it — September reads partial again."""
+    log(db, at=pt(2026, 9, 5), month=SEP)
+    await db.commit()
+    on(monkeypatch, date(2026, 10, 2))
+    current = (await auth_client.get(f"/api/v1/month-review/months/{SEP}")).json()
+    confirmed = await auth_client.put(
+        f"/api/v1/month-review/months/{SEP}",
+        json={
+            "expected_revision": current["input_revision"],
+            "reviewed": {"balances": False, "spending": True, "take_home": False},
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert await state(db) == "entered"
+    undone = await auth_client.post(f"/api/v1/activity/batches/{confirmed.json()['batch_id']}/undo")
+    assert undone.status_code == 200, undone.text
+    assert await state(db) == "partial"
