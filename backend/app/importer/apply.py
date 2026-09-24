@@ -474,7 +474,7 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
                 report.warnings.append(
                     f"Net Worth: {snap.month:%b %Y} is dated {snap.recorded_on.isoformat()}, "
                     "before its month — it imports as provisional "
-                    f"{day_label(snap.month, today)} balances."
+                    f"{day_label(snap.month)} balances."
                 )
         snapshots_by_month[snap.month] = row
     await db.flush()

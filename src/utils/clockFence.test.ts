@@ -95,7 +95,13 @@ function sources(dir: string): string[] {
 }
 
 const rel = (file: string) => path.relative(SRC, file).split(path.sep).join('/')
-const readsIn = (file: string) => clockReads(file, readFileSync(path.join(SRC, file), 'utf8'))
+const readsIn = (file: string) => {
+  const text = readFileSync(path.join(SRC, file), 'utf8')
+  // Every read the matcher counts names `Date` or `todayIso`, so a file with neither is skipped
+  // unparsed — identical results, and about three quarters of src/ never reaches the parser (the
+  // full scan stays well inside vitest's timeout on a box running several lanes at once).
+  return /\bDate\b|todayIso/.test(text) ? clockReads(file, text) : []
+}
 
 describe('the clock fence (2026-09-23 spec §K1)', () => {
   it('no source outside the owners, the counted exceptions and the allowlist reads the browser clock', () => {
@@ -105,7 +111,7 @@ describe('the clock fence (2026-09-23 spec §K1)', () => {
       .filter((file) => !exempt.has(file))
       .flatMap((file) => readsIn(file).map((what) => `${file}: ${what}`))
     expect(offenders).toEqual([])
-  })
+  }, 30_000)
 
   it('each counted file holds exactly its counted reads — a new one cannot hide, a fixed one must be struck off', () => {
     const counted = { ...EXCEPTIONS, ...ALLOWLIST }
