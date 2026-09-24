@@ -297,7 +297,9 @@ function ReconciliationStrip({
                                 className="chip"
                                 disabled={applying}
                                 aria-label="Apply vest income to W-2 inputs"
-                                title={`Set W2: Stock/RSUs Sold to ${formatCurrency(row.apply.value)} for the primary person`}
+                                // The row's own label and person — the server's target,
+                                // never a hard-coded input or "the primary".
+                                title={`Set ${row.label} to ${formatCurrency(row.apply.value)} for ${whose}`}
                                 onClick={() => onApply(row)}
                               >
                                 {applying ? 'Applying…' : 'Apply'}

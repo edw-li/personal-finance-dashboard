@@ -1180,6 +1180,8 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
     await screen.findByText('Your inputs vs your records')
     const chips = within(strip()).getAllByRole('button', { name: /^Apply/ })
     expect(chips).toHaveLength(1)
+    // The title names the row and whose it is — never a hard-coded input or "the primary".
+    expect(chips[0].title).toBe('Set RSU income to $171,235.24 for Edward')
     // The vest sentence moved INTO the row: it is not repeated under the card.
     expect(screen.queryByText(/vests imply/)).toBeNull()
     fireEvent.click(chips[0])
@@ -1192,6 +1194,21 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
       }),
     )
     expect(onApplied).toHaveBeenCalledTimes(1)
+  })
+
+  it('titles the Apply for "you" when the row names nobody (a roster-less book)', async () => {
+    const payload = reconciled()
+    const rows = payload.reconciliation!.rows.map((row) =>
+      row.key === 'rsu' ? { ...row, person_id: null, person_name: null } : row,
+    )
+    vi.mocked(fetchWithholding).mockResolvedValue({
+      ...payload,
+      reconciliation: { ...payload.reconciliation!, rows },
+    })
+    render(<WithholdingPanel year={2026} onVestApplied={vi.fn()} />)
+    await screen.findByText('Your inputs vs your records')
+    const chip = within(strip()).getByRole('button', { name: 'Apply vest income to W-2 inputs' })
+    expect(chip.title).toBe('Set RSU income to $171,235.24 for you')
   })
 
   it('has no Apply once the RSU row matches', async () => {
