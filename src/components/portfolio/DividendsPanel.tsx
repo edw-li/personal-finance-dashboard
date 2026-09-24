@@ -156,9 +156,13 @@ export default function DividendsPanel({
     if (top < bandTop - 1) box.scrollTop -= bandTop - top
   }
   // A saved entry to bring into view once the refreshed ledger renders (spec §4.5): its id and the
-  // ledger it was saved against. The commit that opens its month still holds that ledger and waits;
-  // the refetch's commit (a new ledger) consumes it, found or not, so it can never fire on some later
-  // render. A ref, not state: it is never drawn.
+  // ledger it was saved against. The next ledger the page renders after the save consumes it — the
+  // row found, it is revealed; not found, it is dropped. Commits that still hold the save-time ledger
+  // (the one that opens its month among them) leave it waiting. A delete or a new edit drops it
+  // first (remove, startEdit): the reader has moved on, and the reveal would ride THAT refetch to a
+  // row they have left. If the refetch fails, or comes back identical — PortfolioPage then keeps the
+  // ledger it has, the same array — it waits for the next ledger change. A ref, not state: it is
+  // never drawn.
   const boxRef = useRef<HTMLDivElement>(null)
   const pendingReveal = useRef<{ id: number; ledger: DividendOut[] } | null>(null)
   useEffect(() => {
@@ -174,6 +178,8 @@ export default function DividendsPanel({
   }, [dividends])
 
   const startEdit = (dividend: DividendOut) => {
+    // A new edit moves the reader on: an earlier save's reveal is moot (see pendingReveal).
+    pendingReveal.current = null
     setEditingId(dividend.id)
     // The form now describes ONE stored row, not a run of new ones — the create session,
     // and the cue that narrates it, are over.
@@ -242,6 +248,8 @@ export default function DividendsPanel({
   }
 
   const remove = (dividend: DividendOut) => {
+    // A delete moves the reader on: an earlier save's reveal is moot (see pendingReveal).
+    pendingReveal.current = null
     const ticker = tickers.get(dividend.security_id) ?? '?'
     // An UNDONE auto row would come back as 'manual', and the next refresh would re-add
     // its auto twin on top — the same payment counted twice. The ingest already self-heals
@@ -478,7 +486,17 @@ export default function DividendsPanel({
                           type="button"
                           className="dividend-month-toggle"
                           aria-expanded={isOpen}
-                          onFocus={(event) => uncoverMonth(event.currentTarget.closest('tbody'))}
+                          onFocus={(event) => {
+                            // Only a focus that moves here FROM another element uncovers. A window or
+                            // tab switch back re-fires focus on the element that last held it, with
+                            // no relatedTarget — a line clicked, the box scrolled 900px on through its
+                            // month, another tab and back, and the box jumped to the month's start
+                            // (Edge, 2026-09-24). Tab and Shift+Tab always arrive from an element, so
+                            // the keyboard keeps the uncover; a click uncovers through the line's own
+                            // handler above.
+                            if (event.relatedTarget === null) return
+                            uncoverMonth(event.currentTarget.closest('tbody'))
+                          }}
                         >
                           <ChevronRight size={14} aria-hidden="true" className="dividend-month-chevron" />
                           <span className="dividend-month-label">{month.label}</span>{' '}

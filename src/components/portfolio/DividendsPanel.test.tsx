@@ -543,6 +543,9 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     const march = monthButton('Mar 2026 1 entry')
     march.closest('tbody')!.getBoundingClientRect = () => rectAt(60, 44)
     box.scrollTop = 900
+    // Focus arrives FROM another element, as Tab and Shift+Tab bring it: jsdom hands the focus event
+    // the element it left as its relatedTarget.
+    act(() => screen.getByRole('button', { name: 'Expand all' }).focus())
     act(() => march.focus())
     expect(box.scrollTop).toBe(830) // the band starts at 100 + 30 = 130; the group began at 60
     // …and a click on the line does the same before it toggles.
@@ -560,6 +563,26 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     const march = monthButton('Mar 2026 1 entry')
     march.closest('tbody')!.getBoundingClientRect = () => rectAt(250, 44)
     box.scrollTop = 900
+    // From another element, so the geometry is what decides (a focus with no relatedTarget never
+    // uncovers — the next test).
+    act(() => screen.getByRole('button', { name: 'Expand all' }).focus())
+    act(() => march.focus())
+    expect(box.scrollTop).toBe(900)
+  })
+
+  it('leaves the box where the reader scrolled it when a window switch hands focus back to a line (Edge, 2026-09-24)', () => {
+    renderPanel(LEDGER)
+    const box = screen.getByRole('region', { name: 'Dividends by month' })
+    box.style.setProperty('--table-head-h', '30px')
+    box.getBoundingClientRect = () => rectAt(100, 400)
+    const march = monthButton('Mar 2026 1 entry')
+    march.closest('tbody')!.getBoundingClientRect = () => rectAt(60, 44)
+    // The line took focus (the reader clicked it) and they scrolled on through the ledger…
+    act(() => march.focus())
+    box.scrollTop = 900
+    // …then another window took focus and gave it back. The browser re-fires focus on the line with
+    // no relatedTarget; jsdom's blur() then focus() is that event.
+    act(() => march.blur())
     act(() => march.focus())
     expect(box.scrollTop).toBe(900)
   })
@@ -611,5 +634,77 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
       <DividendsPanel securities={securities} dividends={[...LEDGER]} annualIncome="432.10" onChanged={onChanged} />,
     )
     expect(revealInBox).toHaveBeenCalledTimes(1)
+  })
+
+  // The guard on the save-time ledger: the page switched owner and back while the save was in flight,
+  // and its snapshot cache handed this owner's ledger back — the very array the save was made against
+  // — before the refetch landed. That ledger cannot hold the new row, so the reveal waits for the
+  // refetch instead of being spent on it.
+  it('keeps a pending reveal waiting when the save-time ledger comes back before the refetch', async () => {
+    const saved = dividend({ id: 15, pay_date: '2025-12-20', amount: '4.10' })
+    let resolve!: (row: DividendOut) => void
+    vi.mocked(createDividend).mockReturnValueOnce(new Promise<DividendOut>((r) => { resolve = r }))
+    const onChanged = vi.fn()
+    const view = renderPanel(LEDGER, '432.10', onChanged)
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2025-12-20' } })
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    // Mid-flight, the page shows another owner's ledger…
+    view.rerender(<DividendsPanel securities={securities} dividends={[MARCH]} annualIncome="432.10" onChanged={onChanged} />)
+    await act(async () => resolve(saved))
+    expect(onChanged).toHaveBeenCalled()
+    // …then this owner's again, from its cache: the save-time array.
+    view.rerender(<DividendsPanel securities={securities} dividends={LEDGER} annualIncome="432.10" onChanged={onChanged} />)
+    expect(revealInBox).not.toHaveBeenCalled()
+    // The refetch lands, and the reveal was kept for it.
+    view.rerender(
+      <DividendsPanel securities={securities} dividends={[JUNE_A, JUNE_B, MARCH, saved, DECEMBER]} annualIncome="432.10" onChanged={onChanged} />,
+    )
+    expect(revealInBox).toHaveBeenCalledTimes(1)
+  })
+
+  // A delete or a new edit moves the reader on: an earlier save's reveal must not ride THAT action's
+  // refetch to a row they have left.
+  it('drops a pending reveal when the reader deletes another entry before the refetch lands', async () => {
+    const saved = dividend({ id: 15, pay_date: '2025-12-20', amount: '4.10' })
+    vi.mocked(createDividend).mockResolvedValueOnce(saved)
+    const onChanged = vi.fn()
+    const view = renderPanel(LEDGER, '432.10', onChanged)
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2025-12-20' } })
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    const june = document.querySelector<HTMLElement>('tr[data-dividend-id="11"]')!
+    const deleteButton = within(june).getByRole('button', { name: 'Delete this dividend' }) as HTMLButtonElement
+    await waitFor(() => expect(deleteButton.disabled).toBe(false)) // the save's busy gate lifts
+    fireEvent.click(deleteButton)
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
+    // One refetch brings both: the saved row in, the deleted one out. The box stays put.
+    view.rerender(
+      <DividendsPanel securities={securities} dividends={[JUNE_B, MARCH, saved, DECEMBER]} annualIncome="432.10" onChanged={onChanged} />,
+    )
+    expect(revealInBox).not.toHaveBeenCalled()
+  })
+
+  it('drops a pending reveal when the reader starts another edit before the refetch lands', async () => {
+    const saved = dividend({ id: 15, pay_date: '2025-12-20', amount: '4.10' })
+    vi.mocked(createDividend).mockResolvedValueOnce(saved)
+    const onChanged = vi.fn()
+    const view = renderPanel(LEDGER, '432.10', onChanged)
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2025-12-20' } })
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    const june = document.querySelector<HTMLElement>('tr[data-dividend-id="11"]')!
+    const editButton = within(june).getByRole('button', { name: 'Edit this dividend' }) as HTMLButtonElement
+    await waitFor(() => expect(editButton.disabled).toBe(false))
+    fireEvent.click(editButton)
+    view.rerender(
+      <DividendsPanel securities={securities} dividends={[JUNE_A, JUNE_B, MARCH, saved, DECEMBER]} annualIncome="432.10" onChanged={onChanged} />,
+    )
+    expect(revealInBox).not.toHaveBeenCalled()
   })
 })
