@@ -985,10 +985,13 @@ function MonthlyUpdateWizard() {
   // api client joins the two GETs.
   const refreshAfterSave = async (loaded: LoadedMonth, sentBalances: boolean): Promise<CoverageOut | null> => {
     // New balances also move the month's story (spec §M5): the next 1st's delta compares with them.
+    // Saving this 1st never records the next one, so a next 1st /coverage lacks stays unasked-for,
+    // as at load — its 404 would be a console error in the browser.
+    const askNext = sentBalances && (coverage === null || coverage.balances.includes(addMonths(loaded.month, 1)))
     const [fresh, thisMonth, story] = await Promise.all([
       fetchCoverage().catch((): CoverageOut | null => null),
       sentBalances ? fetchMonthBalances(loaded.month).catch((): MonthBalances | null => null) : null,
-      sentBalances ? fetchNextSnapshot(loaded.month) : null,
+      askNext ? fetchNextSnapshot(loaded.month) : null,
     ])
     if (loadedMonth.current === loaded) {
       if (fresh !== null) setCoverage(fresh)

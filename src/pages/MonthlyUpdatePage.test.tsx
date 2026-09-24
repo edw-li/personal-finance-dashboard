@@ -3255,6 +3255,22 @@ describe("the month's story (2026-09-23 spec §M5)", () => {
     fireEvent.click(await screen.findByRole('button', { name: /^3\s*review$/i }))
     expect(await screen.findByText("September's change: ▲ $126,000.00 (Sep 1 → Oct 1)")).toBeTruthy()
   })
+
+  // Saving Sep 1 balances cannot create Oct 1's, so the refresh after the save skips the story's
+  // next 1st exactly as the load did: a 404 there is a console error in the browser (§V4 walk).
+  it('a balances save asks nothing of the server for a next 1st that is not recorded', async () => {
+    septemberStory('missing')
+    // A batch, so the toast — raised once the refresh has landed — marks the refresh as done.
+    vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
+      month: '2026-09-01', snapshot_created: false, created: 0, updated: 1, unchanged: 0, batch_id: 'b-sep',
+    })
+    renderWizardAt('/update?month=2026-09-01&step=balances')
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1520.00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Sep 1 balances' }))
+    expect(await screen.findByText(/^Saved Sep 1 balances/)).toBeTruthy()
+    expect(netWorthApi.fetchSummary).not.toHaveBeenCalled()
+    expect(vi.mocked(netWorthApi.fetchMonthBalances).mock.calls.map(([m]) => m)).not.toContain('2026-10-01')
+  })
 })
 
 describe('close gates (2026-09-23 spec §M1, §M5)', () => {
