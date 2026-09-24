@@ -201,6 +201,24 @@ describe('PlanAssumptionsCard', () => {
     expect(JSON.parse(JSON.stringify(body)).espp_ticker).toBeNull()
   })
 
+  it('leaves a stored year alone when its box is untouched — even one the calendar has caught up with', async () => {
+    // spec-review M8(d): a 2026 stored last year is no longer "next year or later" in 2026, and a
+    // card that re-checked and re-sent it would refuse to save the withdrawal rate beside it.
+    vi.mocked(fetchAppSettings).mockResolvedValue({ ...SETTINGS, plan_until_year: 2026 })
+    mount()
+    await screen.findByLabelText('Plan until (year)')
+
+    type(box('Withdrawal rate (% / year)'), '3.5')
+    fireEvent.click(save())
+
+    await waitFor(() => expect(putAppSettings).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(putAppSettings).mock.calls[0][0]
+    // Absent, not null: under the partial PUT an absent key keeps the stored year.
+    expect(Object.keys(body)).not.toContain('plan_until_year')
+    expect(body.swr_pct).toBe('0.035')
+    expect(await screen.findByText('Saved.')).toBeTruthy()
+  })
+
   it('sends plan_until_year: null EXPLICITLY when the box is emptied — the clear', async () => {
     mount()
     await screen.findByLabelText('Plan until (year)')

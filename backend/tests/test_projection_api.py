@@ -786,6 +786,15 @@ async def test_both_retiring_withdraws_annual_spend_from_the_later_month(auth_cl
         "monthly_withdrawal": "5000.00",
         "take_home_monthly": None,
     }
+    # ...and the simulated median falls with the line (spec §R2 acceptance; spec-review M4): the
+    # same retirements under the default fan against the same household still working.
+    fan = "annual_return=0&inflation=0&contribution_growth=0&volatility=0.15"
+    retire = f"&retire={alex.id}:{_month_param(early)}&retire={bo.id}:{_month_param(late)}"
+    working = (await auth_client.get(f"/api/v1/projection?{fan}")).json()["bands"]["p50"]
+    retiring = (await auth_client.get(f"/api/v1/projection?{fan}{retire}")).json()["bands"]["p50"]
+    assert retiring[:6] == working[:6]  # nothing changes before the first retirement (month 6)
+    for index in (18, 30, len(working) - 1):
+        assert Decimal(retiring[index]) < Decimal(working[index]), index
 
 
 async def test_retiring_in_the_same_month_is_one_boundary_and_the_withdrawal(auth_client, db):
@@ -1566,12 +1575,19 @@ async def test_a_stored_year_past_the_reach_is_ignored_with_its_warning(auth_cli
     ) in body["warnings"]
 
 
-async def test_a_later_plan_until_lengthens_the_horizon_to_reach_its_december(auth_client, db):
+async def test_a_later_plan_until_lengthens_the_horizon_to_reach_its_december(
+    auth_client, db, monkeypatch
+):
+    # Pinned to Sep 23 (spec-review M4): from a September start, December 2075 is 591 months away —
+    # NOT a multiple of 12 — so the ceil is always exercised, whatever month the suite runs in.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
     this_month = await _seed_book(db)
     year = this_month.year + 49
     body = (await auth_client.get(f"/api/v1/projection?volatility=0&plan_until={year}")).json()
     to_december = december_index(this_month, year)
+    assert to_december == 591 and to_december % 12 != 0
     expected = -(-to_december // 12)  # ceil: months not a multiple of 12 round UP
+    assert expected == 50
     assert body["years"] == expected
     assert len(body["months"]) == expected * 12 + 1
     assert date.fromisoformat(body["months"][-1]) >= date(year, 12, 1)

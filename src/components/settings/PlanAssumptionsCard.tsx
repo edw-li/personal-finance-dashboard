@@ -144,11 +144,14 @@ export default function PlanAssumptionsCard() {
       return
     }
     // Blank clears the stored year (the Projection falls back to its horizon's last December);
-    // otherwise four plain digits inside the server's bounds, said in the same words.
+    // otherwise four plain digits inside the server's bounds, said in the same words. Only a year
+    // the reader CHANGED is checked and sent (spec-review M8(d)): one stored last year that the
+    // calendar has since caught up with must not block saving the assumptions beside it.
     const planText = boxes.planUntil.trim()
+    const planChanged = planText !== (settings?.plan_until_year == null ? '' : String(settings.plan_until_year))
     const { first, last } = planUntilBounds(currentMonthIso())
     const planUntil = planText === '' ? null : Number(planText)
-    if (planUntil !== null && (!/^\d{4}$/.test(planText) || planUntil < first || planUntil > last)) {
+    if (planChanged && planUntil !== null && (!/^\d{4}$/.test(planText) || planUntil < first || planUntil > last)) {
       setFormError(`Must be a year from ${first} through ${last}.`)
       return
     }
@@ -164,13 +167,13 @@ export default function PlanAssumptionsCard() {
     setSaving(true)
     setFormError(null)
     setSavedNote(false)
-    // ONLY this card's four fields (spec §3.5; plan_until_year since the 2026-09-23 spec §R11).
-    // The cron and the reminder day belong to other cards; sending them — even as nulls —
-    // would revert or clear what those cards saved. A blank plan-until travels as an explicit
-    // null for the ticker's reason: an absent key would mean "keep".
+    // ONLY this card's fields (spec §3.5; plan_until_year since the 2026-09-23 spec §R11). The
+    // cron and the reminder day belong to other cards; sending them — even as nulls — would
+    // revert or clear what those cards saved. The plan-until year goes only when it changed —
+    // absent means "keep" — and a cleared one as an explicit null, for the ticker's reason.
     putAppSettings({
       swr_pct: shiftPoint(boxes.swr, -2),
-      plan_until_year: planUntil,
+      ...(planChanged ? { plan_until_year: planUntil } : {}),
       espp_ticker: ticker,
       espp_discount_pct: shiftPoint(boxes.discount, -2),
     })
