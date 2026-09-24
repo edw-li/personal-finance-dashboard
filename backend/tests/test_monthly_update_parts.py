@@ -3,8 +3,9 @@ EXACT bodies — a request id always, `reviewed` always, a leg only for the part
 about — against the real routes and K3's evidence. A spending save never writes or copies a
 snapshot; a take-home save never completes a partly entered month's spending, not even with the
 spending box ticked; the Confirm (a PUT with no leg) does, and its Undo takes it back; a balances
-save of early balances on or after their 1st makes them final. A server change that breaks what
-the wizard sends fails here."""
+save of early balances on or after their 1st makes them final; and a month's $0 consent belongs to
+its spending part — a balances save, a balances Confirm or a take-home change keeps it, a changed
+amount clears it. A server change that breaks what the wizard sends fails here."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -21,12 +22,12 @@ from app.models import (
     NetWorthSnapshot,
     SpendingCategory,
 )
-from app.models.month_review import MonthReviewAdoption
+from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock
 from app.services.coverage import load_coverage
 
 PT = ZoneInfo("America/Los_Angeles")
-SEP, OCT = date(2026, 9, 1), date(2026, 10, 1)
+AUG, SEP, OCT = date(2026, 8, 1), date(2026, 9, 1), date(2026, 10, 1)
 MR = "/api/v1/month-review/months"
 UNTICKED = {"balances": False, "spending": False, "take_home": False}
 
@@ -248,3 +249,126 @@ async def test_a_balances_part_save_of_early_balances_on_their_1st_makes_them_fi
     await undo(auth_client, confirmed.json()["batch_id"])
     month = (await auth_client.get(f"/api/v1/net-worth/months/{OCT}")).json()
     assert (month["recorded_on"], month["provisional"]) == ("2026-09-22", True)
+
+
+# --- The $0 consent belongs to the spending part (2026-09-23 spec §M1: saving one part never
+# touches the other). A month that really spent nothing is saved with the "Confirm remaining
+# categories as $0" box ticked; the box is not re-sent on later saves (it resets on every load), so
+# a balances save, a balances Confirm or a take-home change must leave the consent standing. A save
+# that changes a spending amount without re-sending it clears it.
+
+ZERO_LINE = "Confirm that the all-zero spending entries are intentional."
+
+
+async def august_saved_as_zero(auth_client, db, monkeypatch, *, recorded_on: date = AUG):
+    """August on Sep 5: Aug 1 balances, and the wizard's spending save with the $0 box ticked —
+    the one category at $0.00 — beside a take-home."""
+    account = Account(name="Cash", slug="cash", group="cash", sort_order=1)
+    food = SpendingCategory(name="Food", slug="food", sort_order=1)
+    db.add_all([account, food])
+    await db.flush()
+    snapshot = NetWorthSnapshot(month=AUG, recorded_on=recorded_on)
+    db.add(snapshot)
+    await db.flush()
+    db.add(
+        AccountBalance(snapshot_id=snapshot.id, account_id=account.id, balance=Decimal("100.00"))
+    )
+    await db.commit()
+    on(monkeypatch, date(2026, 9, 5))
+    saved = await auth_client.put(
+        f"{MR}/{AUG}",
+        json=wizard(
+            await revision(auth_client, AUG),
+            spending={
+                "amounts": [{"category_id": food.id, "amount": "0.00"}],
+                "net_pay": "5000.00",
+                "confirm_zero": True,
+            },
+        ),
+    )
+    assert saved.status_code == 200, saved.text
+    assert await zero_confirmed(auth_client, db)
+    return account, food
+
+
+async def zero_confirmed(auth_client, db) -> bool:
+    """August's $0 consent as every reader sees it: the stored flag, the review's blockers and
+    K3's spending state (a lapsed consent reads the month's spending as missing)."""
+    review = await db.get(MonthReview, AUG, populate_existing=True)
+    blockers = (await auth_client.get(f"{MR}/{AUG}")).json()["blockers"]
+    state = (await load_coverage(db)).status.spending_state(AUG)
+    held = bool(review and review.zero_spending_confirmed)
+    assert held == (ZERO_LINE not in blockers) == (state == "entered"), (held, blockers, state)
+    return held
+
+
+async def test_a_balances_save_keeps_the_months_zero_spending_consent(auth_client, db, monkeypatch):
+    account, _ = await august_saved_as_zero(auth_client, db, monkeypatch)
+    saved = await auth_client.put(
+        f"{MR}/{AUG}",
+        json=wizard(
+            await revision(auth_client, AUG),
+            balances={"notes": None, "balances": [{"account_id": account.id, "balance": "150.00"}]},
+        ),
+    )
+    assert saved.status_code == 200, saved.text
+    assert await zero_confirmed(auth_client, db)
+
+
+async def test_confirming_early_balances_keeps_the_zero_spending_consent(
+    auth_client, db, monkeypatch
+):
+    """The Confirm sends the balances unchanged; the server restamps the date (K4), which moves
+    the month's digest — and must not move the consent."""
+    account, _ = await august_saved_as_zero(
+        auth_client, db, monkeypatch, recorded_on=date(2026, 7, 25)
+    )
+    confirmed = await auth_client.put(
+        f"{MR}/{AUG}",
+        json=wizard(
+            await revision(auth_client, AUG),
+            balances={"notes": None, "balances": [{"account_id": account.id, "balance": "100.00"}]},
+        ),
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    month = (await auth_client.get(f"/api/v1/net-worth/months/{AUG}")).json()
+    assert month["recorded_on"] == "2026-09-05"
+    assert await zero_confirmed(auth_client, db)
+
+
+async def test_a_take_home_change_keeps_the_zero_spending_consent(auth_client, db, monkeypatch):
+    """The wizard's spending leg re-lists the stored $0.00 row unchanged beside the new take-home,
+    and does not re-send the box."""
+    _, food = await august_saved_as_zero(auth_client, db, monkeypatch)
+    saved = await auth_client.put(
+        f"{MR}/{AUG}",
+        json=wizard(
+            await revision(auth_client, AUG),
+            spending={
+                "amounts": [{"category_id": food.id, "amount": "0.00"}],
+                "net_pay": "5100.00",
+            },
+        ),
+    )
+    assert saved.status_code == 200, saved.text
+    assert await zero_confirmed(auth_client, db)
+
+
+async def test_changing_a_spending_amount_clears_the_zero_spending_consent(
+    auth_client, db, monkeypatch
+):
+    _, food = await august_saved_as_zero(auth_client, db, monkeypatch)
+    for amount in ("12.00", "0.00"):
+        saved = await auth_client.put(
+            f"{MR}/{AUG}",
+            json=wizard(
+                await revision(auth_client, AUG),
+                spending={
+                    "amounts": [{"category_id": food.id, "amount": amount}],
+                    "net_pay": "5000.00",
+                },
+            ),
+        )
+        assert saved.status_code == 200, saved.text
+    # Back at $0.00 without the box: the zeros are no longer confirmed.
+    assert not await zero_confirmed(auth_client, db)
