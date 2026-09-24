@@ -46,6 +46,18 @@
   .projection-outcomes { position: static; }
   .projection-chart-area { top: calc(var(--sticky-inset, 0px) + 8px); }
 }
+/* …and in that band the five tiles are a balanced 3 + 2, not 4 + 1 (batch 2 final verification D5):
+   a 1280 window gives the page ~990px, where the shared auto-fit takes four 200px tracks and left
+   "Money lasts" alone on a second row. Five across does not fit there — "Investable balance ⓘ"
+   runs past a 185px tile and every value shrinks to ~15px. Six tracks: each tile spans two, the
+   last two span three, so both rows fill the width. From 660px, where a two-track tile still holds
+   that label; below it the shared auto-fit takes over. The compound selector outranks panels.css's
+   .kpi-row-5 wherever either is written. */
+@container page (min-width: 660px) and (max-width: 999px) {
+  .projection-outcomes.kpi-row-5 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .projection-outcomes > * { grid-column: span 2; }
+  .projection-outcomes > :nth-child(n + 4) { grid-column: span 3; }
+}
 .projection-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
 .projection-assumptions { min-width: 0; }
 .projection-assumptions .sandbox-card { padding: 16px; }
