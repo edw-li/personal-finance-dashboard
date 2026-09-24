@@ -1,8 +1,22 @@
 # Long tables: capped scroll boxes, and dividends grouped by month (2026-09-24) — design record
 
-**Status:** approved by the user 2026-09-24 ("Looks right"). Implementation on branch
-`feat/table-scroll` (worktree `.worktrees/table-scroll`, cut from main @f50abe8d). Stop at LOCAL main —
-no push, no deploy (the user pushes and deploys). Frontend only: no backend change, no migration.
+**Status:** implemented and reviewed 2026-09-24 on `feat/table-scroll` (worktree `.worktrees/table-scroll`,
+cut from main @f50abe8d; main — the correctness batch's lanes K, W, R, M — merged in at b925135f with no
+overlapping files). Twelve plan tasks, each with a spec review and a code-quality review; the reviews, most of
+them measuring in real Edge on the production copy, changed the design in the places §2–§4 now record. Stop at
+LOCAL main — no push, no deploy (the user pushes and deploys). Frontend only: no backend change, no migration.
+Gates on the merged branch: `tsc -p` (app + node) clean; eslint 0 errors / 26 warnings (= the baseline);
+vitest 291 files / 4,298 tests; `vite build` clean apart from the one pre-existing chunk advisory (763.29 kB,
+byte-identical at the base commit). Real browser on the production copy with classic 15px scrollbars
+(`tools/probes/table-scroll-v`): `TABLE SCROLL SMOKE OK — 968 checks, 114 notes, 14 known (pre-existing), 18
+writes fenced` (both themes × 1280/1600/1920); the reorder smoke (`tools/probes/reorder-v`): dark 1280 portfolio
+61 OK, dark 1600 portfolio 88 OK, dark 1280 settings+cards 203 OK (light 1280 portfolio 59 and settings+cards 203
+OK earlier in the same session). Page heights at 1440×900, before → after: Portfolio › Income 17,586 → 1,435 px;
+Manage 4,101 → 1,076; Holdings 4,378 → 1,530; Allocation 3,264 → 2,080; Net worth › Accounts 1,964 → 1,459;
+Credit cards › Rewards 2,004 → 1,488. Three PRE-EXISTING defects the smoke records as KNOWN (not this branch's):
+Net worth's scope row wraps at 1280 when its month chips land (CLS ≈0.166); a dividend edit's mouse-click "Save
+changes" drops focus to the body (the self-disabling submit); "Back to matrix" hands focus back before the matrix
+re-mounts. Follow-ups: the batch memory's list.
 
 **The ask, verbatim:** *"take a look at the production data … and add scroll bars to tables that are long
 and take up too much vertical space … the user doesn't need to scroll excessively on the page to view
@@ -145,9 +159,27 @@ New `src/components/TableScroll.tsx` (default export) with its own sheet `src/co
 - **The box's own ring over its edge mask:** `.table-scroll:focus-visible { mask-image: none !important; }`
   — a `mask-image` clips everything outside the border box, the outline included, so the box's ring
   vanished whenever a sideways edge mask was active (Task 3 review; WCAG 2.4.7 for a new tab stop). The
-  hint is worth less than the ring while the box has focus; the mask returns once focus moves into the
-  table or away, and a mouse focus (no `:focus-visible`) keeps it. `!important`: `panels.css`'s two-token
-  mask rule is (0,4,0) and may load after the new sheet.
+  hint is worth less than the ring while the box has focus; a mouse focus (no `:focus-visible`) keeps it.
+  `!important`: `panels.css`'s two-token mask rule is (0,4,0) and may load after the new sheet. The same drop
+  applies while anything INSIDE the box has keyboard focus (`.table-scroll:has(:focus-visible)`, final review:
+  a sideways Tab could park a matrix card button under the edge fade).
+- **Fade-aware bottom margin** (Task 4 review — Tabbing down the ledgers landed 4/60 and 6/40 focus stops under
+  the fade in Edge; 0 after): the fade's height is one variable, `--table-fade-h: 28px`, and a table without a
+  tfoot gives its body controls `scroll-margin-bottom: calc(var(--table-foot-h, 0px) + var(--table-fade-h) + 4px)`
+  ((0,1,4)/(0,2,4)). `revealInBox` keeps the same allowance (it reads the computed `--table-fade-h`).
+- **Id'd controls:** `.table-scroll > table > :is(thead, tfoot) [id] { scroll-margin: 0 }` and `tbody [id]`
+  keep the table's insets — `localSections.css`'s `.local-section-panel [id]` (0,2,0) otherwise handed them the
+  page's 69–83px scope-row margin, and the matrix's card buttons moved a scrolled box ~62px on focus (re-review).
+- **Scrollbar-aware right-edge mask** (Task 5 review, with classic scrollbars): `panels.css`'s right-edge mask
+  faded the box's own vertical scrollbar; the right-only (0,3,0) and left+right (0,5,0) rules are restated for
+  `.table-scroll` so the gradient ends where the scrollbar starts and returns opaque over it
+  (`--table-scrollbar-w`, §2.4). Assumes the box draws no right border (true for all seven callers).
+- **Outside ring for padding-free text buttons** (Task 6 review): `.table-scroll > table :is(.row-toggle, .th-sort,
+  .matrix-card-btn):focus-visible { outline-offset: 2px }` (0,3,1) — the inset ring drew across their labels;
+  they sit in padded cells an outside ring never overflows. The dividend month toggle does the same
+  (`dividends.css`).
+- **Forced colours:** the fade is hidden and `--table-fade-h` is 0 (no margin reserved for it); the pinned tfoot
+  keeps a `CanvasText` top border (its hairline is a box-shadow, which forced colours remove).
 
 ### 2.3 `useScrollEdges` — vertical edges, opt-in
 
@@ -164,8 +196,10 @@ change once it is capped, so observing the box alone would miss them).
 
 Measures the box's `table > thead` and `table > tfoot` heights and writes them as `--table-head-h` /
 `--table-foot-h` (px, `0px` when absent) on the box's inline style; re-measured by a ResizeObserver on the
-table (a header that wraps, a density switch, a `tfoot` that appears once data lands). Guarded for jsdom /
-no-ResizeObserver (then measured once on mount). Consumers: the scroll margin (§2.2) and the dividend
+table (a header that wraps, a density switch, a `tfoot` that appears once data lands) AND on the box (Task 5
+review: a wide table can gain a vertical scrollbar on a window-height change without resizing — measured in
+Edge). It also writes `--table-scrollbar-w` (offsetWidth − clientWidth − side borders, ≥ 0) for the
+scrollbar-aware mask (§2.2). Guarded for jsdom / no-ResizeObserver (then measured once on mount). Consumers: the scroll margin (§2.2) and the dividend
 month rows' sticky offset (§4.3). Lives in `src/components/tableScrollDom.ts` with the `revealInBox` helper
 (§4.5) — not `tableScroll.ts`: on this case-insensitive Windows box `import './TableScroll'` would resolve
 to a `tableScroll.ts` before `TableScroll.tsx` (`.ts` is tried first).
@@ -192,14 +226,21 @@ TableScroll's own and loads with it).
 - **Drag to reorder (Transactions):** `scrollParentOf` takes the nearest ancestor that scrolls vertically
   with real overflow — the capped box — and `stickyHeaderOf` finds the row's own sticky `thead th`; the
   auto-scroll zone starts below the header (R7). So a drag now scrolls the box instead of the page; the
-  window-level scroll re-track still covers a page scroll. No reorder code changes.
+  window-level scroll re-track still covers a page scroll. ONE reorder change (Task 4 review, measured in Edge):
+  on arrival at Manage the capped box hangs 67–147px below the window at 1280–1600 wide, and a pointer drag
+  could not reach the ledger's last 1–3 slots (drops landed short — the list is the cost-basis replay order).
+  `autoScrollBy` (`reorderDom.ts`, from `useReorder`'s auto-scroll step) hands the step to the page when the
+  box did not move and still hangs past the window on the drag's side; the reorder smoke proves the ORDER (the
+  box reaches its end before the page moves). It applies to every capped reorderable list — a spent Settings or
+  Cards box that hangs past the window now scrolls the page on, too.
 - **Whole-row clicks** (Holdings, Net worth): unaffected; the header's sort buttons (Holdings) and card
   buttons (matrix, `card-col-<id>`, the focus-return target after the card detail closes) stay pinned and
   visible.
 - **Reload keeps the box's position:** the panels re-render in place on `onChanged` (no remount), so the
   box's `scrollTop` survives an edit/delete; verified in the browser (§6).
-- **Horizontal masks:** Holdings and Classifications gain the edge masks their bare `div.holdings-scroll`
-  never had (the ledgers already have them) — consistent with every other sideways scroller.
+- **Horizontal masks:** Holdings, Classifications, the Rewards matrix and Net worth's accounts table gain the edge
+  masks their old wrappers never had (the ledgers already had them) — consistent with every other sideways
+  scroller.
 
 ## 3. Where it applies
 
@@ -216,7 +257,11 @@ TableScroll's own and loads with it).
 **3.5 focus fix:** "Classify these N holdings" (`focusUnclassified`) scrolls the card into view and focuses
 the first row's asset-class select with `preventScroll: true`. Inside a box that was scrolled down, that
 row can be out of view; the handler now sets the box's `scrollTop = 0` first (the filtered list's first
-row is the box's first row). The page's own scroll is unchanged.
+row is the box's first row) — and `scrollLeft = 0` too, through TableScroll's `ref`. The page's own scroll is
+unchanged. Also (Task 5 review): sorting Holdings from its pinned header, or changing Classifications' filter
+chip (a CHANGED chip — re-clicking the active one keeps your place) or its search, resets the box to its top
+before the state update — a reader could sort from row 40 and land mid-list (Chromium's scroll anchoring kept the
+old rows in view).
 
 ## 4. Dividends by month
 
@@ -333,10 +378,13 @@ lands exactly below it.
 Touched: `components/TableScroll.tsx` (new), `components/tableScroll.css` (new), `components/tableScrollDom.ts`
 (new), `components/useScrollEdges.ts`, `components/portfolio/{DividendsPanel,TransactionsPanel,
 SecuritiesPanel,HoldingsTable,ClassificationEditor}.tsx`, `components/portfolio/dividendMonths.ts` (new),
-`components/portfolio/dividends.css` (new — the month rows and toolbar; imported by DividendsPanel, so the
-shared `portfolio.css` stays untouched), `components/portfolio/HoldingsScroll.tsx` (deleted — both of its
-callers import `portfolio.css` themselves), `components/creditcards/RewardsMatrix.tsx`,
-`pages/NetWorthPage.tsx` (one wrapper around the table), `index.css` (the inset focus-ring selector list and the print release), and their tests.
+`components/portfolio/dividends.css` (new — the month rows and toolbar; imported by DividendsPanel),
+`components/portfolio/portfolio.css` (its Holdings fit-note comment only), `components/portfolio/HoldingsScroll.tsx`
+(deleted — both of its callers import `portfolio.css` themselves), `components/creditcards/RewardsMatrix.tsx`,
+`components/reorder/{reorderDom,useReorder}.ts` (the page hand-off, §2.6), `pages/NetWorthPage.tsx` (one wrapper
+around the table), `index.css` (the inset focus-ring selector list and the print release), their tests (incl. the
+new `pages/NetWorthPage.tableScroll.test.tsx` and `components/creditcards/RewardsMatrix.test.tsx`), and the
+probes `tools/probes/{table-scroll-v,reorder-v}/smoke.mjs` + `tools/probes/README.md`.
 Not touched: anything under Taxes, Projection, Monthly update, Overview, Spending, backend.
 
 ### 5.2 Merge

@@ -48,7 +48,9 @@
 | `src/pages/NetWorthPage.tsx` | modify | wrap the accounts table in `TableScroll` — wrapper lines only, NO re-indent (lane T edits the rows) |
 | `src/components/portfolio/dividendMonths.ts` | new | pure grouping: months, labels, integer-cent totals |
 | `src/components/portfolio/DividendsPanel.tsx` | modify | ledger by month in a `TableScroll`, open state, Expand/Collapse all, reveal-after-save |
-| `src/components/portfolio/dividends.css` | new | month lines, toolbar, indent, dividend scroll padding |
+| `src/components/portfolio/dividends.css` | new | month lines, toolbar, indent, the entry-row scroll margin, the toggle's outside ring |
+| `src/components/reorder/{reorderDom,useReorder}.ts` | modify (Task 4 review) | `autoScrollBy`: a drag at a capped box's end hands the scroll to the page when the box hangs past the window |
+| `src/components/portfolio/portfolio.css` | modify (Task 5 review) | the Holdings fit-note comment only |
 | `tools/probes/table-scroll-v/smoke.mjs` + `tools/probes/README.md` | new / modify | the real-browser verification |
 | `tools/probes/reorder-v/smoke.mjs` | modify | the ledger's long drag now scrolls the BOX |
 
@@ -262,6 +264,12 @@ git commit -m "feat(tables): useScrollEdges names a capped box's hidden top and 
 ---
 
 ### Task 2: `tableScrollDom.ts` — pinned-row heights and reveal-in-box
+
+> **Amended in execution (2026-09-24; 317af64e, 951eab93, then Task 3's review commits fe82eae5 and ba51049b
+> in the same module — the committed files are authoritative):** the insets feed a body-row `scroll-margin`, not
+> the box's scroll padding; `revealInBox` also keeps clear of the "more below" fade; `useStickyInsets` also writes
+> `--table-scrollbar-w` and observes the box; the tests pin a tfoot that lands after mount, an unmeasured box, a
+> disconnected observer and rows flush with the band.
 
 **Files:**
 - Create: `src/components/tableScrollDom.ts`
@@ -505,7 +513,12 @@ git commit -m "feat(tables): useStickyInsets measures a capped table's pinned he
 > `.table-scroll > table > tbody *` (padding treated the pinned header's own controls as out of view and
 > jumped the box on their focus — 240px per Tab on a sort header), made pinned cells `position: static`
 > and dropped the edge mask on paper, and drops the edge mask while the box has `:focus-visible` (a mask
-> clips the focus ring). A fourth TableScroll test pins the 'xy' wiring.
+> clips the focus ring). A fourth TableScroll test pins the 'xy' wiring. Later review rounds on the same files:
+> baccf319 (id'd header/totals controls take no scroll margin — localSections' `[id]` margin leaked in), fe82eae5
+> (`--table-fade-h` and the fade-aware bottom margin + revealInBox allowance), ba51049b (`--table-scrollbar-w` and
+> the scrollbar-aware right-edge masks; the box is observed too), 5aafdcb2 (padding-free text buttons keep an
+> outside ring), and the final review's mask drop while anything inside has keyboard focus + the forced-colours
+> tfoot border.
 
 **Files:**
 - Create: `src/components/TableScroll.tsx`, `src/components/tableScroll.css`
@@ -865,6 +878,12 @@ git commit -m "feat(tables): TableScroll — the capped table box: clamp(420px, 
 
 ### Task 4: The two ledgers — Transactions and Securities
 
+> **Amended in execution (2026-09-24; 4493470f, then 0e0a8892 and 40d67172):** the wrap landed as planned; its
+> review found (in Edge, on the production copy) that a pointer drag could not reach the ledger's last 1–3 slots
+> while the capped box hung below the window, so the reorder hook gained `autoScrollBy` (the page takes the scroll
+> once the box is at its end and still hangs past the window) — a reorder change the spec had ruled out (§2.6 now
+> records it). The Securities Set-price focus-on-open was tried and dropped (it broke an existing test).
+
 **Files:**
 - Modify: `src/components/portfolio/TransactionsPanel.tsx` (import line 29; the wrapper at ~686 and ~747)
 - Modify: `src/components/portfolio/SecuritiesPanel.tsx` (import line 11; the wrapper at ~273 and ~334)
@@ -937,6 +956,10 @@ git commit -m "feat(tables): the transactions and securities ledgers scroll insi
 ---
 
 ### Task 5: Holdings and Security classifications
+
+> **Amended in execution (2026-09-24; 5cc1671f, dae9e616):** sorting Holdings, or changing Classifications' chip
+> (a changed chip only) or its search, resets the box to its top before the state update; `focusUnclassified` uses
+> TableScroll's `ref` and resets `scrollLeft` too; the `portfolio.css` fit note was restated (comment only).
 
 **Files:**
 - Modify: `src/components/portfolio/HoldingsTable.tsx` (imports; wrapper at line 83 and its `</div>` at ~188)
@@ -1049,6 +1072,9 @@ git commit -m "feat(tables): holdings (73 rows on production) and security class
 ---
 
 ### Task 6: Net worth › Accounts and the Rewards matrix
+
+> **Amended in execution (2026-09-24; fdde5837):** as planned — the Net worth wrapper is two flush lines with the
+> table untouched (3 insertions, 0 deletions). Its review's ring finding landed in Task 3's sheet (5aafdcb2).
 
 **Files:**
 - Modify: `src/pages/NetWorthPage.tsx` (imports ~line 18; the accounts `<table>` at ~870 and `</table>` at ~935)
@@ -2076,6 +2102,14 @@ git commit -m "feat(dividends): the ledger reads by month inside its capped box 
 
 ### Task 9: The real-browser smoke — `tools/probes/table-scroll-v`
 
+> **Amended in execution (2026-09-24; e8b85ce0, 46140778, 182915d4, 61aacb4f — the committed smoke is
+> authoritative):** Edge launches with classic 15px scrollbars; the review additions (header-focus stability,
+> sort/filter resets, focus stops clear of the fade, the arrival drag, the scrollbar-aware mask by pixels, ring
+> offsets, print, the table observation, reveal-after-save) are in; the fence replays its own blocked writes into
+> later reads so re-render paths are real; three pre-existing defects are recorded by a cause-matched `known()`
+> that passes once fixed; unknown `ONLY_*` filters are refused and an empty run fails. Final run on the merged
+> stack: `TABLE SCROLL SMOKE OK — 968 checks, 114 notes, 14 known (pre-existing), 18 writes fenced`.
+
 **Files:**
 - Create: `tools/probes/table-scroll-v/smoke.mjs`
 - Modify: `tools/probes/README.md` (a table row + a "Running" section)
@@ -2684,6 +2718,12 @@ not run.)
 ---
 
 ### Task 11: Gates, the browser run, and the record
+
+> **Outcome (2026-09-24):** gates on the branch with main (K/W/R/M) merged in: `tsc -p` app + node clean (NOT
+> `tsc -b` — its build info is shared through the node_modules junction); eslint 0 errors / 26 warnings (the
+> baseline); vitest 291 files / 4,298 tests; `vite build` clean but for the pre-existing 763.29 kB chunk advisory
+> (byte-identical at f50abe8d). Smokes: see Task 9's and Task 10's notes; the spec's status records the page
+> heights before and after.
 
 - [ ] **Step 1: Frontend gates on the branch**
 
