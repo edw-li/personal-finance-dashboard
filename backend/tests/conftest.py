@@ -70,11 +70,16 @@ async def _ensure_test_database() -> None:
 
 @pytest.fixture(scope="session")
 async def engine():
+    global _FAST_RESET_SQL, _TRUNCATE_SQL
     await _ensure_test_database()
     eng = create_async_engine(TEST_DATABASE_URL)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+    # The reset's statements walk the tables create_all just built: sorted_tables is read NOW,
+    # not at import, so the reset and the schema can never disagree about which tables exist.
+    _FAST_RESET_SQL = _fast_reset_sql()
+    _TRUNCATE_SQL = _truncate_sql()
     yield eng
     await eng.dispose()
 
@@ -138,10 +143,9 @@ def _truncate_sql() -> str:
     return f"TRUNCATE {names} RESTART IDENTITY CASCADE"
 
 
-# Built once: every model is registered by the imports above (app.models, app.main), and no
-# test adds a table to Base.metadata.
-_FAST_RESET_SQL = _fast_reset_sql()
-_TRUNCATE_SQL = _truncate_sql()
+# Built once per run by the session `engine` fixture, right after create_all.
+_FAST_RESET_SQL: str | None = None
+_TRUNCATE_SQL: str | None = None
 
 
 async def reset_database(engine) -> bool:
