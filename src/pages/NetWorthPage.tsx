@@ -12,7 +12,7 @@ import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
-import ScopeBar from '../components/shell/ScopeBar'
+import ScopeBar, { COVERAGE_SNAPSHOT } from '../components/shell/ScopeBar'
 import Segmented from '../components/shell/Segmented'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
@@ -33,18 +33,24 @@ import {
   netWorthStackOption,
 } from '../components/networth/netWorthChartOptions'
 import type { MoversMode, StackMode } from '../components/networth/netWorthChartOptions'
+import { netWorthHeadline, receiptAsOf, recordedSentence } from '../components/networth/headline'
+import { currentSnapshotIndex, rangeDates, snapshotAt } from '../components/networth/snapshotStates'
 import type { ChartSelection } from '../types/metrics'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import { GROUP_LABELS, PALETTE } from '../charts/theme'
 import type {
   AccountGroup,
+  CoverageOut,
+  FlowsPartOut,
   HouseholdOut,
   NetWorthSummary,
   NetWorthTimeseries,
 } from '../types/api'
 import { nestComponents } from '../utils/accounts'
+import { asOfPhrase, changePhrase, formatAsOf } from '../utils/asOf'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
+import { todayIso } from '../utils/months'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './NetWorthPage.css'
@@ -54,7 +60,7 @@ const MAX_DRILL = PALETTE.length
 
 // The three group tiles are one map over one shape, so they share one hint — three copies
 // of the same sentence would be three chances to edit only two of them.
-const GROUP_TILE_HINT = "This group's latest total and its change from the prior snapshot."
+const GROUP_TILE_HINT = "This group's total in this snapshot and its change since the snapshot before it."
 
 // The By-group card's owner lede is one .chart-lede line: 0.82rem × 1.5 line height (19.7px)
 // plus its −0.25rem/0.6rem margins (5.6px) ≈ 25. Reserved here because skeletonMetrics'
@@ -138,6 +144,15 @@ export default function NetWorthPage() {
   // and a household hiccup must not blank the net worth (OverviewPage's isolated-fetch
   // posture). null covers both "not loaded yet" and "failed".
   const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  // The scope row's own coverage answer (2026-09-23 spec §T1, §T7): the hero calls a month's
+  // story incomplete while its spending is still listed as due — handed over by the ScopeBar
+  // (onCoverage below; its cached answer seeds the first paint), never a second request. Keyed
+  // by content, so an identical answer re-renders nothing.
+  const [coverage, setCoverage] = useState<CoverageOut | null>(
+    () => getSnapshot<CoverageOut>(COVERAGE_SNAPSHOT) ?? null,
+  )
+  const flowsKey = JSON.stringify(coverage?.time?.flows_due ?? [])
+  const flowsDue = useMemo(() => JSON.parse(flowsKey) as FlowsPartOut[], [flowsKey])
   // Group stacking stays the default (spec §6): "how is it invested" is the question this
   // chart has always answered; "whose is it" and "what share" are the other two readings
   // of the same total.
@@ -413,9 +428,11 @@ export default function NetWorthPage() {
   )
 
   // Resolved target for EChart's animated zoom path — memoized so the wrapper's
-  // fingerprint compare runs only when the window can actually have moved.
+  // fingerprint compare runs only when the window can actually have moved. On the as-of dates,
+  // like the charts' own dataZoom (2026-09-23 spec §T7): early Jan 1 balances typed in December
+  // stay in the old year's YTD.
   const zoomWindow = useMemo(
-    () => (data === null ? undefined : resolvedWindow(data.months, range)),
+    () => (data === null ? undefined : resolvedWindow(rangeDates(data), range)),
     [data, range],
   )
 
@@ -435,14 +452,35 @@ export default function NetWorthPage() {
       : granularity === 'quarterly'
         ? months.filter((m) => m <= viewedMonth).length - 1
         : months.indexOf(viewedMonth)
-  const viewedIndex = selectedIndex >= 0 ? selectedIndex : months.length - 1
-  // …so the card heading names the month it shows — the viewed month, or the latest column when
-  // nothing is picked (2026-09-13 polish §14, C2) — never "latest" over a dated table.
+  // Nothing picked (or a pick with no column here): the CURRENT snapshot's column — the latest
+  // at most one month ahead, the server summary's own rule (2026-09-23 spec §K2, §T7) — so
+  // balances filed for December by mistake are never the default beside tiles that read August.
+  // A book holding only such filings has no current snapshot and shows its last column.
+  const currentIndex = currentSnapshotIndex(months, todayIso())
+  const viewedIndex =
+    selectedIndex >= 0 ? selectedIndex : currentIndex >= 0 ? currentIndex : months.length - 1
+  // The month the page shows with nothing picked: the ribbon's Edit target and what "Back to
+  // latest balances" returns to (§T8).
+  const defaultMonth = currentIndex >= 0 ? months[currentIndex] : null
+  // The viewed snapshot and the one before it, by the dates their balances describe (§T7).
+  const viewed = data !== null && months[viewedIndex] !== undefined ? snapshotAt(data, viewedIndex) : null
+  const before = data !== null && viewedIndex >= 1 ? snapshotAt(data, viewedIndex - 1) : null
+  // …so the card heading names the day it shows — "as of Aug 1", "as of Sep 22 · provisional"
+  // (2026-09-13 polish §14, C2; 2026-09-23 spec §T7) — never "latest" over a dated table.
   const viewedLabel =
-    viewedIndex >= 0 && months[viewedIndex] !== undefined
-      ? formatMonth(months[viewedIndex])
-      : `latest ${granularity === 'quarterly' ? 'quarter' : 'month'}`
-  const momHeader = granularity === 'quarterly' ? 'QoQ %' : 'MoM %'
+    viewed !== null ? asOfPhrase(viewed) : `latest ${granularity === 'quarterly' ? 'quarter' : 'month'}`
+  // The % column keeps its values; its header names what they compare with (§T7).
+  const changeHeader = before === null ? 'Change' : `Change since ${formatAsOf(before)}`
+  // What moved names the change by what it covers (§T7): "July: Jul 1 → Aug 1" between two final
+  // 1sts, "since Sep 1 · 21 days (provisional)" into early balances, "since Mar 1" by quarter.
+  const movedPhrase =
+    viewed === null || before === null
+      ? null
+      : changePhrase(before, viewed, { period: granularity === 'quarterly' ? 'quarter' : 'month' })
+  const movedTitle =
+    movedPhrase === null
+      ? 'What moved'
+      : `What moved — ${movedPhrase}${viewed?.provisional ? ' (provisional)' : ''}`
   // The two snapshots the movers card compares are whatever the grain on screen draws, so
   // its aria sentence and its empty state have to say which (2026-09-09 audit item 23).
   const priorNoun = granularity === 'quarterly' ? 'quarter' : 'month'
@@ -516,6 +554,11 @@ export default function NetWorthPage() {
           return entry === undefined ? [] : [{ label, total: entry.total }]
         })
       : []
+
+  // The hero's words (2026-09-23 spec §T1, §T7) and the group tiles' "since Jul 1" — from the
+  // summary's own dates; an older payload without them reads "vs prior", as it always did.
+  const headline = summary === null ? null : netWorthHeadline(summary, flowsDue)
+  const groupSince = summary?.previous ? `since ${formatAsOf(summary.previous)}` : 'vs prior'
 
   // A scope that owns nothing (2026-09-09 audit item 11). Judged on the TIMESERIES, which
   // lists the accounts in scope, never on the summary's totals — those are zeros either way,
@@ -607,8 +650,14 @@ export default function NetWorthPage() {
             month={{
               mode: 'view',
               figures: ribbonFigures,
-              editHref: (m) => `/update?month=${m}`,
+              // The balances step: this page is about the balances (2026-09-23 spec §T8).
+              editHref: (m) => `/update?month=${m}&step=balances`,
+              // With nothing picked the page shows the current snapshot — what Edit opens and
+              // "Back to latest balances" returns to.
+              defaultMonth,
+              backLabel: 'Back to latest balances',
             }}
+            onCoverage={setCoverage}
           />
         }
         resource={{
@@ -668,11 +717,16 @@ export default function NetWorthPage() {
               <div className="kpi-row">
                 <StatTile
                   hero
-                  label={`Net worth — ${formatMonth(summary.month)}`}
+                  // Named by the day its balances describe, the change by what it covers, and a
+                  // Provisional badge on balances typed before their date — the Overview's words
+                  // exactly (2026-09-23 spec §T1, §T7).
+                  label={headline?.label ?? 'Net worth'}
+                  badge={headline?.badge}
                   value={formatCurrency(summary.net_worth)}
                   evidence={metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth,
-                    definition: 'Sum of non-component account balances, including signed liabilities, at this recorded snapshot. Changes compare recorded balances and do not isolate investment return.',
-                    scope: owner ?? 'Household', as_of: summary.month,
+                    definition: `Sum of non-component account balances, including signed liabilities, at this recorded snapshot.${recordedSentence(summary)} Changes compare recorded balances and do not isolate investment return.`,
+                    scope: owner ?? 'Household', as_of: receiptAsOf(summary),
+                    ...(summary.provisional ? { completeness: 'provisional' as const } : {}),
                     source_link: `/net-worth?section=accounts&month=${summary.month}${owner === null ? '' : `&owner=${owner}`}`,
                     components: summary.groups.map(group => ({ label: GROUP_LABELS[group.group], value: group.total, unit: 'USD' })) })}
                   // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
@@ -681,16 +735,12 @@ export default function NetWorthPage() {
                       ? { value: Number(summary.net_worth), format: formatCurrency }
                       : undefined
                   }
-                  delta={
-                    summary.mom_delta === null
-                      ? undefined
-                      : `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) vs prior ${summary.period === 'quarter' ? 'quarter' : 'month'}`
-                  }
+                  delta={headline?.delta}
                   // Shared rule (src/utils/tone.ts): a flat month is NEUTRAL. This tile used to
                   // fold zero into positive; ratified Plan 6 Task 8 review — a green "▲ $0.00"
                   // congratulates the user for standing still.
                   tone={toneOf(summary.mom_delta)}
-                  hint="Assets minus liabilities for the latest snapshot; liabilities are entered as negatives."
+                  hint="Assets minus liabilities for this snapshot; liabilities are entered as negatives."
                 />
                 {(['taxable', 'pre_tax', 'liability'] as AccountGroup[]).map((group) => {
                   const entry = summary.groups.find((g) => g.group === group)
@@ -703,10 +753,12 @@ export default function NetWorthPage() {
                       value={formatCurrency(entry.total)}
                       evidence={metricReceipt({ id: `net_worth_${group}`, label: GROUP_LABELS[group], value: entry.total,
                         definition: 'Total of the accounts in this group at the selected monthly snapshot. Derived parent balances include their components once; liabilities remain signed.',
-                        scope: owner ?? 'Household', as_of: summary.month,
+                        scope: owner ?? 'Household', as_of: receiptAsOf(summary),
+                        ...(summary.provisional ? { completeness: 'provisional' as const } : {}),
                         source_link: `/net-worth?section=accounts&month=${summary.month}${owner === null ? '' : `&owner=${owner}`}`,
                         components: [{ label: 'Change from preceding snapshot', value: entry.mom_delta, unit: 'USD' }] })}
-                      delta={delta === null ? undefined : `${formatCurrency(delta)} vs prior`}
+                      // "since Jul 1": the day the balances it compares with describe (§T7).
+                      delta={delta === null ? undefined : `${formatCurrency(delta)} ${groupSince}`}
                       tone={toneOf(delta)}
                       hint={GROUP_TILE_HINT}
                     />
@@ -774,7 +826,7 @@ export default function NetWorthPage() {
 
                 {data !== null && viewedIndex >= 1 && (
                   <ChartCard
-                    title={`What moved — ${formatMonth(months[viewedIndex])}`}
+                    title={movedTitle}
                     hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Every bar grows from zero by the size of the move; a loss is drawn outlined, a gain solid, and the label carries the sign. Groups that did not move are left out."
                     // The aria follows the TOGGLE: a sentence saying "group" over a chart of
                     // accounts is the one reading a screen-reader user cannot check.
@@ -865,7 +917,7 @@ export default function NetWorthPage() {
                 <div className="card span-12">
                   <h2 className="eyebrow">
                     Accounts — {viewedLabel}
-                    <InfoHint text="Each account's balance for the month named above and its change from the one before. Component accounts live inside a parent aggregate and are excluded from totals." />
+                    <InfoHint text="Each account's balance on the date named above and its change since the snapshot before it. Component accounts live inside a parent aggregate and are excluded from totals." />
                   </h2>
                   <table className="data-table">
                     <thead>
@@ -873,7 +925,7 @@ export default function NetWorthPage() {
                         <th>Account</th>
                         <th>Group</th>
                         <th className="num">Balance</th>
-                        <th className="num">{momHeader}</th>
+                        <th className="num">{changeHeader}</th>
                       </tr>
                     </thead>
                     <tbody>

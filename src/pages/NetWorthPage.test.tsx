@@ -3,7 +3,10 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
-import type { HouseholdOut, NetWorthSummary, NetWorthTimeseries } from '../types/api'
+import type { CoverageOut, HouseholdOut, NetWorthSummary, NetWorthTimeseries } from '../types/api'
+import { copyOnSep23, earlySnapshot, flowsPart, snapshotStateOut, timeStatus } from '../testing/timeFixtures'
+import { daysBetween } from '../utils/months'
+import { setServerToday } from '../utils/productToday'
 import NetWorthPage from './NetWorthPage'
 
 vi.mock('../api/netWorth', () => ({ fetchTimeseries: vi.fn(), fetchSummary: vi.fn() }))
@@ -114,8 +117,28 @@ function summaryOut(over: Partial<NetWorthSummary> = {}): NetWorthSummary {
       { person_id: 1, name: 'Me', total: '150.00' },
       { person_id: null, name: null, total: '80.00' },
     ],
+    // What a current backend names beside every summary (2026-09-23 spec §K2): the snapshot's
+    // date and standing, and the snapshot its delta compares with.
+    as_of: '2026-08-01',
+    recorded_on: '2026-08-01',
+    provisional: false,
+    previous: snapshotStateOut('2026-07-01'),
+    days_since_previous: 31,
     ...over,
   }
+}
+
+/** The summary of `month`'s snapshot — final, recorded on its 1st — compared with `previous`'s. */
+function summaryAt(month: string, previous: string | null, over: Partial<NetWorthSummary> = {}): NetWorthSummary {
+  return summaryOut({
+    month,
+    as_of: month,
+    recorded_on: month,
+    provisional: false,
+    previous: previous === null ? null : snapshotStateOut(previous),
+    days_since_previous: previous === null ? null : daysBetween(previous, month),
+    ...over,
+  })
 }
 
 function household(over: Partial<HouseholdOut> = {}): HouseholdOut {
@@ -127,6 +150,9 @@ beforeEach(() => {
   // useScope remembers owner and range in localStorage for the keys a URL leaves empty —
   // a scope one test picks would otherwise be the next test's default.
   localStorage.clear()
+  // The product day (2026-09-23 spec §K1): Aug 1's balances are the current snapshot and the
+  // ribbon ends at August — whatever the machine's clock says (setup.ts resets it after each).
+  setServerToday('2026-08-20')
   vi.mocked(fetchTimeseries).mockResolvedValue(timeseriesOut())
   vi.mocked(fetchSummary).mockResolvedValue(summaryOut())
   vi.mocked(fetchHousehold).mockResolvedValue(household())
@@ -500,9 +526,12 @@ describe('NetWorthPage — shell scope', () => {
       expect(vi.mocked(fetchSummary)).toHaveBeenLastCalledWith(null, '2026-07-01', 'monthly'),
     )
     expect(screen.getByTestId('location').textContent).toContain('month=2026-07')
-    expect(await screen.findByRole('button', { name: 'Back to latest' })).toBeTruthy()
-    // The other verb on a viewed month: the wizard, by link rather than by selection.
-    expect(screen.getByRole('link', { name: 'Edit Jul 2026 in the wizard' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Back to latest balances' })).toBeTruthy()
+    // The other verb on a viewed month: the wizard, by link rather than by selection — at the
+    // step this page is about (2026-09-23 spec §T8).
+    expect(screen.getByRole('link', { name: 'Edit Jul 2026 in the wizard' }).getAttribute('href')).toBe(
+      '/update?month=2026-07-01&step=balances',
+    )
     // The accounts table's Balance column now reads July's figures from the timeseries.
     expect(screen.getByText(JULY_CHECKING_BALANCE)).toBeTruthy()
   })
@@ -575,7 +604,7 @@ describe('NetWorthPage — chart cards', () => {
     await screen.findByText('By group over time')
     expect(screen.getByLabelText(/Stacked area chart of asset groups over time/)).toBeTruthy()
 
-    expect(screen.getByText(/What moved — Aug 2026/)).toBeTruthy()
+    expect(screen.getByText('What moved — July: Jul 1 → Aug 1')).toBeTruthy()
     expect(screen.getByLabelText(/Horizontal bar chart of how each account group moved/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Share %' })).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: 'Accounts' }))
@@ -586,9 +615,10 @@ describe('NetWorthPage — chart cards', () => {
 
   it('breaks the movers down by group, then by account, with the lede and the table twin', async () => {
     renderPage()
-    await screen.findByText(/What moved — Aug 2026/)
+    await screen.findByText('What moved — July: Jul 1 → Aug 1')
     const card = screen.getByRole('group', { name: 'Export net-worth-movers' }).closest('section') as HTMLElement
-    expect(card.querySelector('.chart-lede')?.textContent).toBe('Jul 2026 $170.00 → Aug 2026 $230.00 · +$60.00 · +35.3%')
+    // Both ends named by the day their balances describe (2026-09-23 spec §T7).
+    expect(card.querySelector('.chart-lede')?.textContent).toBe('Jul 1 $170.00 → Aug 1 $230.00 · +$60.00 · +35.3%')
     expect(within(card).getByTestId('echart').getAttribute('data-categories')).toBe('Cash')
     fireEvent.click(within(card).getByRole('button', { name: 'Accounts' }))
     expect(within(card).getByTestId('echart').getAttribute('data-categories')).toBe('My Checking|Joint Savings')
@@ -624,7 +654,7 @@ describe('NetWorthPage — one failed feed never blanks the page', () => {
     )
     expect(within(banner).getByRole('button', { name: 'Retry the month summary' })).toBeTruthy()
     // The parts that speak FOR the summary go quiet rather than stale …
-    expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
+    expect(screen.queryByText('Net worth — as of Aug 1')).toBeNull()
     expect(document.querySelector('.networth-owner-lede')).toBeNull()
     expect(document.querySelector('.chart-lede')).toBeNull()
     // … and the server's own words never reach the page.
@@ -638,7 +668,7 @@ describe('NetWorthPage — one failed feed never blanks the page', () => {
     fireEvent.click(within(banner).getByRole('button', { name: 'Retry the month summary' }))
     // The identical-payload skip must not strand the tiles hidden behind a payload that
     // equals the one the failed load never got to show.
-    expect(await screen.findByText('Net worth — Aug 2026')).toBeTruthy()
+    expect(await screen.findByText('Net worth — as of Aug 1')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
     // …and the feed that never failed was left alone: re-fetching it would repaint charts
     // that are already right.
@@ -687,7 +717,7 @@ describe('NetWorthPage — a scope with no accounts', () => {
     ).toBe('/settings#accounts')
     // Nothing that would have to invent a number is on screen.
     expect(screen.queryAllByTestId('echart')).toHaveLength(0)
-    expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
+    expect(screen.queryByText('Net worth — as of Aug 1')).toBeNull()
     expect(screen.queryByText(/^Accounts — /)).toBeNull()
     expect(document.querySelector('.networth-owner-lede')).toBeNull()
   })
@@ -718,15 +748,15 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
     vi.mocked(fetchTimeseries).mockImplementation((g) =>
       Promise.resolve(g === 'quarterly' ? gapped : timeseriesOut()),
     )
-    vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ month: '2026-03-01', period: 'quarter' }))
+    vi.mocked(fetchSummary).mockResolvedValue(summaryAt('2026-03-01', null, { period: 'quarter' }))
     renderPage('/net-worth?month=2026-08&section=accounts')
     await screen.findByRole('group', { name: 'Accounts to compare' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
-    expect(await screen.findByText('Accounts — Mar 2026')).toBeTruthy()
+    expect(await screen.findByText('Accounts — as of Mar 1')).toBeTruthy()
     // The tiles live on Overview now (2026-09-13 polish §12) — same snapped column, one view over.
     fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
-    expect(screen.getByText('Net worth — Mar 2026')).toBeTruthy()
+    expect(screen.getByText('Net worth — as of Mar 1')).toBeTruthy()
   })
 
   it('says so when no quarter has closed by the picked month', async () => {
@@ -767,16 +797,25 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
     ).toBeTruthy()
   })
 
-  it('asks for the summary at that grain and says "vs prior quarter"', async () => {
+  it('asks for the summary at that grain and names the quarter end it compares with', async () => {
     renderPage()
     await screen.findByText('By group over time')
-    vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ period: 'quarter' }))
+    vi.mocked(fetchSummary).mockResolvedValue(
+      summaryAt('2026-06-01', '2026-03-01', {
+        period: 'quarter',
+        groups: [{ group: 'taxable', total: '40.00', mom_delta: '15.00' }],
+      }),
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
     await waitFor(() =>
       expect(fetchSummary).toHaveBeenLastCalledWith(null, undefined, 'quarterly'),
     )
-    expect(await screen.findByText(/vs prior quarter/)).toBeTruthy()
+    // A quarter is not a month's story: the tiles say only what the change is since (§T7).
+    const hero = tileFor(await screen.findByText('Net worth — as of Jun 1'))
+    expect(deltaOf(hero)).toBe('▲ $60.00 (+35.3%) since Mar 1')
+    expect(deltaOf(tileFor(screen.getByText('Taxable')))).toBe('▲ $15.00 since Mar 1')
+    expect(screen.queryByText(/vs prior/)).toBeNull()
   })
 
   it('snaps a ribbon pick back to the quarter end it closes into', async () => {
@@ -793,17 +832,18 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
     await waitFor(() =>
       expect(fetchSummary).toHaveBeenLastCalledWith(null, '2026-06-01', 'quarterly'),
     )
-    expect(await screen.findByText('Accounts — Jun 2026')).toBeTruthy()
+    expect(await screen.findByText('Accounts — as of Jun 1')).toBeTruthy()
     // The ribbon follows the snap rather than highlighting a chip the page is not showing.
     await waitFor(() =>
       expect(screen.getByTestId('location').textContent).toContain('month=2026-06'),
     )
     fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
-    expect(screen.getByText(/What moved — Jun 2026/)).toBeTruthy()
-    // …and the lede names the two quarter ends, not two months. Scoped to the movers card: the
-    // By-group card above it carries the owner lede now (2026-09-13 polish §10).
-    const movers = screen.getByText(/What moved — Jun 2026/).closest('.chart-card') as HTMLElement
-    expect(movers.querySelector('.chart-lede')?.textContent).toContain('Mar 2026')
+    // A quarter's change says what it is since, not whose story it is (2026-09-23 spec §T7).
+    expect(screen.getByText('What moved — since Mar 1')).toBeTruthy()
+    // …and the lede names the two quarter ends by date. Scoped to the movers card: the By-group
+    // card above it carries the owner lede now (2026-09-13 polish §10).
+    const movers = screen.getByText('What moved — since Mar 1').closest('.chart-card') as HTMLElement
+    expect(movers.querySelector('.chart-lede')?.textContent).toContain('Mar 1 $170.00 → Jun 1 $230.00')
   })
 })
 
@@ -811,15 +851,218 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
 describe('NetWorthPage — tiles per view', () => {
   it('keeps the tiles and the owner lede to Overview, and names the month on the Accounts card', async () => {
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText('Net worth — as of Aug 1')
     expect(document.querySelector('.networth-owner-lede')).not.toBeNull()
     fireEvent.click(screen.getByRole('tab', { name: 'Accounts' }))
-    expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
+    expect(screen.queryByText('Net worth — as of Aug 1')).toBeNull()
     expect(document.querySelector('.loading-dim > .kpi-row')).toBeNull()
-    // The card names the month it shows (C2) — "latest" is reserved for a book with no column.
-    expect(screen.getByRole('heading', { name: /Accounts — Aug 2026/ })).toBeTruthy()
+    // The card names the day its balances describe (C2, 2026-09-23 spec §T7) — "latest" is
+    // reserved for a book with no column.
+    expect(screen.getByRole('heading', { name: /Accounts — as of Aug 1/ })).toBeTruthy()
     expect(screen.queryByText(/Accounts — latest month/)).toBeNull()
     fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
-    expect(screen.getByText('Net worth — Aug 2026')).toBeTruthy()
+    expect(screen.getByText('Net worth — as of Aug 1')).toBeTruthy()
+  })
+})
+
+// The tiles are addressed through their labels, like the Overview's (a tile is a label, a value
+// and sometimes a delta).
+function tileFor(label: HTMLElement): HTMLElement {
+  const tile = label.closest('.stat-tile')
+  expect(tile).not.toBeNull()
+  return tile as HTMLElement
+}
+const deltaOf = (tile: HTMLElement) => tile.querySelector('.stat-delta')?.textContent ?? null
+
+// ── The snapshot named by its date (2026-09-23 spec §T7, §T8) ────────────────────────────
+// A net-worth snapshot is the balances on its 1st, so the page names it by that day — never by
+// a month key, and never "vs prior month": the change into Aug 1 is July's story.
+describe('NetWorthPage — the snapshot named by its date (2026-09-23 spec §T7)', () => {
+  it('names the hero by the day its balances describe and the change by the month it covers', async () => {
+    vi.mocked(fetchSummary).mockResolvedValue(
+      summaryAt('2026-08-01', '2026-07-01', { groups: [{ group: 'liability', total: '-20.00', mom_delta: '-5.00' }] }),
+    )
+    renderPage()
+    const hero = tileFor(await screen.findByText('Net worth — as of Aug 1'))
+    expect(deltaOf(hero)).toBe('▲ $60.00 (+35.3%) · July: Jul 1 → Aug 1')
+    expect(hero.textContent).not.toContain('Provisional')
+    // The group tiles say what their change is since.
+    expect(deltaOf(tileFor(screen.getByText('Liabilities')))).toBe('▼ -$5.00 since Jul 1')
+    expect(screen.queryByText(/vs prior|MoM/)).toBeNull()
+  })
+
+  it('reads an older payload without dates as final, as of its 1st, with no span to name', async () => {
+    const older: NetWorthSummary = {
+      month: '2026-08-01', net_worth: '230.00', mom_delta: '60.00', mom_pct: '0.352941', groups: [], owner_totals: [],
+    }
+    vi.mocked(fetchSummary).mockResolvedValue(older)
+    renderPage()
+    const hero = tileFor(await screen.findByText('Net worth — as of Aug 1'))
+    expect(deltaOf(hero)).toBe('▲ $60.00 (+35.3%)')
+  })
+
+  it('heads the accounts table with the snapshot’s date and the change column with the one before', async () => {
+    renderPage('/net-worth?section=accounts')
+    expect(await screen.findByRole('heading', { name: /Accounts — as of Aug 1/ })).toBeTruthy()
+    const headers = [...document.querySelectorAll('.data-table thead th')].map((th) => th.textContent)
+    // The % column keeps its values; only what it compares with is named.
+    expect(headers).toEqual(['Account', 'Group', 'Balance', 'Change since Jul 1'])
+  })
+
+  it('opens on the current snapshot — balances filed further ahead are never the default', async () => {
+    // Dec 1 typed in August by mistake: the server's summary answers Aug 1 (K2's rule), so the
+    // table, What moved and the ribbon's Edit must too, rather than Dec's column.
+    vi.mocked(fetchTimeseries).mockResolvedValue(
+      timeseriesOut({
+        months: ['2026-07-01', '2026-08-01', '2026-12-01'],
+        series: [
+          { account_id: 1, values: ['100.00', '150.00', '999.00'] },
+          { account_id: 2, values: ['70.00', '80.00', '1.00'] },
+        ],
+        group_totals: {
+          cash: ['170.00', '230.00', '1000.00'], pre_tax: ['0.00', '0.00', '0.00'], post_tax: ['0.00', '0.00', '0.00'],
+          taxable: ['0.00', '0.00', '0.00'], equity: ['0.00', '0.00', '0.00'], other: ['0.00', '0.00', '0.00'],
+          liability: ['0.00', '0.00', '0.00'],
+        },
+        net_worth: ['170.00', '230.00', '1000.00'],
+        mom_pct: [null, '0.352941', '3.347826'],
+        notes: [null, null, null],
+        owner_series: [],
+        as_of: ['2026-07-01', '2026-08-01', '2026-08-18'],
+        recorded_on: ['2026-07-01', '2026-08-01', '2026-08-18'],
+        provisional: [false, false, true],
+      }),
+    )
+    renderPage('/net-worth?section=accounts')
+    expect(await screen.findByRole('heading', { name: /Accounts — as of Aug 1/ })).toBeTruthy()
+    const table = document.querySelector('.data-table') as HTMLElement
+    expect(within(table).getByRole('button', { name: 'My Checking' }).closest('tr')?.textContent).toContain('$150.00')
+    expect(screen.queryByText('$999.00')).toBeNull()
+    // Edit opens the month on screen, at the balances step; nothing to go back to.
+    expect(screen.getByRole('link', { name: 'Edit Aug 2026 in the wizard' }).getAttribute('href')).toBe(
+      '/update?month=2026-08-01&step=balances',
+    )
+    expect(screen.queryByRole('button', { name: 'Back to latest balances' })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
+    expect(screen.getByText('What moved — July: Jul 1 → Aug 1')).toBeTruthy()
+  })
+
+  it('adds the month’s story while its spending is still due, like the Overview (§T1)', async () => {
+    setServerToday('2026-10-03')
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-09-01', '2026-10-01'],
+      spending: [],
+      net_pay: [],
+      time: timeStatus('2026-10-03', { flows_due: [flowsPart('2026-09-01', { spending: 'partial' })] }),
+    })
+    vi.mocked(fetchSummary).mockResolvedValue(
+      summaryAt('2026-10-01', '2026-09-01', { net_worth: '933250.90', mom_delta: '126583.02', mom_pct: '0.156920' }),
+    )
+    renderPage()
+    const hero = tileFor(await screen.findByText('Net worth — as of Oct 1'))
+    await waitFor(() =>
+      expect(deltaOf(hero)).toBe('▲ $126,583.02 (+15.7%) · September: Sep 1 → Oct 1 · spending not complete yet'),
+    )
+  })
+
+  describe('with Oct 1 balances typed early, on Sep 22', () => {
+    const early = earlySnapshot('2026-10-01', '2026-09-22')
+    const threeMonths = () =>
+      timeseriesOut({
+        months: ['2026-08-01', '2026-09-01', '2026-10-01'],
+        series: [
+          { account_id: 1, values: ['700000.00', '720000.00', '830000.00'] },
+          { account_id: 2, values: ['80000.00', '86667.88', '103250.90'] },
+        ],
+        group_totals: {
+          cash: ['780000.00', '806667.88', '933250.90'], pre_tax: ['0.00', '0.00', '0.00'], post_tax: ['0.00', '0.00', '0.00'],
+          taxable: ['0.00', '0.00', '0.00'], equity: ['0.00', '0.00', '0.00'], other: ['0.00', '0.00', '0.00'],
+          liability: ['0.00', '0.00', '0.00'],
+        },
+        net_worth: ['780000.00', '806667.88', '933250.90'],
+        mom_pct: [null, '0.034189', '0.156920'],
+        notes: [null, null, null],
+        owner_series: [],
+        as_of: ['2026-08-01', '2026-09-01', '2026-09-22'],
+        recorded_on: ['2026-08-01', '2026-09-01', '2026-09-22'],
+        provisional: [false, false, true],
+      })
+    const coverage = (): CoverageOut => ({
+      balances: ['2026-08-01', '2026-09-01', '2026-10-01'],
+      spending: ['2026-08-01'],
+      net_pay: ['2026-08-01'],
+      time: copyOnSep23(),
+    })
+    const provisionalSummary = () =>
+      summaryOut({
+        month: '2026-10-01',
+        net_worth: '933250.90',
+        mom_delta: '126583.02',
+        mom_pct: '0.156920',
+        as_of: early.as_of,
+        recorded_on: early.recorded_on,
+        provisional: true,
+        previous: snapshotStateOut('2026-09-01'),
+        days_since_previous: 21,
+      })
+
+    beforeEach(() => {
+      setServerToday('2026-09-23')
+      vi.mocked(fetchTimeseries).mockResolvedValue(threeMonths())
+      vi.mocked(fetchCoverage).mockResolvedValue(coverage())
+      vi.mocked(fetchSummary).mockImplementation((_owner, month) =>
+        Promise.resolve(
+          month === '2026-09-01'
+            ? summaryAt('2026-09-01', '2026-08-01', { net_worth: '806667.88', mom_delta: '26667.88', mom_pct: '0.034189' })
+            : provisionalSummary(),
+        ),
+      )
+    })
+
+    it('reads the hero as provisional, as of the day they were typed, and the change since Sep 1', async () => {
+      renderPage()
+      const hero = tileFor(await screen.findByText('Net worth — as of Sep 22'))
+      expect(hero.textContent).toContain('Provisional')
+      expect(deltaOf(hero)).toBe('▲ $126,583.02 (+15.7%) since Sep 1 · 21 days')
+      expect(screen.getByText('What moved — since Sep 1 · 21 days (provisional)')).toBeTruthy()
+      const movers = screen.getByText('What moved — since Sep 1 · 21 days (provisional)').closest('.chart-card') as HTMLElement
+      expect(movers.querySelector('.chart-lede')?.textContent).toContain('Sep 1 $806,667.88 → Sep 22 (provisional) $933,250.90')
+    })
+
+    it('carries the day they describe, the provisional completeness and the reason on the receipt', async () => {
+      renderPage()
+      await screen.findByText('Net worth — as of Sep 22')
+      fireEvent.click(screen.getByRole('button', { name: /^About this number: Net worth/ }))
+      expect(
+        await screen.findByText(/at this recorded snapshot\. Recorded Sep 22\. Balances recorded before their date stay provisional until saved again on or after it\./),
+      ).toBeTruthy()
+      expect(screen.getAllByText('Provisional — recorded before its date').length).toBeGreaterThan(0)
+      expect(screen.getAllByText('2026-09-22').length).toBeGreaterThan(0)
+    })
+
+    it('makes October a chip that is pressed when viewed, and the current snapshot needs no way back', async () => {
+      renderPage('/net-worth?section=accounts')
+      await screen.findByRole('heading', { name: /Accounts — as of Sep 22 · provisional/ })
+      const october = await screen.findByRole('button', { name: /^Oct 2026/ })
+      fireEvent.click(october)
+      await waitFor(() => expect(fetchSummary).toHaveBeenLastCalledWith(null, '2026-10-01', 'monthly'))
+      expect(screen.getByRole('button', { name: /^Oct 2026/ }).getAttribute('aria-pressed')).toBe('true')
+      expect(screen.getByTestId('location').textContent).toContain('month=2026-10')
+      // October IS the page's default month: "Back to latest balances" would go nowhere.
+      expect(screen.queryByRole('button', { name: 'Back to latest balances' })).toBeNull()
+      expect(screen.getByRole('link', { name: 'Edit Oct 2026 in the wizard' }).getAttribute('href')).toBe(
+        '/update?month=2026-10-01&step=balances',
+      )
+    })
+
+    it('views September as the final month it is, and comes back to the provisional October', async () => {
+      renderPage('/net-worth?section=accounts')
+      fireEvent.click(await screen.findByRole('button', { name: /^Sep 2026/ }))
+      expect(await screen.findByRole('heading', { name: /Accounts — as of Sep 1/ })).toBeTruthy()
+      const headers = [...document.querySelectorAll('.data-table thead th')].map((th) => th.textContent)
+      expect(headers.at(-1)).toBe('Change since Aug 1')
+      fireEvent.click(await screen.findByRole('button', { name: 'Back to latest balances' }))
+      expect(await screen.findByRole('heading', { name: /Accounts — as of Sep 22 · provisional/ })).toBeTruthy()
+    })
   })
 })
