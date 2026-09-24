@@ -58,6 +58,7 @@ import {
 } from '../components/monthly/monthlyCopy'
 import { buildMonthSave, type SaveKind } from '../components/monthly/monthSave'
 import { balancesKey, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
+import { restoreParts } from '../components/monthly/restore'
 import { monthStory, type NextSnapshot } from '../components/monthly/story'
 import InfoHint from '../components/InfoHint'
 import { useToast } from '../components/ToastProvider'
@@ -699,54 +700,27 @@ function MonthlyUpdateWizard() {
         }
         const flowsSeed: FlowsPart = { amounts: seededAmounts, netPay: seededNetPay, recordZero: false }
         // A whole-month draft from before the parts were split becomes two part drafts on first
-        // read (spec §M6); then each part is restored — or dropped — on its own.
+        // read (spec §M6); then each part is restored — or dropped — on its own (restore.ts).
         splitLegacyDraft(month)
-        const balancesDraft = readDraft<BalancesDraft>('balances', month)
-        const flowsDraft = readDraft<FlowsDraft>('flows', month)
-        // A draft may only REMOVE parents from the load-time set — that is all a handover
-        // does. The SERVER decides which parents still have no component rows, so an older
-        // draft can never resurrect a hand-typed row for a month that has since gained them.
-        const draftTyped =
-          balancesDraft?.typedParents === undefined
-            ? handTyped
-            : new Set([...handTyped].filter((id) => balancesDraft.typedParents?.includes(id)))
-        // Restored per field, keyed by id, so an account or category added since still seeds.
-        const draftBalances =
-          balancesDraft === null
-            ? null
-            : deriveParents(
-                derivationFor(byParent, draftTyped),
-                Object.fromEntries(
-                  visibleAccounts.map((a) => [a.id, balancesDraft.balances?.[String(a.id)] ?? seededBalances[a.id]]),
-                ),
-              )
-        const draftNotes = balancesDraft?.notes ?? seededNotes
-        const draftAmounts =
-          flowsDraft === null
-            ? null
-            : Object.fromEntries(
-                activeCategories.map((c) => [c.id, flowsDraft.amounts?.[String(c.id)] ?? seededAmounts[c.id]]),
-              )
-        const draftNetPay = flowsDraft?.netPay ?? seededNetPay
-        // A stored draft that differs from its part's seed is unsaved work and is restored over
-        // it; one that MATCHES is a leftover with nothing to say and is dropped.
-        const restoreBalances =
-          draftBalances !== null &&
-          balancesKey({ balances: draftBalances, notes: draftNotes, typedParents: draftTyped }) !==
-            balancesKey(balancesSeed)
-        const restoreFlows =
-          draftAmounts !== null &&
-          flowsKey({ amounts: draftAmounts, netPay: draftNetPay }) !== flowsKey(flowsSeed)
-        if (balancesDraft !== null && !restoreBalances) removeDraft('balances', month)
-        if (flowsDraft !== null && !restoreFlows) removeDraft('flows', month)
-        setTypedParents(restoreBalances ? draftTyped : handTyped)
-        setBalances(restoreBalances && draftBalances !== null ? draftBalances : seededBalances)
-        setNotes(restoreBalances ? draftNotes : seededNotes)
-        setAmounts(restoreFlows && draftAmounts !== null ? draftAmounts : seededAmounts)
-        setNetPay(restoreFlows ? draftNetPay : seededNetPay)
+        const restored = restoreParts({
+          balancesSeed,
+          flowsSeed,
+          balancesDraft: readDraft<BalancesDraft>('balances', month),
+          flowsDraft: readDraft<FlowsDraft>('flows', month),
+          accountIds: visibleAccounts.map((a) => a.id),
+          categoryIds: activeCategories.map((c) => c.id),
+          derive: (typed, record) => deriveParents(derivationFor(byParent, typed), record),
+        })
+        if (restored.drop.balances) removeDraft('balances', month)
+        if (restored.drop.flows) removeDraft('flows', month)
+        setTypedParents(new Set(restored.balances.typedParents))
+        setBalances(restored.balances.balances)
+        setNotes(restored.balances.notes)
+        setAmounts(restored.flows.amounts)
+        setNetPay(restored.flows.netPay)
         setBalancesBase({ month, part: balancesSeed })
         setFlowsBase({ month, part: flowsSeed })
-        setRestoredParts({ balances: restoreBalances, flows: restoreFlows })
+        setRestoredParts(restored.restored)
         // The seed is on screen from this render: the frame's skeleton or the previous month's
         // dimmed card gives way to this month's. Same batch as the setters above.
         setSeeded(loaded)
