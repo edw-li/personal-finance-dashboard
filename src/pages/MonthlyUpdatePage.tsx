@@ -34,12 +34,22 @@ import {
   type FlowsDraft,
 } from '../components/monthly/drafts'
 import {
+  balancesLine,
   balancesPartName,
+  beyondBanner,
+  confirmBanner,
   dayOf,
+  earlyBanner,
   flowsPartName,
+  inProgressSentence,
+  metaOf,
   monthNameOf,
+  monthPhase,
+  notBegunSentence,
   partialBanner,
+  recordedEarly,
   reviewSaveNote,
+  type BalancesMeta,
 } from '../components/monthly/monthlyCopy'
 import { balancesKey, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
 import InfoHint from '../components/InfoHint'
@@ -53,6 +63,7 @@ import type {
   CategoryOut,
   CoverageOut,
   HouseholdOut,
+  MonthBalances,
   MonthUpsertResult,
   SpendingMatrix,
   SpendingMonthUpsert,
@@ -289,6 +300,15 @@ export default function MonthlyUpdatePage() {
   // the "of {budget}" subtext's source; advice, never a gate (spec §4.1).
   const [monthBudgets, setMonthBudgets] = useState<Record<number, string>>({})
   const [monthExisted, setMonthExisted] = useState(false)
+  // The month's snapshot as the server dates it (2026-09-23 spec §K2, §M4): read at load and again
+  // after each save, it drives the "Balances as of …" line, the early-balances Confirm and banner,
+  // and the close gate's provisional check. Server-derived — never part of a draft.
+  const [balancesMeta, setBalancesMeta] = useState<BalancesMeta>({
+    exists: false,
+    recorded_on: null,
+    as_of: null,
+    provisional: false,
+  })
   // /coverage — the shared "which months exist" feed (the scope row reads the same one and the
   // api client dedupes the in-flight GET). It replaces the full monthly timeseries the wizard
   // used to download only to learn which months have balances (2026-09-13 polish spec §9).
@@ -499,6 +519,7 @@ export default function MonthlyUpdatePage() {
         setAccounts(visibleAccounts)
         setCategories(categoryList.filter((c) => c.is_active))
         setMonthExisted(thisMonth.exists)
+        setBalancesMeta(metaOf(thisMonth))
         setHadNetPay(spendMonth.net_pay !== null)
         setStoredCategories(new Set(spendMonth.amounts.map((a) => a.category_id)))
         setHadSpending(
@@ -851,12 +872,20 @@ export default function MonthlyUpdatePage() {
     setCoverageNonce((n) => n + 1)
   }
 
-  // After a save the wizard re-reads /coverage itself, so what it says is due — the partial banner,
-  // the Confirm, "Next" — follows the server's word (a Confirm or a post-month save completes a
-  // month). It runs beside the scope row's own re-read, and the api client joins the two GETs.
-  const refreshCoverage = async (loaded: LoadedMonth): Promise<CoverageOut | null> => {
-    const fresh = await fetchCoverage().catch((): CoverageOut | null => null)
-    if (fresh !== null && loadedMonth.current === loaded) setCoverage(fresh)
+  // After a save the wizard re-reads what the server now says (spec §M1, §M4): /coverage, so what is
+  // due — the partial banner, the Confirm, "Next" — follows the server's word; and, when balances
+  // went out, the month's snapshot dates, which the server stamped (a Confirm turns "recorded early,
+  // on Sep 22" into "recorded Oct 1"). The /coverage read runs beside the scope row's own, and the
+  // api client joins the two GETs.
+  const refreshAfterSave = async (loaded: LoadedMonth, sentBalances: boolean): Promise<CoverageOut | null> => {
+    const [fresh, thisMonth] = await Promise.all([
+      fetchCoverage().catch((): CoverageOut | null => null),
+      sentBalances ? fetchMonthBalances(loaded.month).catch((): MonthBalances | null => null) : null,
+    ])
+    if (loadedMonth.current === loaded) {
+      if (fresh !== null) setCoverage(fresh)
+      if (thisMonth !== null) setBalancesMeta(metaOf(thisMonth))
+    }
     return fresh
   }
 
@@ -961,7 +990,7 @@ export default function MonthlyUpdatePage() {
       }
       // Coverage moved: the scope row re-reads it, and so does the wizard.
       setCoverageNonce((n) => n + 1)
-      void refreshCoverage(loaded)
+      void refreshAfterSave(loaded, sendBalances)
       // The Confirm IS the spending tick (the same stored flag): the Review's box shows it.
       if (kind === 'confirm-spending') {
         setReviewConfirmations((current) => ({ ...current, spending: confirmationInputs.spending }))
@@ -1170,10 +1199,24 @@ export default function MonthlyUpdatePage() {
   // confirmed complete. The banner says so; the Confirm settles it (spec §M1).
   const partial = monthFlows?.spending === 'partial'
 
+  // Where this month sits against the server's month (spec §M3): balances open early for next
+  // month only; a month beyond it saves nothing; spending opens once its month has begun.
+  const phase = monthPhase(month)
+  const notBegun = phase === 'next' || phase === 'beyond'
+  // Balances recorded before their 1st, once that 1st has arrived: a save now makes them final
+  // (K4), so an unchanged save IS the Confirm (spec §M4). A legacy month is never restamped (K4),
+  // so it is never offered one.
+  const confirmable =
+    recordedEarly(month, balancesMeta) &&
+    review?.state !== 'unreviewed_history' &&
+    (phase === 'past' || phase === 'current')
+
   // The Balances step's two actions (spec §M1). Its Save is on while the part differs from what
-  // the server holds — or while the month has no snapshot at all: the pre-fill is a proposal the
-  // user may record as it stands.
-  const balancesSavable = balancesDirty || !monthExisted
+  // the server holds, while the month has no snapshot at all (the pre-fill is a proposal the user
+  // may record as it stands), or while its early balances await the Confirm — never for a month
+  // beyond next month.
+  const balancesSavable = phase !== 'beyond' && (balancesDirty || !monthExisted || confirmable)
+  const balancesAction = confirmable && !balancesDirty ? `Confirm ${balancesPartName(month)}` : `Save ${balancesPartName(month)}`
   // "Next" leads to what is due (spec §M1): on the current month's Balances step, while an ended
   // month's spending & take-home are due, the newest such month — else within the month.
   const dueFlows = month === currentMonthIso() ? (time?.flows_due[0] ?? null) : null
@@ -1182,13 +1225,16 @@ export default function MonthlyUpdatePage() {
       ? { label: `Next: ${flowsPartName(dueFlows.month)}`, go: () => goTo(dueFlows.month, 'spending') }
       : { label: `Next: ${monthNameOf(month)} spending`, go: () => setStep('spending') }
 
-  // The ribbon anchors one month PAST the latest covered month once the current month
-  // is filled: chips end at the anchor, so otherwise "add next month" is impossible
-  // until the calendar rolls over (the sheet's next-empty-row affordance, ported).
+  // The ribbon ends at the current snapshot (2026-09-23 spec §M3, §K2): the current month, or next
+  // month once its balances are recorded early — never further, so a month two ahead is neither
+  // offered nor a chip (the old anchor, one past the latest covered month, offered "Start Nov" and
+  // then the month after). The month on screen joins it only when it IS next month, the one month
+  // that opens early, so "Record {Nov 1} balances early" lands on a chip.
   const current = currentMonthIso()
-  const latestCovered = [...coveredMonths].sort().at(-1)
-  const nextEntryMonth = latestCovered === undefined ? current : addMonths(latestCovered, 1)
-  const anchor = nextEntryMonth > current ? nextEntryMonth : current
+  const nextMonth = addMonths(current, 1)
+  const anchor = [current, time?.current_snapshot?.month ?? current, month === nextMonth ? month : current]
+    .sort()
+    .at(-1) as string
 
   // The balance grid's outer grouping. ONE person (or a household endpoint that failed)
   // means one unlabelled section holding every account — byte-identical to the pre-owner
@@ -1385,9 +1431,12 @@ export default function MonthlyUpdatePage() {
               month={{ mode: 'edit', anchor, selected: month, onSelect: selectMonth }}
               revalidate={coverageNonce}
             />
-            {!hasBalances(anchor) && month !== anchor && (
-              <button className="button" onClick={() => selectMonth(anchor)}>
-                <CalendarPlus size={15} /> Start {formatMonth(anchor)}
+            {/* "Start {month}" is gone (spec §M3): the one month that opens ahead of time is next
+                month, for its balances, and only while it has none. Shown once /coverage has
+                answered — before that, "none" is not known. */}
+            {coverage !== null && !hasBalances(nextMonth) && month !== nextMonth && (
+              <button className="button" onClick={() => goTo(nextMonth, 'balances')}>
+                <CalendarPlus size={15} /> Record {dayOf(nextMonth)} balances early
               </button>
             )}
           </>
@@ -1492,9 +1541,30 @@ export default function MonthlyUpdatePage() {
             }
           >
             <h2 className="eyebrow">
-              {monthExisted ? 'Edit balances' : 'Enter balances (pre-filled from last month)'}
-              <InfoHint text="Every account&apos;s balance for the month, pre-filled from the prior month; components are tracked inside their parent." />
+              {balancesPartName(month)}
+              <InfoHint text="Every account&apos;s balance on this 1st, pre-filled from the 1st before; components are tracked inside their parent. Saving them never touches the month&apos;s spending or take-home." />
             </h2>
+            {/* The Recorded-on box's successor (2026-09-23 spec §M4): which day the balances
+                describe and when they were recorded — the server stamps it, never the wizard. */}
+            <p className="balances-asof">
+              {balancesLine(month, balancesMeta)}
+              {!monthExisted && prevNetWorth !== null && ` — pre-filled from ${dayOf(addMonths(month, -1))}`}
+            </p>
+            {phase === 'beyond' && (
+              <p className="part-note part-note-warn" role="status">
+                {beyondBanner(month)}
+              </p>
+            )}
+            {phase === 'next' && (
+              <p className="part-note" role="status">
+                {earlyBanner(month)}
+              </p>
+            )}
+            {confirmable && balancesMeta.recorded_on !== null && (
+              <p className="part-note part-note-warn" role="status">
+                {confirmBanner(month, balancesMeta.recorded_on)}
+              </p>
+            )}
             <div className="meta-row">
               <label>
                 Notes
@@ -1504,6 +1574,7 @@ export default function MonthlyUpdatePage() {
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="optional"
+                  disabled={phase === 'beyond'}
                 />
               </label>
             </div>
@@ -1525,9 +1596,10 @@ export default function MonthlyUpdatePage() {
               <thead>
                 <tr>
                   <th>Account</th>
-                  <th className="num entry-ref">Last month</th>
-                  <th className="num">This month</th>
-                  <th className="num entry-delta">Δ</th>
+                  {/* Dated, not relative (spec §M4): the 1st before and this 1st. */}
+                  <th className="num entry-ref">{dayOf(addMonths(month, -1))}</th>
+                  <th className="num">{dayOf(month)}</th>
+                  <th className="num entry-delta">Δ since {dayOf(addMonths(month, -1))}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1616,6 +1688,9 @@ export default function MonthlyUpdatePage() {
                                             }`.trim() || undefined
                                           }
                                           autoFocus={account.id === firstBalanceId}
+                                          // A month beyond next month takes no balances yet
+                                          // (2026-09-23 spec §M3) — its banner says when.
+                                          disabled={phase === 'beyond'}
                                           value={value}
                                           onValueChange={(next) =>
                                             // Spec §5: a component's keystroke IS its
@@ -1637,6 +1712,7 @@ export default function MonthlyUpdatePage() {
                                                 type="button"
                                                 className="button"
                                                 aria-label={`Flip sign on ${account.name}`}
+                                                disabled={phase === 'beyond'}
                                                 onClick={() => flipSign(account.id)}
                                               >
                                                 Flip sign
@@ -1722,7 +1798,8 @@ export default function MonthlyUpdatePage() {
                 <span className={preview.delta >= 0 ? 'delta-positive' : 'delta-negative'}>
                   {/* Glyph + color, never color alone (Global visual rule; StatTile's pattern). */}
                   <span aria-hidden="true">{preview.delta >= 0 ? '▲ ' : '▼ '}</span>
-                  {formatCurrency(preview.delta)} vs prior month
+                  {/* Named by the day it compares with, like the Δ column (spec §M4). */}
+                  {formatCurrency(preview.delta)} since {dayOf(addMonths(month, -1))}
                 </span>
               )}
             </div>
@@ -1742,7 +1819,7 @@ export default function MonthlyUpdatePage() {
                   disabled={saving || loading || review === null || accounts.length === 0 || !balancesValid || !balancesSavable}
                   onClick={() => void save('balances')}
                 >
-                  {saving ? 'Saving…' : `Save ${balancesPartName(month)}`}
+                  {saving ? 'Saving…' : balancesAction}
                 </button>
               </div>
             </div>
@@ -1763,9 +1840,21 @@ export default function MonthlyUpdatePage() {
             }
           >
             <h2 className="eyebrow">
-              Spending & take-home
-              <InfoHint text="The month&apos;s spend per category plus the household&apos;s take-home pay — a blank take-home skips the cashflow row." />
+              {flowsPartName(month)}
+              <InfoHint text="The month&apos;s spend per category plus the household&apos;s take-home pay — a blank take-home skips the cashflow row. Saving them never creates or changes the month&apos;s balances." />
             </h2>
+            {/* When this month's spending can be entered (2026-09-23 spec §M3): once it has begun,
+                and while it runs what is saved is kept as a partial month. */}
+            {notBegun && (
+              <p className="part-note" role="status">
+                {notBegunSentence(month)}
+              </p>
+            )}
+            {phase === 'current' && (
+              <p className="part-note" role="status">
+                {inProgressSentence(month)}
+              </p>
+            )}
             {partial && (
               // Above the table while the month is partly entered (spec §M1): a to-do, not an
               // error — the two ways out are the save and the Confirm below.
@@ -1779,6 +1868,7 @@ export default function MonthlyUpdatePage() {
                 <AmountInput
                   className={netPay.trim() === '' || isAmount(netPay) ? undefined : 'invalid'}
                   autoFocus
+                  disabled={notBegun}
                   value={netPay}
                   onValueChange={setNetPay}
                   placeholder="leave blank to skip"
@@ -1792,7 +1882,7 @@ export default function MonthlyUpdatePage() {
                 <tr>
                   <th>Category</th>
                   <th className="num entry-ref">Typical (3-mo median)</th>
-                  <th className="num">This month</th>
+                  <th className="num">{monthNameOf(month)}</th>
                   <th className="num entry-delta">Δ vs typical</th>
                 </tr>
               </thead>
@@ -1828,6 +1918,7 @@ export default function MonthlyUpdatePage() {
                               flashIds.has(`amt-${category.id}`) ? ' pasted-flash' : ''
                             }`.trim() || undefined
                           }
+                          disabled={notBegun}
                           value={value}
                           onValueChange={(next) =>
                             setAmounts((cur) => ({ ...cur, [category.id]: next }))
@@ -1869,6 +1960,7 @@ export default function MonthlyUpdatePage() {
               <input
                 type="checkbox"
                 checked={recordZero}
+                disabled={notBegun}
                 aria-describedby="record-zero-hint"
                 onChange={(e) => setRecordZero(e.target.checked)}
               />
@@ -1919,7 +2011,7 @@ export default function MonthlyUpdatePage() {
                 <button
                   className="button button-primary"
                   data-entry-primary=""
-                  disabled={saving || loading || review === null || !amountsValid || !flowsDirty}
+                  disabled={saving || loading || review === null || !amountsValid || !flowsDirty || notBegun}
                   onClick={() => void save('spending')}
                 >
                   {saving ? 'Saving…' : `Save ${monthNameOf(month)} spending`}
@@ -2030,7 +2122,14 @@ export default function MonthlyUpdatePage() {
               </label>)}
               {month === currentMonthIso() && <label><input type="checkbox" checked={finalCurrentMonth} onChange={e => setFinalCurrentMonth(e.target.checked)} />These figures are final even though this month is still in progress.</label>}
             </fieldset>
-            {month > currentMonthIso() && <p className="drill-hint">Future months can be saved as drafts. Close this month once the period arrives and the figures are final.</p>}
+            {/* A month that has not begun (spec §M3): next month's balances may be recorded early,
+                nothing further ahead saves at all, and neither can close before its month. */}
+            {phase === 'next' && (
+              <p className="drill-hint">
+                {`${monthNameOf(month)} has not begun — its balances can be recorded early. Close it once the month has arrived and the figures are final.`}
+              </p>
+            )}
+            {phase === 'beyond' && <p className="drill-hint">{beyondBanner(month)}</p>}
             {/* Said BEFORE the click, not only in the receipt after it: a Review save sends only
                 the parts that changed (spec §M1), and a user who expected the other part to be
                 written deserves to learn otherwise while they can still act on it. */}
@@ -2055,6 +2154,7 @@ export default function MonthlyUpdatePage() {
                   className="button"
                   disabled={
                     saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid
+                    || phase === 'beyond'
                   }
                   onClick={() => void save('review')}
                 >

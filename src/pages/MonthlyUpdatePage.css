@@ -305,3 +305,5 @@
   font-size: 0.85rem;
 }
 .part-note-warn { border-left-color: var(--warn); }
+/* The Balances heading's read-only date line (spec §M4) — the Recorded-on box's successor. */
+.balances-asof { margin: -0.4rem 0 0.9rem; color: var(--muted); font-size: 0.85rem; }

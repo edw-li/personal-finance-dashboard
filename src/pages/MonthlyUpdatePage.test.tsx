@@ -49,7 +49,7 @@ import { clearSnapshots } from '../api/snapshotCache'
 import { formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import { setServerToday } from '../utils/productToday'
-import { TIME_OCT_3, septemberFlows } from '../testing/timeStatusFixtures'
+import { TIME_OCT_3, TIME_SEP_23, septemberFlows } from '../testing/timeStatusFixtures'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
@@ -363,10 +363,8 @@ it('keeps a draft per month across ribbon switches', async () => {
   expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1600.00')
 })
 
-it('offers starting the month after the latest covered month', async () => {
-  // Date-independent: months derive from the SAME clock the component reads, so this
-  // holds whenever the run happens. Coverage through the current month = the state
-  // where the old current-month-anchored ribbon offered no way to add a new month.
+it(`offers next month's balances early — never "Start" a month further on — pre-filled from this month (2026-09-23 spec §M3)`, async () => {
+  // Months derive from the SAME (server) day the component reads, pinned in beforeEach.
   const current = currentMonthIso()
   const next = addMonths(current, 1)
   vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
@@ -382,13 +380,12 @@ it('offers starting the month after the latest covered month', async () => {
       <MonthlyUpdatePage />
     </MemoryRouter>,
   )
-  await screen.findByText(/edit balances/i) // current month exists -> edit mode
+  await screen.findByText(`Balances as of ${formatMonth(current).slice(0, 3)} 1 · recorded date unknown`)
+  expect(screen.queryByRole('button', { name: /^Start / })).toBeNull()
 
-  fireEvent.click(
-    await screen.findByRole('button', { name: new RegExp(`start ${formatMonth(next)}`, 'i') }),
-  )
-  // New month: create mode, pre-filled from the just-covered current month.
-  await screen.findByText(/enter balances \(pre-filled from last month\)/i)
+  fireEvent.click(await screen.findByRole('button', { name: `Record ${formatMonth(next).slice(0, 3)} 1 balances early` }))
+  // New month: not recorded yet, pre-filled from the just-covered current month.
+  await screen.findByText(/not recorded yet — pre-filled from/)
   expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
   expect(netWorthApi.fetchMonthBalances).toHaveBeenCalledWith(next)
 })
@@ -538,7 +535,7 @@ it('reads a conserving transfer as a flat zero, not as signed dust', async () =>
   const footer = screen.getByRole('status', { name: /live totals/i })
   expect(footer.textContent).not.toContain('-$0.00')
   // The glyph reads the same rounded number, so ▲/▼ and the text can never disagree.
-  expect(within(footer).getByText('$0.00 vs prior month')).toBeDefined()
+  expect(within(footer).getByText('$0.00 since Jul 1')).toBeDefined()
 })
 
 it('keeps the live net-worth footer in sync while entering balances', async () => {
@@ -549,7 +546,7 @@ it('keeps the live net-worth footer in sync while entering balances', async () =
   const footer = screen.getByRole('status', { name: /live totals/i })
   expect(within(footer).getByText('$2,000.00')).toBeDefined()
   // The footer's own Δ against the prior month's 1,500 — the number AND its tone.
-  const delta = within(footer).getByText('$500.00 vs prior month')
+  const delta = within(footer).getByText('$500.00 since Jul 1')
   expect(delta.className).toContain('delta-positive')
 })
 
@@ -2913,5 +2910,165 @@ describe('Next leads to what is due (2026-09-23 spec §M1)', () => {
     partialSeptember()
     renderPage('/update?month=2026-09-01&step=balances')
     expect(await screen.findByRole('button', { name: 'Next: September spending' })).toBeTruthy()
+  })
+})
+
+describe('which months can be opened (2026-09-23 spec §M3)', () => {
+  it('offers Record Nov 1 balances early only while next month has no snapshot, opening it with the early banner', async () => {
+    setServerToday('2026-10-03')
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-09-01', '2026-10-01'], spending: [], net_pay: [], time: { ...TIME_OCT_3, flows_due: [] },
+    })
+    renderPage('/update?month=2026-10-01')
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Nov 1 balances early' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-11-01&step=balances'),
+    )
+    expect(
+      await screen.findByText(
+        'These are Nov 1 balances recorded before Nov 1 — they stay provisional until you save them again on or after Nov 1.',
+      ),
+    ).toBeTruthy()
+    // The early month is on the ribbon while it is on screen — and nothing past it ever is.
+    expect(screen.getByRole('button', { name: /^Nov 2026/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Dec 2026/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /balances early/ })).toBeNull()
+  })
+
+  it('never offers two months ahead: the ribbon ends at the current snapshot', async () => {
+    setServerToday('2026-09-23')
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-09-01', '2026-10-01'], spending: [], net_pay: [], time: TIME_SEP_23,
+    })
+    renderPage('/update?month=2026-09-01')
+    await screen.findByLabelText('Checking')
+    expect(screen.getByRole('button', { name: /^Oct 2026/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Nov 2026/ })).toBeNull()
+    // Next month (October) already has its early snapshot: nothing to offer.
+    expect(screen.queryByRole('button', { name: /balances early/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Start / })).toBeNull()
+  })
+
+  it('a month beyond next month says when it opens and saves nothing', async () => {
+    setServerToday('2026-10-03')
+    renderPage('/update?month=2026-12-01')
+    expect(await screen.findByText('Dec 1 balances can be recorded from Nov 1 (early) or on Dec 1.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Save Dec 1 balances' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Checking') as HTMLInputElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
+    expect(await screen.findByText('December spending can be entered once December begins.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Save December spending' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Food') as HTMLInputElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+    expect((await screen.findByRole('button', { name: 'Save progress' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it("keeps next month's spending closed until it begins", async () => {
+    setServerToday('2026-10-03')
+    renderPage('/update?month=2026-11-01&step=spending')
+    expect(await screen.findByText('November spending can be entered once November begins.')).toBeTruthy()
+    expect((screen.getByLabelText('Household take-home') as HTMLInputElement).disabled).toBe(true)
+  })
+
+  it("allows the current month's spending with the in-progress note", async () => {
+    setServerToday('2026-10-03')
+    renderPage('/update?month=2026-10-01&step=spending')
+    expect(
+      await screen.findByText(
+        'October is in progress — its spending and take-home are due once it ends. What you save now is kept as a partial month.',
+      ),
+    ).toBeTruthy()
+    expect((screen.getByLabelText('Food') as HTMLInputElement).disabled).toBe(false)
+  })
+})
+
+describe('dated balances (2026-09-23 spec §M4)', () => {
+  it('reads the balances line under the heading and dates the columns', async () => {
+    partialSeptember()
+    renderPage('/update?month=2026-10-01')
+    expect(await screen.findByText('Balances as of Sep 22 · provisional for Oct 1 — recorded early, on Sep 22')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /^Oct 1 balances/ })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Sep 1' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Oct 1' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Δ since Sep 1' })).toBeTruthy()
+  })
+
+  it('a month with no snapshot reads "not recorded yet" and says where its figures come from', async () => {
+    renderWizard()
+    expect(await screen.findByText('Balances as of Aug 1 · not recorded yet — pre-filled from Jul 1')).toBeTruthy()
+  })
+
+  it('Confirm Oct 1 balances: early, on/after its date, nothing dirty; it sends the unchanged balances and the line then reads recorded today', async () => {
+    partialSeptember()
+    let octRecorded = '2026-09-22'
+    vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+      month,
+      exists: true,
+      notes: null,
+      balances: [{ account_id: 1, balance: '1500.00' }],
+      recorded_on: month === '2026-10-01' ? octRecorded : month,
+      as_of: month === '2026-10-01' && octRecorded < month ? octRecorded : month,
+      provisional: month === '2026-10-01' && octRecorded < month,
+    }))
+    renderWizardAt('/update?month=2026-10-01')
+    expect(
+      await screen.findByText(
+        'These Oct 1 balances were recorded early, on Sep 22. Update any account that changed and save — saving on or after Oct 1 makes them final.',
+      ),
+    ).toBeTruthy()
+    const confirm = screen.getByRole('button', { name: 'Confirm Oct 1 balances' })
+    octRecorded = '2026-10-03'
+    fireEvent.click(confirm)
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+    expect(sentBody().balances).toEqual({ notes: null, balances: [{ account_id: 1, balance: '1500.00' }] })
+    expect(await screen.findByText('Balances as of Oct 1 · recorded Oct 3')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Oct 1 balances confirmed' })).toBeTruthy()
+    expect(screen.queryByText(/were recorded early, on Sep 22/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Save Oct 1 balances' })).toBeTruthy()
+  })
+
+  it('an edit turns the Confirm back into Save', async () => {
+    partialSeptember()
+    renderPage('/update?month=2026-10-01')
+    await screen.findByRole('button', { name: 'Confirm Oct 1 balances' })
+    fireEvent.change(screen.getByLabelText('Checking'), { target: { value: '1600.00' } })
+    expect(screen.getByRole('button', { name: 'Save Oct 1 balances' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Confirm Oct 1 balances' })).toBeNull()
+  })
+
+  it("offers no Confirm before the 1st — next month's early balances save again as provisional", async () => {
+    setServerToday('2026-09-25')
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-09-01', '2026-10-01'], spending: [], net_pay: [], time: { ...TIME_SEP_23, today: '2026-09-25' },
+    })
+    let recorded = '2026-09-22'
+    vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+      month,
+      exists: true,
+      notes: null,
+      balances: [{ account_id: 1, balance: '1500.00' }],
+      recorded_on: month === '2026-10-01' ? recorded : month,
+      as_of: month === '2026-10-01' ? recorded : month,
+      provisional: month === '2026-10-01',
+    }))
+    renderPage('/update?month=2026-10-01')
+    await screen.findByText('Balances as of Sep 22 · provisional for Oct 1 — recorded early, on Sep 22')
+    expect(screen.queryByRole('button', { name: 'Confirm Oct 1 balances' })).toBeNull()
+    expect((screen.getByRole('button', { name: 'Save Oct 1 balances' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Checking'), { target: { value: '1600.00' } })
+    recorded = '2026-09-25'
+    fireEvent.click(screen.getByRole('button', { name: 'Save Oct 1 balances' }))
+    expect(await screen.findByText('Balances as of Sep 25 · provisional for Oct 1 — recorded early, on Sep 25')).toBeTruthy()
+  })
+
+  it('a legacy month recorded early is never offered the Confirm (K4 never restamps it)', async () => {
+    partialSeptember()
+    vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async (month) => ({
+      ...reviewFixture(month), state: 'unreviewed_history',
+    }))
+    renderPage('/update?month=2026-10-01')
+    await screen.findByText('Balances as of Sep 22 · provisional for Oct 1 — recorded early, on Sep 22')
+    expect(screen.queryByRole('button', { name: 'Confirm Oct 1 balances' })).toBeNull()
+    expect(screen.queryByText(/makes them final/)).toBeNull()
   })
 })
