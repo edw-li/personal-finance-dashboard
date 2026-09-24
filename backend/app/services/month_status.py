@@ -54,7 +54,7 @@ from app.models import AppSetting, ChangeLog
 from app.schemas.coverage import BalancesPartOut, FlowsPartOut, TimeStatusOut
 from app.services import clock
 from app.services.changelog import undone_by
-from app.services.month_review import ReviewBook, month_shift
+from app.services.month_review import ReviewBook, before_adoption, month_shift
 from app.services.snapshot_state import SnapshotState, current_and_previous, state_out
 
 SpendingState = Literal["missing", "partial", "entered"]
@@ -134,13 +134,14 @@ class MonthStatus:
     def current_month(self) -> date:
         return self.today.replace(day=1)
 
-    def is_legacy(self, month: date) -> bool:
-        """Before the adoption month: history the review feature adopted."""
-        return self.adopted_on is not None and month < self.adopted_on.replace(day=1)
+    def before_adoption(self, month: date) -> bool:
+        """Before the adoption month: history the review feature adopted (whatever its review
+        state since — legacy, closed or changed). month_review.before_adoption's definition."""
+        return before_adoption(month, self.adopted_on)
 
     def certified(self, month: date) -> bool:
         """Clause (a): the user already vouched for this month's spending."""
-        return month in self.closed or self.is_legacy(month)
+        return month in self.closed or self.before_adoption(month)
 
     def candidates(self) -> list[date]:
         """The months the change log must be asked about: spending present, not certified. The
@@ -230,7 +231,7 @@ class MonthStatus:
                 for state in reversed(self.snapshots)
                 if state.month < self.current_month
                 and state.provisional
-                and not self.is_legacy(state.month)
+                and not self.before_adoption(state.month)
             ],
             last_complete_month=self.last_complete_month,
         )

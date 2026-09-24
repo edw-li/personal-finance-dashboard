@@ -19,24 +19,25 @@ ribbon, the attention list and the Health card can never disagree about what "en
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields
 from datetime import date
+from functools import cached_property
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MonthlyCashflow, MonthlySpending, NetWorthSnapshot
+from app.models import MonthlyCashflow, MonthlySpending
 from app.schemas.coverage import TimeStatusOut
 from app.services import clock
 from app.services.month_review import ReviewBook
 from app.services.month_status import MonthStatus, load_month_status, overdue_through
 from app.services.read_cache import cached_review_book
-from app.services.snapshot_state import snapshot_state
+from app.services.snapshot_state import load_snapshot_states
 
 
 @dataclass(frozen=True)
-class Coverage:
-    """Every list ascending, first-of-month dates, one entry per month."""
+class CoverageLists:
+    """What `classify` answers: every list ascending, first-of-month dates, one per month."""
 
     balances: list[date]
     entered: list[date]
@@ -50,11 +51,20 @@ class Coverage:
     net_pay_missing: list[date]
     # Take-home saved with no spending rows at all: entered, but nothing to average.
     net_pay_without_spending: list[date]
-    # The monthly update's two parts, due and overdue (2026-09-23 spec §K3): the wire's `time`
-    # (None on an empty book) and the service object behind it — lane T's reminder and health
-    # checks ask it per month (`status.spending_state(month)`, the thresholds).
-    time: TimeStatusOut | None = None
-    status: MonthStatus | None = None
+
+
+@dataclass(frozen=True)
+class Coverage(CoverageLists):
+    """The lists plus the monthly update's two parts, due and overdue (2026-09-23 spec §K3):
+    `status` is the service object — lane T's reminder and health checks ask it per month
+    (`status.spending_state(month)`, the thresholds) — and `time` its wire form (None on an
+    empty book). load_coverage always builds both."""
+
+    status: MonthStatus
+
+    @cached_property
+    def time(self) -> TimeStatusOut | None:
+        return self.status.time()
 
 
 def _window(first: date, last: date | None) -> list[date]:
@@ -74,7 +84,7 @@ def classify(
     confirmed_zero: Sequence[date] = (),
     *,
     overdue_through: date | None,
-) -> Coverage:
+) -> CoverageLists:
     """`spending` maps every month WITH rows to "does it carry a non-zero amount".
 
     `overdue_through` — month_status.overdue_through(today, reminder day) — ends the MISSING
@@ -83,7 +93,7 @@ def classify(
     confirmed = set(confirmed_zero)
     months = sorted(balances)
     window = _window(months[0], overdue_through) if months else []
-    return Coverage(
+    return CoverageLists(
         balances=months,
         entered=sorted({month for month, nonzero in spending.items() if nonzero} | pay | confirmed),
         empty=sorted(
@@ -113,13 +123,7 @@ async def load_coverage(
     then its day is the day: one request reads the product clock once, so the time status and
     the book it stands on never straddle midnight (review minor 7)."""
     today = today or (reviews.today if reviews else clock.product_today())
-    snapshots = (
-        await db.execute(
-            select(
-                NetWorthSnapshot.id, NetWorthSnapshot.month, NetWorthSnapshot.recorded_on
-            ).order_by(NetWorthSnapshot.month)
-        )
-    ).all()
+    snapshots = await load_snapshot_states(db, today)  # the months and their dates, one query
     spend_rows = (
         await db.execute(
             select(MonthlySpending.month, func.max(func.abs(MonthlySpending.amount))).group_by(
@@ -140,17 +144,19 @@ async def load_coverage(
         db,
         today=today,
         reviews=reviews,
-        snapshots=[snapshot_state(row.id, row.month, row.recorded_on, today) for row in snapshots],
+        snapshots=snapshots,
         # K3's "spending": a non-zero amount or a confirmed zero — never take-home.
         spending={month for month, has_amount in nonzero.items() if has_amount} | set(confirmed),
         take_home=net_pay,
         empty_book=not (snapshots or spend_rows or net_pay),
     )
-    found = classify(
-        [row.month for row in snapshots],
+    lists = classify(
+        [state.month for state in snapshots],
         nonzero,
         net_pay,
         confirmed,
         overdue_through=overdue_through(today, status.reminder_day),
     )
-    return replace(found, time=status.time(), status=status)
+    return Coverage(
+        **{field.name: getattr(lists, field.name) for field in fields(lists)}, status=status
+    )
