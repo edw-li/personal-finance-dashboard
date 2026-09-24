@@ -47,8 +47,13 @@ describe('the capped table box (tableScroll.css)', () => {
     )
   })
 
-  it('drops the edge mask while the box has keyboard focus, so its own ring shows', () => {
-    expect(CSS).toContain('.table-scroll:focus-visible { mask-image: none !important; }')
+  // …and while anything INSIDE has it: a sideways Tab scrolls a partly hidden control only flush with
+  // the box's edge, so it parked under the right fade — the mask stayed, as only the control matched
+  // :focus-visible (final review; all 28px of a Holdings sort header in Edge).
+  it('drops the edge mask while the box, or anything in it, has keyboard focus', () => {
+    expect(CSS).toContain(
+      '.table-scroll:focus-visible, .table-scroll:has(:focus-visible) { mask-image: none !important; }',
+    )
   })
 
   // index.css's inset ring (0,3,0) drew the ring ACROSS the label of a text button with no padding of
@@ -92,6 +97,16 @@ describe('the capped table box (tableScroll.css)', () => {
     )
   })
 
+  // Forced colours drop box-shadows, the totals row's top hairline with them, so a pinned row sliced
+  // the rows under it with no edge (final review, Edge). A real border in a system colour survives;
+  // at rest the last body row's own bottom border would touch it, so that one steps aside (one line).
+  // One string: every rule inside the one forced-colours block.
+  it('keeps the pinned totals row its top edge in forced colours — one line at rest too', () => {
+    expect(CSS).toContain(
+      '@media (forced-colors: active) { .table-scroll { --table-fade-h: 0px; } .table-scroll::after { display: none; } .table-scroll > table > tfoot :is(td, th) { border-top: 1px solid CanvasText; } .table-scroll > table:has(> tfoot) > tbody:last-of-type > tr:last-child > :is(td, th) { border-bottom: 0; } }',
+    )
+  })
+
   it('fades the foot only while rows hide below and no totals row marks the edge', () => {
     expect(CSS).toMatch(/\.table-scroll::after \{[^}]*position: sticky;[^}]*bottom: 0;[^}]*opacity: 0;/)
     // One height for the fade, declared on the box — the scroll margin above and revealInBox read it.
@@ -105,7 +120,7 @@ describe('the capped table box (tableScroll.css)', () => {
     )
     // Forced colours hide the fade, so nothing reserves its height there (the rows' margin, revealInBox).
     expect(CSS).toContain(
-      '@media (forced-colors: active) { .table-scroll { --table-fade-h: 0px; } .table-scroll::after { display: none; } }',
+      '@media (forced-colors: active) { .table-scroll { --table-fade-h: 0px; } .table-scroll::after { display: none; }',
     )
   })
 

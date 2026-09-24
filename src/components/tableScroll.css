@@ -71,9 +71,14 @@
 /* The box's own focus ring over its edge mask: a mask clips everything outside the border box, the
    outline included, so the ring vanished whenever a sideways edge was masked (panels.css) — a tab
    stop with no visible focus (WCAG 2.4.7). The fade is only a hint, worth less than the ring while
-   the box has focus. !important: panels.css's two-token mask rule is (0,4,0) and may load after this
-   sheet. */
-.table-scroll:focus-visible {
+   the box has focus. The same goes while anything INSIDE has keyboard focus: a sideways Tab scrolls a
+   partly hidden control only flush with the box's edge (the body rows' margins cover the block axis,
+   the pinned rows take none), so a Holdings sort header or a matrix card button parked under the
+   28px right fade — all of it, in Edge — and the mask stayed, as only the control, not the box,
+   matched :focus-visible (final review). A mouse focus keeps the hint. !important: panels.css's
+   two-token mask rule is (0,4,0) and may load after this sheet. */
+.table-scroll:focus-visible,
+.table-scroll:has(:focus-visible) {
   mask-image: none !important;
 }
 
@@ -160,7 +165,11 @@
 }
 
 /* Forced colours drop author backgrounds; a gradient left alone there reads as a smear. With no fade,
-   nothing reserves its height either: the rows' bottom margin and revealInBox read 0. */
+   nothing reserves its height either: the rows' bottom margin and revealInBox read 0. They drop box
+   shadows too — the pinned totals row's top hairline with them, so a pinned row sliced the rows
+   passing under it with no edge (final review, Edge): a real border in a system colour survives. At
+   rest the last body row's own bottom border would sit right on it, a doubled line, so that border
+   steps aside where a totals row follows — the forced twin of the shadow landing on it (above). */
 @media (forced-colors: active) {
   .table-scroll {
     --table-fade-h: 0px;
@@ -168,6 +177,14 @@
 
   .table-scroll::after {
     display: none;
+  }
+
+  .table-scroll > table > tfoot :is(td, th) {
+    border-top: 1px solid CanvasText;
+  }
+
+  .table-scroll > table:has(> tfoot) > tbody:last-of-type > tr:last-child > :is(td, th) {
+    border-bottom: 0;
   }
 }
 

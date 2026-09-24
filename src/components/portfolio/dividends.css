@@ -101,10 +101,11 @@
 }
 
 /* An entry row sits under TWO pinned lines — the column header and its month's line — so a Tab, a
-   keyboard move or a scrollIntoView lands it clear of both (2.5rem is at least one month line in
-   either density). A scroll MARGIN on the entry rows, never scroll padding on the box: padding would
-   count the pinned lines' own toggles as out of view and jump the box whenever one takes focus
-   (TableScroll's review, 485287d0). (0,3,2) outranks tableScroll.css's (0,1,2) tbody margin. */
+   keyboard move or a scrollIntoView lands it clear of both (2.5rem is at least one month line). A
+   scroll MARGIN on the entry rows, never scroll padding on the box: padding would count the pinned
+   lines' own toggles as out of view and jump the box whenever one takes focus (TableScroll's review,
+   485287d0). (0,3,2) outranks tableScroll.css's (0,1,2) tbody margin and its (0,2,2) `tbody [id]`
+   twin. */
 .table-scroll > .dividend-table > tbody > tr:not(.dividend-month-row) * {
   scroll-margin-top: calc(var(--table-head-h, 0px) + 2.5rem);
 }
