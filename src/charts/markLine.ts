@@ -108,20 +108,23 @@ export function afterArea(fromLabel: string, toLabel: string, label: string) {
   }
 }
 
-/** p10/p50/p90 arrival marks on a reference line: MUTED circles, INK border, named labels.
- *  Points sharing a coordinate merge into ONE circle named for both (' · '): two
- *  percentiles arriving in the same month would otherwise stack two circles and two labels
- *  on the same pixel. */
-export function percentileMarks(points: { name: string; label: string; value: number }[]) {
-  const byCoord = new Map<string, { coord: [string, number]; names: string[] }>()
+/** Arrival marks on a reference line (the projection's reach months): MUTED circles, INK border,
+ *  named labels, and — since 2026-09-23 (correctness spec §R7) — a hover that says what each
+ *  mark means (`detail`), so they are no longer `silent`. Points sharing a coordinate merge
+ *  into ONE circle named for both (' · '): two arrivals in the same month would otherwise stack
+ *  two circles and two labels on the same pixel. */
+export function percentileMarks(points: { name: string; label: string; value: number; detail: string }[]) {
+  const byCoord = new Map<string, { coord: [string, number]; names: string[]; details: string[] }>()
   for (const point of points) {
     const key = `${point.label}|${point.value}`
     const seen = byCoord.get(key)
-    if (seen === undefined) byCoord.set(key, { coord: [point.label, point.value], names: [point.name] })
-    else seen.names.push(point.name)
+    if (seen === undefined) byCoord.set(key, { coord: [point.label, point.value], names: [point.name], details: [point.detail] })
+    else {
+      seen.names.push(point.name)
+      seen.details.push(point.detail)
+    }
   }
   return {
-    silent: true as const,
     symbol: 'circle' as const,
     symbolSize: 8,
     itemStyle: { color: MUTED, borderColor: INK, borderWidth: 1 },
@@ -132,9 +135,19 @@ export function percentileMarks(points: { name: string; label: string; value: nu
       fontSize: 11,
       formatter: (p: { name?: string }) => p.name ?? '',
     },
+    // The mark's own hover (the chart's tooltip is axis-triggered, which marks never answer).
+    // ECharts hands a formatter one params object or an array of them.
+    tooltip: {
+      trigger: 'item' as const,
+      formatter: (params: unknown) => {
+        const p = (Array.isArray(params) ? params[0] : params) as { name?: string; data?: { detail?: string } } | undefined
+        return p?.data?.detail ?? p?.name ?? ''
+      },
+    },
     data: [...byCoord.values()].map((entry) => ({
       name: entry.names.join(' · '),
       coord: entry.coord,
+      detail: entry.details.join(' · '),
     })),
   }
 }

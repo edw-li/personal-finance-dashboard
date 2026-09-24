@@ -101,27 +101,32 @@ describe('areas, marks, baselines', () => {
       data: [[{ xAxis: 'Aug 2030' }, { xAxis: 'Aug 2056' }]],
     })
   })
-  it('percentileMarks are MUTED circles with INK borders labelled by name', () => {
-    const marks = percentileMarks([{ name: 'p50', label: 'Aug 2030', value: 1500000 }])
+  it('percentileMarks are MUTED circles with INK borders labelled by name, and say what they mean on hover', () => {
+    const marks = percentileMarks([{ name: 'Half of paths', label: 'Aug 2030', value: 1500000, detail: 'Half of paths reach FI by Aug 2030' }])
     expect(marks).toMatchObject({
-      silent: true, symbol: 'circle', symbolSize: 8,
+      symbol: 'circle', symbolSize: 8,
       itemStyle: { color: MUTED, borderColor: INK, borderWidth: 1 },
-      data: [{ name: 'p50', coord: ['Aug 2030', 1500000] }],
+      data: [{ name: 'Half of paths', coord: ['Aug 2030', 1500000], detail: 'Half of paths reach FI by Aug 2030' }],
     })
-    expect(marks.label.formatter({ name: 'p50' })).toBe('p50')
+    expect(marks.label.formatter({ name: 'Half of paths' })).toBe('Half of paths')
+    // Hoverable now (2026-09-23 correctness spec §R7): no longer silent, an item tooltip each.
+    expect(marks).not.toHaveProperty('silent')
+    expect(marks.tooltip.trigger).toBe('item')
+    expect(marks.tooltip.formatter({ name: 'Half of paths', data: marks.data[0] })).toBe('Half of paths reach FI by Aug 2030')
+    expect(marks.tooltip.formatter([{ name: 'Half of paths', data: marks.data[0] }])).toBe('Half of paths reach FI by Aug 2030')
   })
-  it('merges percentile marks that share a coordinate into one circle', () => {
-    // p10 and p50 arriving in the same month: two circles on one pixel, two labels on top
-    // of each other. One circle, named for both.
+  it('merges marks that share a coordinate into one circle, named — and described — for both', () => {
+    // Two arrivals in the same month: two circles on one pixel, two labels on top of each other.
+    // One circle, named for both.
     expect(
       percentileMarks([
-        { name: 'p10', label: 'Aug 2030', value: 1500000 },
-        { name: 'p50', label: 'Aug 2030', value: 1500000 },
-        { name: 'p90', label: 'Aug 2032', value: 1500000 },
+        { name: '1 in 10 paths', label: 'Aug 2030', value: 1500000, detail: 'a' },
+        { name: 'Half of paths', label: 'Aug 2030', value: 1500000, detail: 'b' },
+        { name: '9 in 10 paths', label: 'Aug 2032', value: 1500000, detail: 'c' },
       ]).data,
     ).toEqual([
-      { name: 'p10 · p50', coord: ['Aug 2030', 1500000] },
-      { name: 'p90', coord: ['Aug 2032', 1500000] },
+      { name: '1 in 10 paths · Half of paths', coord: ['Aug 2030', 1500000], detail: 'a · b' },
+      { name: '9 in 10 paths', coord: ['Aug 2032', 1500000], detail: 'c' },
     ])
   })
   it('zeroLine is the solid MUTED hairline the savings-rate and card-value charts draw', () => {

@@ -4,6 +4,7 @@ import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import { MARK_LINE_LABEL, MARK_LINE_STYLE } from '../../charts/markLine'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
+import { addMonths } from '../../utils/months'
 import type { PolyTrendFit } from './polyTrend'
 import {
   BAND_SERIES,
@@ -12,6 +13,7 @@ import {
   netWorthProjectionCsv,
   netWorthProjectionOption,
   PROJECTION_SERIES,
+  logFloor,
   projectionCsv,
   projectionOption,
 } from './projectionChartOptions'
@@ -51,7 +53,7 @@ function read(option: EChartsOption | null) {
       emphasis?: { disabled: boolean }
       lineStyle: { type?: string; width?: number }
       markArea?: unknown
-      markPoint?: { data: { name: string; coord: [string, number] }[] }
+      markPoint?: { data: { name: string; coord: [string, number]; detail?: string }[] }
       markLine?: {
         silent: boolean
         symbol: string
@@ -228,7 +230,7 @@ describe('projectionOption — F3', () => {
     bands: BANDS,
   }
 
-  it('rules FI and Coast FI on the Projected line beside the retirements, in the shared markLine', () => {
+  it('rules the constant-return FI and Coast FI on the Projected line beside the retirements', () => {
     const option = read(
       projectionOption({
         ...FI,
@@ -237,32 +239,82 @@ describe('projectionOption — F3', () => {
     )
     const projected = option.series.find((s) => s.name === PROJECTION_SERIES[0])!
     // Alex and Coast FI both land on Sep 2026, so they share ONE rule and one label —
-    // two entries would print two labels on the same pixel (charts/markLine.ts).
+    // two entries would print two labels on the same pixel (charts/markLine.ts). The
+    // deterministic crossing survives as the constant-return annotation (2026-09-23 spec §R6).
     expect(projected.markLine?.data).toEqual([
       { xAxis: 'Sep 2026', label: { formatter: 'Alex · Coast FI' } },
-      { xAxis: 'Oct 2026', label: { formatter: 'FI' } },
+      { xAxis: 'Oct 2026', label: { formatter: 'FI at a constant return' } },
     ])
     expect(projected.markLine?.lineStyle).toEqual(MARK_LINE_STYLE)
   })
 
-  it('washes the months after FI and marks the percentile arrivals on the target line', () => {
+  it('marks the reach months on the target line in paths, with a tooltip each', () => {
     const option = read(projectionOption(FI))
-    const projected = option.series.find((s) => s.name === PROJECTION_SERIES[0])!
-    expect(projected.markArea).toMatchObject({
-      data: [[{ xAxis: 'Oct 2026' }, { xAxis: 'Oct 2026' }]],
-      label: { formatter: 'After FI' },
-    })
     const target = option.series.find((s) => s.name === PROJECTION_SERIES[2])!
-    // p90 is null → two marks; each sits ON the target value at its anchored month.
+    // p90 is null → two marks; each sits ON the target value at its anchored month, named in
+    // the reader's words — never "p10/p50/p90" (spec §R6).
     expect(target.markPoint?.data).toEqual([
-      { name: 'p10', coord: ['Sep 2026', 1500000] },
-      { name: 'p50', coord: ['Oct 2026', 1500000] },
+      { name: '1 in 10 paths', coord: ['Sep 2026', 1500000], detail: '1 in 10 paths reach FI by Sep 2026' },
+      { name: 'Half of paths', coord: ['Oct 2026', 1500000], detail: 'Half of paths reach FI by Oct 2026' },
     ])
-    // No FI → no area, no marks, no rules (a stale payload or an unreachable target).
+    const mark = target.markPoint as unknown as { silent?: boolean; tooltip: { trigger: string; formatter: (p: unknown) => string } }
+    expect(mark.silent).toBeUndefined()
+    expect(mark.tooltip.trigger).toBe('item')
+    expect(mark.tooltip.formatter({ name: '1 in 10 paths', data: { detail: '1 in 10 paths reach FI by Sep 2026' } })).toBe('1 in 10 paths reach FI by Sep 2026')
+    // No drawdown → no wash: the old "After FI" wash is gone (spec §R7).
+    expect(option.series.every((s) => s.markArea === undefined)).toBe(true)
+    // No FI → no marks, no rules (a stale payload or an unreachable target).
     const none = read(projectionOption({ ...DATA, fi_month: null, coast_fi_month: null }))
     expect(
       none.series.every((s) => s.markArea === undefined && s.markPoint === undefined && s.markLine === undefined),
     ).toBe(true)
+  })
+
+  it('merges reach marks that land on one month into one mark that names both', () => {
+    const option = read(projectionOption({ ...FI, fi_month_p10: '2026-10-01' }))
+    const target = option.series.find((s) => s.name === PROJECTION_SERIES[2])!
+    expect(target.markPoint?.data).toEqual([
+      {
+        name: '1 in 10 paths · Half of paths',
+        coord: ['Oct 2026', 1500000],
+        detail: '1 in 10 paths reach FI by Oct 2026 · Half of paths reach FI by Oct 2026',
+      },
+    ])
+  })
+
+  it('washes the retired months and rules where withdrawals start, the plan-until year and the 9-in-10 month', () => {
+    const MONTHS = Array.from({ length: 30 }, (_, i) => addMonths('2026-08-01', i))
+    const option = read(
+      projectionOption({
+        ...DATA,
+        months: MONTHS,
+        projected: MONTHS.map(() => '100000.00'),
+        coast: MONTHS.map(() => '100000.00'),
+        retirements: [{ person_id: 2, name: 'Alex', month: '2027-01-01', monthly_drop: '1.00' }],
+        drawdown: { start_month: '2027-01-01', annual_withdrawal: '60000.00' },
+        plan_until: 2027,
+        money_lasts: {
+          plan_until: 2027, probability: '0.800000', verdict: 'borderline', lasts_until_p10: '2028-03-01',
+          horizon_end: MONTHS.at(-1)!, deterministic_depleted_month: null, reason: null,
+        },
+      }),
+    )
+    const projected = option.series.find((s) => s.name === PROJECTION_SERIES[0])!
+    expect(projected.markLine?.data).toEqual([
+      { xAxis: 'Jan 2027', label: { formatter: 'Alex · Withdrawals start' } },
+      { xAxis: 'Dec 2027', label: { formatter: 'Plan until 2027' } },
+      { xAxis: 'Mar 2028', label: { formatter: '9 in 10 paths last to here' } },
+    ])
+    expect(projected.markArea).toMatchObject({
+      data: [[{ xAxis: 'Jan 2027' }, { xAxis: 'Jan 2029' }]],
+      label: { formatter: 'Retired' },
+    })
+  })
+
+  it('draws no plan-until or lasts rule while no withdrawal is modelled', () => {
+    const option = read(projectionOption({ ...FI, plan_until: 2026 }))
+    const labels = (option.series.find((s) => s.name === PROJECTION_SERIES[0])!.markLine?.data ?? []).map((d) => d.label.formatter)
+    expect(labels.some((label) => label.startsWith('Plan until'))).toBe(false)
   })
 
   it('draws the median path as a 1px line in the projection blue when the fan is on', () => {
@@ -280,35 +332,43 @@ describe('projectionOption — F3', () => {
     expect(linear.series.find((s) => s.name === PROJECTION_SERIES[0])?.areaStyle).toEqual({ opacity: 0.12 })
     expect(log.series.find((s) => s.name === PROJECTION_SERIES[0])?.areaStyle).toBeUndefined()
     expect(log.series.slice(0, 4).every((s) => s.stack === 'mc-band')).toBe(true)
+    // Nothing at or under the floor: the axis picks its own range.
+    expect(log.yAxis).not.toHaveProperty('min')
   })
 
-  it('Log: a month at or below $0 is a GAP, and its whole fan column leaves with it', () => {
-    // A log axis has no room for zero or below, and a stacked wash whose floor is gone has
-    // nothing to stand on — so the fan drops the column entire rather than half of it.
-    const DIP = {
+  it('Log: a path that ran out is drawn at the axis floor, and the axis starts there', () => {
+    // A log axis has no room for $0. A depleted path is drawn AT the floor — two decades under
+    // the starting balance — so the fan keeps its column instead of vanishing (spec §R7).
+    const DRAINED = {
       ...DATA,
-      projected: ['-500.00', '104000.00', '108000.00'],
-      coast: ['0.00', '100000.00', '100000.00'],
+      projected: ['100000.00', '0.00', '0.00'],
+      coast: ['100000.00', '100000.00', '100000.00'],
       bands: {
         ...BANDS,
-        p10: ['-100.00', '90000.00', '80000.00'],
-        p50: ['-50.00', '104000.00', '108000.00'],
+        p10: ['100000.00', '0.00', '0.00'],
+        p25: ['100000.00', '0.00', '5.00'],
+        p50: ['100000.00', '-50.00', '108000.00'],
       },
     }
-    const log = read(projectionOption(DIP, { log: true }))
-    const at0 = (name: string) => log.series.find((s) => s.name === name)!.data[0]
-    expect(at0(PROJECTION_SERIES[0])).toBeNaN()
-    expect(at0(PROJECTION_SERIES[1])).toBeNaN()
-    expect(at0(MEDIAN_SERIES)).toBeNaN()
-    expect(log.series.slice(0, 4).every((s) => Number.isNaN(s.data[0]))).toBe(true)
-    // Every other month still draws — one bad floor is not a reason to blank the fan.
-    expect(log.series.slice(0, 4).every((s) => Number.isFinite(s.data[1]))).toBe(true)
+    const log = read(projectionOption(DRAINED, { log: true }))
+    expect(log.yAxis).toMatchObject({ type: 'log', min: 1000 })
+    expect(log.series.find((s) => s.name === PROJECTION_SERIES[0])!.data).toEqual([100000, 1000, 1000])
+    const [base, outerLow, inner] = log.series
+    expect(base.data).toEqual([100000, 1000, 1000])
+    expect(outerLow.data).toEqual([0, 0, 0]) // p25 at or under the floor too: an empty wash, not a gap
+    expect(inner.data).toEqual([0, 111000, 124000]) // p75 − the floored p25
+    expect(log.series.find((s) => s.name === MEDIAN_SERIES)!.data).toEqual([100000, 1000, 108000])
+    // Linear is untouched: $0 and below are drawable there, and clipping them would lie.
+    const linear = read(projectionOption(DRAINED))
+    expect(linear.series.find((s) => s.name === PROJECTION_SERIES[0])!.data).toEqual([100000, 0, 0])
+    expect(linear.series[0].data).toEqual([100000, 0, 0])
+    expect(linear.yAxis).not.toHaveProperty('min')
+  })
 
-    // Linear is untouched: a negative month IS drawable there, and clipping it would lie.
-    const linear = read(projectionOption(DIP))
-    expect(linear.series.find((s) => s.name === PROJECTION_SERIES[0])!.data[0]).toBe(-500)
-    expect(linear.series.find((s) => s.name === PROJECTION_SERIES[1])!.data[0]).toBe(0)
-    expect(linear.series[0].data[0]).toBe(-100)
+  it('Log: the floor sits two decades under the starting balance', () => {
+    expect(logFloor(839559.73)).toBe(1000)
+    expect(logFloor(1_250_000)).toBe(10000)
+    expect(logFloor(0)).toBe(1)
   })
 
   it('feeds the page’s legend picks back in', () => {
