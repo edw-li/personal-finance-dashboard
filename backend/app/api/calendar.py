@@ -608,7 +608,8 @@ def _validated_span(start: date, end: date) -> None:
 @router.get("", response_model=CalendarOut)
 async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db)) -> CalendarOut:
     """{events, sources, quote_as_of} for [start, end] INCLUSIVE, sorted by (date, type,
-    label). 422 on a reversed pair or a span past 400 days."""
+    label) — same-day monthly reminders by their month, oldest first. 422 on a reversed pair or a
+    span past 400 days."""
     _validated_span(start, end)
     # The product clock, never the container's UTC day, read ONCE: the reminder date, the
     # fold's "today" and the living estimate's current month must all be the same

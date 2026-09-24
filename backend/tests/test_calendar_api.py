@@ -293,17 +293,18 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     # It asks only for June's spending & take-home, which the month status lists as due: Jul 1's
     # missing balances are a gap in the history, not a to-do — K asks only for this month's
     # (controller decision (a)).
+    # Same-day reminders read oldest month first (code review, minor 1).
     assert [(e["date"], e["label"], e["key"], e["href"]) for e in by_type["update_due"]] == [
-        (
-            "2026-08-24",
-            "Monthly update — Aug 1 balances · July spending & take-home",
-            "ritual:2026-07:2026-08-01",
-            "/update",
-        ),
         (
             "2026-08-24",
             "Monthly update — June spending & take-home",
             "ritual:2026-06:2026-07-01",
+            "/update",
+        ),
+        (
+            "2026-08-24",
+            "Monthly update — Aug 1 balances · July spending & take-home",
+            "ritual:2026-07:2026-08-01",
             "/update",
         ),
         (
@@ -318,8 +319,16 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     assert [(e["date"], e["detail"]) for e in by_type["espp_purchase"]] == [
         ("2026-08-31", "Mar–Aug 2026")
     ]
-    # The payload is sorted by (date, type, label) end to end.
-    assert events == sorted(events, key=lambda e: (e["date"], e["type"], e["label"]))
+    # The payload is sorted by (date, type, label) end to end — the monthly reminders by the
+    # month they ask about (entity_ref), oldest first.
+    assert events == sorted(
+        events,
+        key=lambda e: (
+            e["date"],
+            e["type"],
+            e["entity_ref"] if e["type"] == "update_due" else e["label"],
+        ),
+    )
 
 
 async def test_calendar_omits_paydays_for_other_cadences(auth_client, db, monkeypatch):

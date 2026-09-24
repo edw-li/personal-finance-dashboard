@@ -50,6 +50,14 @@ class Sources:
     cards: list[CardFacts] = field(default_factory=list)
 
 
+def _order(event: Event) -> tuple[date, str, str]:
+    """(date, type, label) — except the monthly reminders, which sort by the month they ask about
+    (`entity_ref`, YYYY-MM), oldest first: a backlog re-dated to one day reads Oct, Nov, Dec, Jan,
+    not alphabetically (lane T code review, minor 1)."""
+    within = event.entity_ref if event.type == "update_due" else event.label
+    return (event.event_date, event.type, within)
+
+
 def compose(
     window: Window,
     *,
@@ -57,7 +65,8 @@ def compose(
     sources: Sources,
     overrides: dict[str, Override] | None = None,
 ) -> list[Event]:
-    """Every event in the window, folded, overlaid, sorted by (date, type, label)."""
+    """Every event in the window, folded, overlaid, sorted by (date, type, label) — the monthly
+    reminders by their month (`_order`)."""
     events: list[Event] = []
     events += rsu.vest_events(
         sources.grants, window, quote=sources.quote, schedules=sources.vest_schedules
@@ -72,7 +81,7 @@ def compose(
     events += ritual.ritual_events(window, today, sources.due_day, sources.month_status)
     events += custom.custom_events(sources.custom_rows, window)
     composed = apply_overrides(fold_same_day(events), overrides or {})
-    composed.sort(key=lambda event: (event.event_date, event.type, event.label))
+    composed.sort(key=_order)
     return composed
 
 
