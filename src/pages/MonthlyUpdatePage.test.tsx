@@ -2495,9 +2495,25 @@ it('preserves entries typed during a save and submits them against the returned 
 it('moves focus to the receipt heading once a save lands, so the result is announced (review M15)', async () => {
   renderWizard()
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save Aug 1 balances' }))
+  // A pointer click focuses the button it presses (jsdom's fireEvent.click does not).
+  const save = screen.getByRole('button', { name: 'Save Aug 1 balances' })
+  save.focus()
+  fireEvent.click(save)
   const heading = await screen.findByRole('heading', { name: 'Aug 1 balances saved' })
   await waitFor(() => expect(document.activeElement).toBe(heading))
+})
+
+it('a save made from a cell (Ctrl+S) leaves the caret in the cell — the toast announces it', async () => {
+  renderWizard()
+  const checking = await screen.findByLabelText('Checking')
+  checking.focus()
+  fireEvent.change(checking, { target: { value: '1600.00' } })
+  fireEvent.keyDown(checking, { key: 's', ctrlKey: true })
+  await screen.findByRole('heading', { name: 'Aug 1 balances saved' })
+  await act(async () => {
+    await Promise.resolve()
+  })
+  expect(document.activeElement).toBe(checking)
 })
 
 it('the disabled Save and close is described by the sentence that says why (review M16)', async () => {

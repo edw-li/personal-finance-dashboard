@@ -459,6 +459,8 @@ function MonthlyUpdateWizard() {
   const [lastSave, setLastSave] = useState<LastSave | null>(null)
   // A save that lands moves focus to its receipt's heading (review M15), so the result is announced
   // where the user is — once per save: the receipt's later "Next due" update does not move it again.
+  // Not from a cell: Ctrl+S and Ctrl/Cmd+Enter save without leaving it, the cells stay editable,
+  // and the toast's polite live region already announces the result — the caret stays put.
   const receiptHeading = useRef<HTMLHeadingElement>(null)
   const focusReceipt = useRef(false)
   const [review, setReview] = useState<MonthReview | null>(null)
@@ -787,6 +789,8 @@ function MonthlyUpdateWizard() {
   useEffect(() => {
     if (!focusReceipt.current || lastSave === null) return
     focusReceipt.current = false
+    const active = document.activeElement
+    if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && active.isConnected) return
     receiptHeading.current?.focus()
   }, [lastSave])
 
