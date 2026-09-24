@@ -512,9 +512,10 @@ async def test_calendar_uses_each_persons_IN_FORCE_profile_not_the_newest_row(
     ]
 
 
-async def test_calendar_falls_back_to_a_future_only_profile(auth_client, db, monkeypatch):
-    # paycheck.py's own rule, mirrored: a brand-new user whose only profile starts next
-    # month gets the checks that are COMING rather than an empty calendar.
+async def test_a_future_only_profile_pays_nothing_before_it_starts(auth_client, db, monkeypatch):
+    # A brand-new user whose only profile starts Dec 1 has no August paydays — nothing is paid
+    # on or before a person's first profile (2026-09-23 spec §W1, which retired the old
+    # "fall back to the coming profile" rule here) — and gets the checks that ARE coming.
     freeze_today(monkeypatch)
     me = Person(name="Me", is_primary=True)
     db.add(me)
@@ -529,9 +530,60 @@ async def test_calendar_falls_back_to_a_future_only_profile(auth_client, db, mon
     await db.commit()
 
     resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-08-31")
-    assert [e["date"] for e in resp.json()["events"] if e["type"] == "payday"] == [
-        "2026-08-14",
-        "2026-08-31",
+    assert [e["date"] for e in resp.json()["events"] if e["type"] == "payday"] == []
+    december = await auth_client.get(f"{CALENDAR}?start=2026-12-01&end=2026-12-31")
+    assert [e["date"] for e in december.json()["events"] if e["type"] == "payday"] == [
+        "2026-12-15",
+        "2026-12-31",
+    ]
+
+
+async def test_paydays_start_after_each_persons_first_profile_and_follow_the_profile_in_force(
+    auth_client, db, monkeypatch
+):
+    freeze_today(monkeypatch)  # 2026-08-24
+    edward = Person(name="Edward", is_primary=True)
+    grace = Person(name="Grace", is_primary=False)
+    db.add_all([edward, grace])
+    await db.flush()
+    db.add_all(
+        [
+            # No deductions (model defaults), so net = gross = salary / 24.
+            PaycheckProfile(
+                person_id=edward.id,
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("120000"),
+            ),
+            PaycheckProfile(
+                person_id=edward.id,
+                effective_date=date(2026, 8, 17),
+                annual_salary=Decimal("144000"),
+            ),
+            PaycheckProfile(
+                person_id=grace.id,
+                effective_date=date(2026, 9, 1),
+                annual_salary=Decimal("24000"),
+            ),
+        ]
+    )
+    await db.commit()
+
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-07-01&end=2026-09-30")).json()
+    paydays = [e for e in body["events"] if e["type"] == "payday"]
+    items = [(e["date"], i["label"], i["amount"]) for e in paydays for i in e["items"]]
+    # Grace's first check is Sep 15: nothing on or before her Sep 1 start.
+    assert [(day, amount) for day, label, amount in items if label == "Grace"] == [
+        ("2026-09-15", "1000.00"),
+        ("2026-09-30", "1000.00"),
+    ]
+    # Edward's July checks are the Jan 1 profile's; from Aug 31 the Aug 17 raise pays.
+    assert [(day, amount) for day, label, amount in items if label == "Edward"] == [
+        ("2026-07-15", "5000.00"),
+        ("2026-07-31", "5000.00"),
+        ("2026-08-14", "5000.00"),
+        ("2026-08-31", "6000.00"),
+        ("2026-09-15", "6000.00"),
+        ("2026-09-30", "6000.00"),
     ]
 
 
