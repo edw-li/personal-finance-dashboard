@@ -212,6 +212,26 @@ def test_checks_on_or_before_the_first_profile_count_as_zero_and_are_not_counted
     assert result.salary_early_note == EARLY_MAR1
 
 
+def test_a_first_profile_after_the_tax_year_names_its_own_year():
+    # A job that starts next Jan 1 pays nothing this year — and "on or before Jan 1" alone
+    # would read as this year's Jan 1 (review nit).
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2027, 1, 1), D("240000"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert (result.checks_elapsed, result.checks_total) == (0, 0)
+    assert result.salary_early_note == (
+        "your checks on or before Jan 1, 2027, the first paycheck profile's start, count as $0 "
+        "— add a profile for an earlier job or salary to include them"
+    )
+
+
 def test_a_check_dated_on_the_start_day_pays_the_half_month_before_it():
     # Jan 16 is a grid check: a job starting Jan 16 is first paid on Jan 31.
     result = estimate(

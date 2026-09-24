@@ -122,14 +122,18 @@ NEGATIVE_PAYROLL_WARNING = (
 VestTuple = tuple[date, int, Decimal]
 
 
-def _day(day: date) -> str:
-    """'Sep 1' — the card is always the current year, so the year would be noise."""
-    return f"{MONTH_NAMES[day.month - 1]} {day.day}"
+def _day(day: date, year: int) -> str:
+    """'Sep 1' — the card's own year goes without saying; any other is named ('Jan 1, 2027':
+    a job that starts after the tax year would otherwise read as this year's Jan 1)."""
+    label = f"{MONTH_NAMES[day.month - 1]} {day.day}"
+    return label if day.year == year else f"{label}, {day.year}"
 
 
-def _early_note(template: str, whose: str, starts_on: date | None) -> str | None:
+def _early_note(template: str, whose: str, starts_on: date | None, year: int) -> str | None:
     """The §W1 sentence for one leg, or None when no grid check fell on or before its start."""
-    return None if starts_on is None else template.format(whose=whose, start=_day(starts_on))
+    if starts_on is None:
+        return None
+    return template.format(whose=whose, start=_day(starts_on, year))
 
 
 @dataclass
@@ -451,6 +455,7 @@ def estimate(
         EARLY_CHECKS_WARNING,
         "your" if primary_name is None else f"{primary_name}'s",
         leg.starts_on if profiles else None,
+        year,
     )
     if not profiles:
         warnings.append(NO_PROFILES_WARNING)
@@ -503,6 +508,7 @@ def estimate(
             PARTNER_EARLY_CHECKS_WARNING,
             "your partner's" if partner_name is None else f"{partner_name}'s",
             partner_leg.starts_on,
+            year,
         )
         if simulated
         else None
