@@ -32,10 +32,16 @@ export function netWorthHeadline(summary: Summary, flowsDue?: readonly FlowsPart
   const previous = summary.previous ?? null
   const phrase = changePhrase(previous, current, { period: summary.period ?? 'month' })
   // "since …" reads on from the figures; a month's own span stands apart after a dot.
-  const span = phrase === null ? '' : phrase.startsWith('since') ? ` ${phrase}` : ` · ${phrase}`
+  const since = phrase !== null && phrase.startsWith('since')
+  const span = phrase === null ? '' : since ? ` ${phrase}` : ` · ${phrase}`
   // The month the change covers is the previous snapshot's: Sep 1 → Oct 1 is September's story,
-  // incomplete while September's spending is listed as due (§0.4(d) storyNote).
-  const story = previous === null ? '' : storyNote(flowsDue?.find((flows) => flows.month === previous.month))
+  // incomplete while September's spending is listed as due (§0.4(d) storyNote). Only a month's
+  // story carries the note (§T1): a "since …" span — balances typed early, a gap of months, a
+  // previous snapshot that stayed provisional — is not one month's story.
+  const story =
+    previous === null || phrase === null || since
+      ? ''
+      : storyNote(flowsDue?.find((flows) => flows.month === previous.month))
   const delta =
     summary.mom_delta != null && summary.mom_pct != null
       ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)})${span}${story}`

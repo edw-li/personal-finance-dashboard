@@ -57,6 +57,18 @@ describe('netWorthHeadline — the tile names its balances by date (2026-09-23 s
     )
   })
 
+  // The note completes ONE month's story — "September: Sep 1 → Oct 1" — never a "since …" span
+  // (spec §T1 attaches storyNote to the final, consecutive phrase only). On Oct 3 the Oct 1 balances
+  // are still the ones typed on Sep 22 while September's spending is partly entered: the tile says
+  // what the change is since, and Needs attention says what September still lacks.
+  it('rides only a month’s story — never a "since …" span', () => {
+    setServerToday('2026-10-03')
+    const septemberPartial = [flowsPart('2026-09-01', { spending: 'partial' })]
+    expect(netWorthHeadline(PROVISIONAL, septemberPartial).delta).toBe('$126,583.02 (+15.7%) since Sep 1 · 21 days')
+    const gap = { ...FINAL, previous: { ...SEP1, month: '2026-08-01', as_of: '2026-08-01' } }
+    expect(netWorthHeadline(gap, [flowsPart('2026-08-01')]).delta).toBe('$126,583.02 (+15.7%) since Aug 1 · 2 months')
+  })
+
   it('names a gap in months, and a change from balances that stayed provisional', () => {
     const gap = { ...FINAL, previous: { ...SEP1, month: '2026-08-01', as_of: '2026-08-01' } }
     expect(netWorthHeadline(gap).delta).toBe('$126,583.02 (+15.7%) since Aug 1 · 2 months')
