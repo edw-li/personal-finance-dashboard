@@ -1735,7 +1735,10 @@ function MonthlyUpdateWizard() {
                 {balancesPartName(month)}
                 <InfoHint text="Every account&apos;s balance on this 1st, pre-filled from the 1st before; components are tracked inside their parent. Saving them never touches the month&apos;s spending or take-home." />
               </h2>
-              {/* Offered only on balances that were saved (a delete of nothing would 404). */}
+              {/* Offered only on balances that were saved (a delete of nothing would 404) — and on
+                  EVERY such month, a month beyond next month included: its saves stay shut (§M3), but
+                  a snapshot mistyped that far ahead must stay deletable, which is where Settings'
+                  Data health check sends the user (lane T). */}
               {monthExisted && partActions('balances')}
             </div>
             {/* The Recorded-on box's successor (2026-09-23 spec §M4): which day the balances

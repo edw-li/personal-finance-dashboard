@@ -1296,6 +1296,35 @@ const undone = {
 }
 
 describe('deletes per part (2026-09-23 spec §M6)', () => {
+  // Lane T's Data health check flags balances filed more than a month ahead (a mistyped Dec 1 in
+  // October) and sends the user here to delete them: the month's saves stay shut (§M3), but its
+  // Balances step still offers the delete, with its guard and its Undo.
+  it('a month two ahead that has a snapshot still offers its balances delete, and it works', async () => {
+    setServerToday('2026-10-03')
+    vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+      month,
+      exists: month === '2026-12-01',
+      recorded_on: month === '2026-12-01' ? '2026-10-02' : null,
+      notes: null,
+      balances: month === '2026-12-01' ? [{ account_id: 1, balance: '1500.00' }] : [],
+    }))
+    vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-dec' })
+    vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({ ...undone, label: 'Undid: Deleted Dec 2026 balances', month: '2026-12-01' })
+    renderWizardAt('/update?month=2026-12-01&step=balances')
+    await screen.findByText('Dec 1 balances can be recorded from Nov 1 (early) or on Dec 1.')
+    expect((screen.getByRole('button', { name: 'Save Dec 1 balances' }) as HTMLButtonElement).disabled).toBe(true)
+    await openMonthActions()
+    fireEvent.change(screen.getByLabelText('Type 2026-12 to confirm'), { target: { value: '2026-12' } })
+    const button = screen.getByRole('button', { name: 'Delete Dec 1 balances' }) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    await waitFor(() => expect(netWorthApi.deleteMonthBalances).toHaveBeenCalledWith('2026-12-01'))
+    const said = await screen.findByText('Deleted Dec 1 balances — spending untouched.')
+    fireEvent.click(within(said.closest('.toast') as HTMLElement).getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledWith('b-dec'))
+    expect(await screen.findByText('Undone — Dec 1 balances are back.')).toBeTruthy()
+  })
+
   it('offers a delete only for a part that was saved, and none on Review', async () => {
     renderWizardAt('/update?month=2026-08-01&step=balances')
     await screen.findByLabelText('Checking')
