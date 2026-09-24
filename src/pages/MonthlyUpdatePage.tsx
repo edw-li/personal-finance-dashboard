@@ -24,6 +24,17 @@ import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthRe
 import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
 import HistoricalReview from '../components/monthly/HistoricalReview'
+import {
+  readDraft,
+  removeDraft,
+  splitLegacyDraft,
+  writeDraft,
+  type BalancesDraft,
+  type DraftPart,
+  type FlowsDraft,
+} from '../components/monthly/drafts'
+import { balancesPartName, flowsPartName } from '../components/monthly/monthlyCopy'
+import { balancesKey, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
 import InfoHint from '../components/InfoHint'
 import { useToast } from '../components/ToastProvider'
 import { FeedBanner } from '../components/shell/Feed'
@@ -63,69 +74,19 @@ const STEP_LABELS: Record<Step, string> = {
   review: 'Review',
 }
 
-function todayIso(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-    now.getDate(),
-  ).padStart(2, '0')}`
-}
-
 // ── Unsaved-work drafts ──────────────────────────────────────────────────────────────
 // The wizard's two losses were (a) any navigation away mid-entry — no route guard exists
-// under a plain <BrowserRouter> — and (b) the mid-save 401, whose redirect destroyed the
-// spending half after the balances PUT had landed. A continuously written sessionStorage
-// draft closes both: it survives the SPA route change AND the full-page login redirect,
-// and is restored (with a visible note) the next time this month is opened. sessionStorage,
-// not localStorage, on purpose: a draft is "this sitting", and a week-old one silently
-// resurrecting over fresh server data would be worse than the loss it prevents.
-
-interface WizardDraft {
-  balances: Record<string, string>
-  amounts: Record<string, string>
-  netPay: string
-  recordedOn: string
-  notes: string
-  /** The parents this month keeps HAND-TYPED (2026-09-04 review). A handover — the first
-   *  keystroke in a component of such a parent — is typed work like any other: restoring the
-   *  cells while putting the parent back as a typed box would drop those very cells from the
-   *  next save, and DISCARDING without putting it back leaves a derived row printing a stale
-   *  total over $0.00 components. Optional so a draft written before this field still parses;
-   *  such a draft simply keeps the month's load-time set. */
-  typedParents?: number[]
-}
+// under a plain <BrowserRouter> — and (b) the mid-save 401, whose redirect destroyed typed
+// work. A continuously written sessionStorage draft closes both: it survives the SPA route
+// change AND the full-page login redirect, and is restored (with a visible note) the next time
+// this month is opened. Since 2026-09-23 (spec §M6) there is one draft per PART — the balances
+// and the month's spending & take-home are saved apart, so they are drafted apart too
+// (components/monthly/drafts.ts). A hand-typed-parent handover is typed work like any other and
+// rides in the balances draft (2026-09-04 review).
 
 interface LoadedMonth {
   month: string
   generation: number
-}
-
-const DRAFT_PREFIX = 'finance-update-draft:'
-
-function draftKey(month: string): string {
-  return `${DRAFT_PREFIX}${month}`
-}
-
-// One serialized shape for three jobs — the dirty comparison, the stored draft, the
-// restore. Numeric keys serialize in ascending order (the JS integer-key law), so the
-// same values always yield the same string regardless of setState spread order.
-function snapshotOf(
-  balances: Record<number, string>,
-  amounts: Record<number, string>,
-  netPay: string,
-  recordedOn: string,
-  notes: string,
-  typedParents: Set<number>,
-): string {
-  return JSON.stringify({
-    balances,
-    amounts,
-    netPay,
-    recordedOn,
-    notes,
-    // SORTED: a Set iterates in insertion order, so the same month reached two ways would
-    // otherwise serialize two different strings and every load would look dirty.
-    typedParents: [...typedParents].sort((a, b) => a - b),
-  })
 }
 
 // ── What this visit's save wrote ─────────────────────────────────────────────────────
@@ -261,19 +222,6 @@ function deriveParents(
   return next
 }
 
-function readDraft(month: string): { raw: string; draft: WizardDraft } | null {
-  const raw = sessionStorage.getItem(draftKey(month))
-  if (raw === null) return null
-  try {
-    const draft = JSON.parse(raw) as WizardDraft
-    // A shape check, not a validator: a corrupt entry is discarded, never restored.
-    if (typeof draft !== 'object' || draft === null) return null
-    return { raw, draft }
-  } catch {
-    return null
-  }
-}
-
 export default function MonthlyUpdatePage() {
   const [params, setParams] = useSearchParams()
   const month = params.get('month') ?? currentMonthIso()
@@ -288,7 +236,6 @@ export default function MonthlyUpdatePage() {
   const [balances, setBalances] = useState<Record<number, string>>({})
   const [amounts, setAmounts] = useState<Record<number, string>>({})
   const [netPay, setNetPay] = useState('')
-  const [recordedOn, setRecordedOn] = useState(todayIso())
   const [notes, setNotes] = useState('')
   const [prevNetWorth, setPrevNetWorth] = useState<number | null>(null)
   // The prior month's per-account balances — the table's "Last month" column and the
@@ -353,7 +300,9 @@ export default function MonthlyUpdatePage() {
   const loadGeneration = useRef(0)
   const loadedMonth = useRef<LoadedMonth | null>(null)
   const savingMonth = useRef<LoadedMonth | null>(null)
-  const currentDraft = useRef<string | null>(null)
+  // Each part as last RENDERED, serialized — a save compares against it to learn whether the user
+  // typed while the request was in flight (their typing must survive the canonicalization).
+  const currentRaw = useRef<{ balances: string | null; flows: string | null }>({ balances: null, flows: null })
   // Did the LOADED month carry ENTERED spending — any non-zero amount, or a net pay row (the
   // spec §3 definition)? An entered month is one the user is EDITING, so its save always
   // writes: a correction that zeroes a category must land rather than be skipped as "nothing
@@ -381,12 +330,13 @@ export default function MonthlyUpdatePage() {
   const [typedParents, setTypedParents] = useState<Set<number>>(new Set())
   const [emptyMonth, setEmptyMonth] = useState(false)
   const [repairing, setRepairing] = useState(false)
-  // What the server seeded for the month on screen, serialized — the draft machinery's
-  // reference point. Carries its OWN month so a mid-switch render can never write the old
-  // month's values under the new month's key.
-  const [baseline, setBaseline] = useState<{ month: string; data: string } | null>(null)
-  // A draft was restored over the seed this load — the banner's flag.
-  const [restored, setRestored] = useState(false)
+  // What the server holds for each PART of the month on screen (2026-09-23 spec §M1) — the dirty
+  // reference, the draft reference and the discard seed. Each carries its OWN month so a
+  // mid-switch render can never compare (or file) the old month's values under the new key.
+  const [balancesBase, setBalancesBase] = useState<{ month: string; part: BalancesPart } | null>(null)
+  const [flowsBase, setFlowsBase] = useState<{ month: string; part: FlowsPart } | null>(null)
+  // A draft was restored over each part's seed this load — the banners' flags (spec §M6).
+  const [restoredParts, setRestoredParts] = useState({ balances: false, flows: false })
   // Delete-month arm-and-confirm (2026-08-31 spec §B2): the typed YYYY-MM arms the red
   // button. loadNonce forces the load effect when the deleted month IS the month on
   // screen — the [month] dep alone would never re-run.
@@ -555,10 +505,9 @@ export default function MonthlyUpdatePage() {
           seedDerivation,
           Object.fromEntries(visibleAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
         )
-        // Reset on EVERY month load — stale notes/date must never leak into another
-        // month's save (the next PUT would silently write them there).
-        const seededRecordedOn =
-          thisMonth.exists && thisMonth.recorded_on ? thisMonth.recorded_on : todayIso()
+        // Reset on EVERY month load — stale notes must never leak into another month's save
+        // (the next PUT would silently write them there). The recorded date is not the wizard's
+        // any more: the server stamps it (2026-09-23 spec §M4, §K4).
         const seededNotes = thisMonth.exists && thisMonth.notes ? thisMonth.notes : ''
 
         const prevSum = priorMonth.exists
@@ -581,57 +530,61 @@ export default function MonthlyUpdatePage() {
         )
         const seededNetPay = spendMonth.net_pay ?? ''
 
-        // A stored draft that differs from the seed is unsaved work — restore it over the
-        // seed (per field, keyed by id, so an account added since the draft still seeds).
-        // One that MATCHES the seed is a leftover with nothing to say and is dropped.
-        const seedSnapshot = snapshotOf(
-          seededBalances,
-          seededAmounts,
-          seededNetPay,
-          seededRecordedOn,
-          seededNotes,
-          handTyped,
-        )
-        const stored = readDraft(month)
-        const draft = stored !== null && stored.raw !== seedSnapshot ? stored.draft : null
-        if (stored !== null && draft === null) sessionStorage.removeItem(draftKey(month))
+        const balancesSeed: BalancesPart = {
+          balances: seededBalances,
+          notes: seededNotes,
+          typedParents: sortedIds(handTyped),
+        }
+        const flowsSeed: FlowsPart = { amounts: seededAmounts, netPay: seededNetPay, recordZero: false }
+        // A whole-month draft from before the parts were split becomes two part drafts on first
+        // read (spec §M6); then each part is restored — or dropped — on its own.
+        splitLegacyDraft(month)
+        const balancesDraft = readDraft<BalancesDraft>('balances', month)
+        const flowsDraft = readDraft<FlowsDraft>('flows', month)
         // A draft may only REMOVE parents from the load-time set — that is all a handover
         // does. The SERVER decides which parents still have no component rows, so an older
         // draft can never resurrect a hand-typed row for a month that has since gained them.
         const draftTyped =
-          draft?.typedParents === undefined
+          balancesDraft?.typedParents === undefined
             ? handTyped
-            : new Set([...handTyped].filter((id) => draft.typedParents?.includes(id)))
-        setTypedParents(draftTyped)
-        const draftDerivation = derivationFor(byParent, draftTyped)
-        setBalances(
-          draft
-            ? deriveParents(
-                draftDerivation,
+            : new Set([...handTyped].filter((id) => balancesDraft.typedParents?.includes(id)))
+        // Restored per field, keyed by id, so an account or category added since still seeds.
+        const draftBalances =
+          balancesDraft === null
+            ? null
+            : deriveParents(
+                derivationFor(byParent, draftTyped),
                 Object.fromEntries(
-                  visibleAccounts.map((a) => [
-                    a.id,
-                    draft.balances?.[String(a.id)] ?? seededBalances[a.id],
-                  ]),
+                  visibleAccounts.map((a) => [a.id, balancesDraft.balances?.[String(a.id)] ?? seededBalances[a.id]]),
                 ),
               )
-            : seededBalances,
-        )
-        setAmounts(
-          draft
-            ? Object.fromEntries(
-                activeCategories.map((c) => [
-                  c.id,
-                  draft.amounts?.[String(c.id)] ?? seededAmounts[c.id],
-                ]),
+        const draftNotes = balancesDraft?.notes ?? seededNotes
+        const draftAmounts =
+          flowsDraft === null
+            ? null
+            : Object.fromEntries(
+                activeCategories.map((c) => [c.id, flowsDraft.amounts?.[String(c.id)] ?? seededAmounts[c.id]]),
               )
-            : seededAmounts,
-        )
-        setNetPay(draft ? (draft.netPay ?? seededNetPay) : seededNetPay)
-        setRecordedOn(draft ? (draft.recordedOn ?? seededRecordedOn) : seededRecordedOn)
-        setNotes(draft ? (draft.notes ?? seededNotes) : seededNotes)
-        setBaseline({ month, data: seedSnapshot })
-        setRestored(draft !== null)
+        const draftNetPay = flowsDraft?.netPay ?? seededNetPay
+        // A stored draft that differs from its part's seed is unsaved work and is restored over
+        // it; one that MATCHES is a leftover with nothing to say and is dropped.
+        const restoreBalances =
+          draftBalances !== null &&
+          balancesKey({ balances: draftBalances, notes: draftNotes, typedParents: draftTyped }) !==
+            balancesKey(balancesSeed)
+        const restoreFlows =
+          draftAmounts !== null &&
+          flowsKey({ amounts: draftAmounts, netPay: draftNetPay }) !== flowsKey(flowsSeed)
+        if (balancesDraft !== null && !restoreBalances) removeDraft('balances', month)
+        if (flowsDraft !== null && !restoreFlows) removeDraft('flows', month)
+        setTypedParents(restoreBalances ? draftTyped : handTyped)
+        setBalances(restoreBalances && draftBalances !== null ? draftBalances : seededBalances)
+        setNotes(restoreBalances ? draftNotes : seededNotes)
+        setAmounts(restoreFlows && draftAmounts !== null ? draftAmounts : seededAmounts)
+        setNetPay(restoreFlows ? draftNetPay : seededNetPay)
+        setBalancesBase({ month, part: balancesSeed })
+        setFlowsBase({ month, part: flowsSeed })
+        setRestoredParts({ balances: restoreBalances, flows: restoreFlows })
         // The seed is on screen from this render: the frame's skeleton or the previous month's
         // dimmed card gives way to this month's. Same batch as the setters above.
         setSeeded(loaded)
@@ -648,22 +601,27 @@ export default function MonthlyUpdatePage() {
     }
   }, [month, loadNonce])
 
-  // Persist typed-but-unsaved work continuously: the draft is written on every edit and
-  // deleted the moment the boxes match the seed again, so storage always mirrors "what
-  // would be lost". Gated on the BASELINE's month (never the URL's) and on loading — a
-  // mid-switch render still holds the old month's values under the new month's URL, and
-  // this is what keeps them from being filed under the wrong key. No setState here, so
-  // the effect-body rule has nothing to say.
+  // Persist typed-but-unsaved work continuously, PER PART (spec §M6): a part's draft is written
+  // while it differs from its baseline and deleted the moment it matches again, so storage always
+  // mirrors "what would be lost". Gated on the BASELINE's month (never the URL's) and on loading —
+  // a mid-switch render still holds the old month's values under the new month's URL, and this is
+  // what keeps them from being filed under the wrong key. No setState here, so the effect-body
+  // rule has nothing to say.
   useEffect(() => {
-    if (loading || baseline === null || baseline.month !== month) return
-    const current = snapshotOf(balances, amounts, netPay, recordedOn, notes, typedParents)
-    currentDraft.current = current
-    if (current === baseline.data) {
-      sessionStorage.removeItem(draftKey(baseline.month))
-    } else {
-      sessionStorage.setItem(draftKey(baseline.month), current)
-    }
-  }, [balances, amounts, netPay, recordedOn, notes, typedParents, baseline, month, loading])
+    if (loading || balancesBase === null || balancesBase.month !== month) return
+    const now: BalancesPart = { balances, notes, typedParents: sortedIds(typedParents) }
+    currentRaw.current.balances = JSON.stringify(now)
+    if (balancesKey(now) === balancesKey(balancesBase.part)) removeDraft('balances', month)
+    else writeDraft('balances', month, now)
+  }, [balances, notes, typedParents, balancesBase, month, loading])
+
+  useEffect(() => {
+    if (loading || flowsBase === null || flowsBase.month !== month) return
+    const now = { amounts, netPay }
+    currentRaw.current.flows = JSON.stringify(now)
+    if (flowsKey(now) === flowsKey(flowsBase.part)) removeDraft('flows', month)
+    else writeDraft('flows', month, now)
+  }, [amounts, netPay, flowsBase, month, loading])
 
   // The flash is a one-shot: the timer callback clears it, so the effect body itself never
   // sets state (a set here would re-run the effect on its own write).
@@ -673,24 +631,25 @@ export default function MonthlyUpdatePage() {
     return () => clearTimeout(timer)
   }, [flashIds])
 
-  // Back to the server's seed, forgetting the draft — the restore banner's exit.
-  const discardDraft = () => {
-    if (baseline === null || baseline.month !== month) return
-    const seed = JSON.parse(baseline.data) as WizardDraft
-    // The hand-typed parents come back WITH the figures (2026-09-04 review): a component
-    // typed during the visit handed its parent over, and restoring the seed while leaving
-    // that handover standing would render the row derived over a stale total whose cells
-    // read $0.00 — and then save the zeros over the stored figure.
-    writeBalances(
-      () => seed.balances as Record<number, string>,
-      new Set(seed.typedParents ?? []),
-    )
-    setAmounts(seed.amounts as Record<number, string>)
-    setNetPay(seed.netPay)
-    setRecordedOn(seed.recordedOn)
-    setNotes(seed.notes)
-    setRestored(false)
-    sessionStorage.removeItem(draftKey(month))
+  // Back to the server's seed for ONE part, forgetting its draft — a restore banner's exit. The
+  // other part's restored work stays (spec §M6).
+  const discardDraft = (part: DraftPart) => {
+    if (part === 'balances') {
+      if (balancesBase === null || balancesBase.month !== month) return
+      const seed = balancesBase.part
+      // The hand-typed parents come back WITH the figures (2026-09-04 review): a component
+      // typed during the visit handed its parent over, and restoring the seed while leaving
+      // that handover standing would render the row derived over a stale total whose cells
+      // read $0.00 — and then save the zeros over the stored figure.
+      writeBalances(() => seed.balances, new Set(seed.typedParents))
+      setNotes(seed.notes)
+    } else {
+      if (flowsBase === null || flowsBase.month !== month) return
+      setAmounts(flowsBase.part.amounts)
+      setNetPay(flowsBase.part.netPay)
+    }
+    setRestoredParts((current) => ({ ...current, [part]: false }))
+    removeDraft(part, month)
   }
 
   // Every wizard cell is an AmountInput of the default kind="money", so the page's
@@ -823,8 +782,20 @@ export default function MonthlyUpdatePage() {
     }
   }
 
+  // Each part is dirty when it differs from what the server holds (2026-09-23 spec §M1): amounts
+  // as the numbers a save writes, notes and hand-typed parents exactly, the $0 consent by value.
+  // The Save buttons, the Review's "only the dirty parts" and the receipt all read these two.
+  const balancesDirty =
+    balancesBase !== null &&
+    balancesBase.month === month &&
+    balancesKey({ balances, notes, typedParents }) !== balancesKey(balancesBase.part)
+  const flowsDirty =
+    flowsBase !== null &&
+    flowsBase.month === month &&
+    (flowsKey({ amounts, netPay }) !== flowsKey(flowsBase.part) || recordZero !== flowsBase.part.recordZero)
+
   const confirmationInputs = {
-    balances: JSON.stringify({ balances, recordedOn, notes, typedParents: [...typedParents].sort() }),
+    balances: JSON.stringify({ balances, notes, typedParents: sortedIds(typedParents) }),
     spending: JSON.stringify({ amounts, recordZero }),
     take_home: netPay,
   }
@@ -841,9 +812,10 @@ export default function MonthlyUpdatePage() {
     const loaded = loadedMonth.current
     if (loading || saving || deleting || repairing || loaded === null || loaded.month !== month
       || savingMonth.current === loaded || review === null || review.month !== month
-      || baseline?.month !== month) return
+      || balancesBase?.month !== month || flowsBase?.month !== month) return
     savingMonth.current = loaded
-    const submittedDraft = snapshotOf(balances, amounts, netPay, recordedOn, notes, typedParents)
+    // Each part as submitted — the response keeps any typing done while it was in flight.
+    const submitted = { ...currentRaw.current }
     setSaving(true)
     setError(null)
     setLegs(null)
@@ -860,7 +832,7 @@ export default function MonthlyUpdatePage() {
     )
     const canonNetPay = netPay.trim() === '' ? '' : canonicalAmount(netPay)
     // `sentCategories` is the component-level memo above — one rule for the wire and the review.
-    const balancesPayload = JSON.stringify({ balances: canonBalances, recordedOn, notes })
+    const balancesPayload = JSON.stringify({ balances: canonBalances, notes })
     try {
       let spendingBody: SpendingMonthUpsert | undefined
       if (willWriteSpending) {
@@ -877,7 +849,8 @@ export default function MonthlyUpdatePage() {
       const body = {
         expected_revision: review.input_revision,
         balances: {
-          recorded_on: recordedOn === '' ? undefined : recordedOn,
+          // Never recorded_on (2026-09-23 spec §M4): the server stamps it — and a provisional
+          // snapshot saved on or after its 1st turns final (§K4), which a sent date would stop.
           notes: notes.trim() === '' ? null : notes,
           balances: accounts.filter(a => !isReadOnlyRow(a))
             .filter(a => a.parent_account_id === null || !typedParents.has(a.parent_account_id))
@@ -893,7 +866,10 @@ export default function MonthlyUpdatePage() {
       // A save belongs to this particular load, not merely its month. Leaving and returning
       // can load a newer revision or restore a newer draft while this response is in flight.
       if (loadedMonth.current !== loaded) return
-      const unchangedSinceSubmit = currentDraft.current === submittedDraft
+      const unchangedSinceSubmit = {
+        balances: currentRaw.current.balances === submitted.balances,
+        flows: currentRaw.current.flows === submitted.flows,
+      }
       setReview(result.review)
       saveRequest.current = null
       const balanceResult = result.balances!
@@ -920,15 +896,20 @@ export default function MonthlyUpdatePage() {
       // Coverage moved: this month now has balances, and spending too when that leg ran. Tell
       // the scope row to re-read it.
       setCoverageNonce((n) => n + 1)
-      // Canonicalize fully saved entries, but keep any typing done after submission. The
+      // Canonicalize fully saved entries, but keep any typing done after submission. Each part's
       // baseline still advances to the saved values so those newer edits remain a draft.
-      if (unchangedSinceSubmit) {
+      if (unchangedSinceSubmit.balances) {
         setBalances(canonBalances)
-        setAmounts(canonAmounts)
-        setNetPay(canonNetPay)
-        setRestored(false)
+        setRestoredParts((current) => ({ ...current, balances: false }))
       }
+      setBalancesBase({ month, part: { balances: canonBalances, notes, typedParents: sortedIds(typedParents) } })
       if (spendingLeg.status === 'saved') {
+        if (unchangedSinceSubmit.flows) {
+          setAmounts(canonAmounts)
+          setNetPay(canonNetPay)
+          setRestoredParts((current) => ({ ...current, flows: false }))
+        }
+        setFlowsBase({ month, part: { amounts: canonAmounts, netPay: canonNetPay, recordZero } })
         // Only a leg that RAN may teach us the server's state: a skipped one changed nothing,
         // so a month that had a take-home still has it, and an empty month is still empty.
         setHadNetPay(canonNetPay !== '')
@@ -944,10 +925,6 @@ export default function MonthlyUpdatePage() {
         // the choice they made one click ago. The next VISIT flags it, receipt gone.
         setEmptyMonth(canonNetPay === '' && !anyAmountEntered && !recordZero)
       }
-      setBaseline({
-        month,
-        data: snapshotOf(canonBalances, canonAmounts, canonNetPay, recordedOn, notes, typedParents),
-      })
     } catch (err) {
       if (loadedMonth.current !== loaded) return
       setError(err instanceof ApiError ? err.message : 'The save could not be confirmed. Your entries are preserved; retry to check the same save.')
@@ -980,7 +957,8 @@ export default function MonthlyUpdatePage() {
       // same thing.
       const balancesDelete = await tolerate404(deleteMonthBalances(month))
       const spendingDelete = await tolerate404(deleteSpendingMonth(month))
-      sessionStorage.removeItem(draftKey(month))
+      removeDraft('balances', month)
+      removeDraft('flows', month)
       const deleted = month
       const deleteBatches = [spendingDelete?.batchId ?? null, balancesDelete?.batchId ?? null]
       toast.success(
@@ -1006,7 +984,7 @@ export default function MonthlyUpdatePage() {
       // keep the primary reading "Retry spending" for a deleted month, and the receipt would
       // narrate a month that is gone.
       setLegs(null)
-      setRestored(false)
+      setRestoredParts({ balances: false, flows: false })
       setLoading(true)
       // Land on the CURRENT month's wizard; the nonce covers the deleted-month ===
       // current-month case, where the month param does not change.
@@ -1091,9 +1069,9 @@ export default function MonthlyUpdatePage() {
     setLoading(true)
     setError(null)
     setLegs(null)
-    // The banner describes the month being LEFT; the new load re-derives it. The typed
-    // work itself needs no goodbye — the draft effect has been persisting it all along.
-    setRestored(false)
+    // The banners describe the month being LEFT; the new load re-derives them. The typed
+    // work itself needs no goodbye — the draft effects have been persisting it all along.
+    setRestoredParts({ balances: false, flows: false })
     // Same reason the step change clears them: the note counts the OLD month's rows.
     setPasteNote(null)
     setDeleteArm('')
@@ -1358,15 +1336,22 @@ export default function MonthlyUpdatePage() {
             }}
           />
         )}
-        {restored && (
-          // Advisory, not an error: nothing failed — work was preserved. The discard button
-          // is the only way to decline it; saving is the way to accept it.
+        {/* Advisory, not an error: nothing failed — work was preserved. One banner per part
+            (spec §M6), naming it; its discard is the only way to decline it, saving the way to
+            accept it. */}
+        {restoredParts.balances && (
           <div className="draft-note" role="status">
-            <span>
-              Restored unsaved entries for {formatMonth(month)} — they are not saved yet.
-            </span>
-            <button type="button" className="button" onClick={discardDraft}>
-              Discard restored entries
+            <span>Restored unsaved {balancesPartName(month)} — they are not saved yet.</span>
+            <button type="button" className="button" onClick={() => discardDraft('balances')}>
+              Discard restored balances
+            </button>
+          </div>
+        )}
+        {restoredParts.flows && (
+          <div className="draft-note" role="status">
+            <span>Restored unsaved {flowsPartName(month)} — they are not saved yet.</span>
+            <button type="button" className="button" onClick={() => discardDraft('flows')}>
+              Discard restored spending
             </button>
           </div>
         )}
@@ -1378,7 +1363,7 @@ export default function MonthlyUpdatePage() {
             <h2 className="eyebrow">{review?.state === 'closed' ? 'Month closed' : 'Progress saved'}</h2>
             {legs.balances !== null && <p>{balancesSentence(legs.balances.result)}</p>}
             <p>{spendingSentence(legs.spending)}</p>
-            {baseline?.month === month && snapshotOf(balances, amounts, netPay, recordedOn, notes, typedParents) !== baseline.data && (
+            {(balancesDirty || flowsDirty) && (
               <p role="status">You have new unsaved changes. Save again to include them.</p>
             )}
             <p>
@@ -1411,15 +1396,6 @@ export default function MonthlyUpdatePage() {
               <InfoHint text="Every account&apos;s balance for the month, pre-filled from the prior month; components are tracked inside their parent." />
             </h2>
             <div className="meta-row">
-              <label>
-                Recorded on
-                <input
-                  type="date"
-                  className="field-input"
-                  value={recordedOn}
-                  onChange={(e) => setRecordedOn(e.target.value)}
-                />
-              </label>
               <label>
                 Notes
                 <input
@@ -1901,7 +1877,11 @@ export default function MonthlyUpdatePage() {
               />
             </div>
             <ReviewChanges accounts={accounts} categories={categories} balances={balances} amounts={amounts}
-              saved={baseline?.month === month ? (JSON.parse(baseline.data) as WizardDraft) : null}
+              saved={
+                balancesBase?.month === month && flowsBase?.month === month
+                  ? { balances: balancesBase.part.balances, amounts: flowsBase.part.amounts }
+                  : null
+              }
               balanceStory={{ title: 'Largest balance changes · prior month', columns: ['Reference', 'Entered'],
                 from: priorBalances, to: balances, empty: 'No changed balances with a prior-month reference.' }}
               month={month} matrix={matrix} monthExisted={monthExisted} recordedCategories={recordedCategoryIds} />

@@ -24,7 +24,6 @@ const EXCEPTIONS = ['utils/staleness.ts', 'components/details/explainSelection.t
 const ALLOWLIST: Record<string, string> = {
   'pages/TaxesPage.tsx': 'W11 — the Will I owe? mount and the new-year default',
   'pages/OverviewPage.tsx': 'W11 — the tax year read',
-  'pages/MonthlyUpdatePage.tsx': "M1 — the wizard's private todayIso",
 }
 
 /** A no-argument `new Date()`: the browser's now (`new Date(y, m, d)` and `new Date(iso)` are not). */

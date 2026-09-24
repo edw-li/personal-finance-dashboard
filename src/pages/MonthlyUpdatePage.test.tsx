@@ -48,6 +48,7 @@ import { fetchCoverage } from '../api/coverage'
 import { clearSnapshots } from '../api/snapshotCache'
 import { formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
+import { setServerToday } from '../utils/productToday'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
@@ -117,6 +118,9 @@ const taxCategory = {
 }
 
 beforeEach(() => {
+  // ONE day for every rule the wizard reads (2026-09-23 spec §K1): the server's, pinned here so
+  // a run on any calendar day sees the same "current month" (src/testing/setup.ts forgets it).
+  setServerToday('2026-09-24')
   vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async month => reviewFixture(month))
   vi.mocked(monthReviewApi.fetchMonthReviews).mockResolvedValue({ adopted_on: '2026-09-01', default_month: '2026-08-01', months: [] })
   // Existing entry-contract assertions inspect each section of the single coordinated body.
@@ -261,14 +265,11 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
   fireEvent.click(screen.getByRole('button', { name: /save progress/i }))
 
   await waitFor(() => {
-    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
-      '2026-08-01',
-      expect.objectContaining({
-        balances: [{ account_id: 1, balance: '1600.00' }],
-        notes: null, // blank notes field CLEARS server-side — load-bearing contract
-        recorded_on: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-      }),
-    )
+    // Exactly these two keys: no recorded_on — the server stamps it (2026-09-23 spec §M4).
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith('2026-08-01', {
+      balances: [{ account_id: 1, balance: '1600.00' }],
+      notes: null, // blank notes field CLEARS server-side — load-bearing contract
+    })
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       net_pay: '9000.00',
       amounts: [{ category_id: 7, amount: '250.00' }],
@@ -286,7 +287,7 @@ it('blocks Next while a balance is not a number', async () => {
   ).toBe(true)
 })
 
-it('resets notes/date on month switch and survives same-month clicks', async () => {
+it('resets notes on month switch and survives same-month clicks', async () => {
   vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
     month,
     exists: month === '2026-08-01',
@@ -303,14 +304,11 @@ it('resets notes/date on month switch and survives same-month clicks', async () 
   fireEvent.click(screen.getByRole('button', { name: /^Aug 2026/ }))
   expect(screen.getByLabelText('Checking')).toBeDefined()
 
-  // Switching months must reset notes/date — never leak them into the new month.
+  // Switching months must reset notes — never leak them into the new month.
   fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
   await waitFor(() => {
     expect((screen.getByLabelText(/notes/i) as HTMLInputElement).value).toBe('')
   })
-  expect(
-    (screen.getByLabelText(/recorded on/i) as HTMLInputElement).value,
-  ).not.toBe('2026-08-05')
 })
 
 it('drafts typed work and restores it after leaving and coming back', async () => {
@@ -323,12 +321,12 @@ it('drafts typed work and restores it after leaving and coming back', async () =
 
   renderWizard()
   expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1600.00')
-  expect(screen.getByText(/restored unsaved entries/i)).toBeTruthy()
+  expect(screen.getByText(/restored unsaved/i)).toBeTruthy()
 
   // Discard puts the server's seed back and forgets the draft.
-  fireEvent.click(screen.getByRole('button', { name: /discard restored entries/i }))
+  fireEvent.click(screen.getByRole('button', { name: /discard restored balances/i }))
   expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1500.00')
-  expect(screen.queryByText(/restored unsaved entries/i)).toBeNull()
+  expect(screen.queryByText(/restored unsaved/i)).toBeNull()
 })
 
 it('forgets the draft once the month is saved', async () => {
@@ -344,7 +342,7 @@ it('forgets the draft once the month is saved', async () => {
   renderWizard()
   // The seed is the SERVER's again and no banner shows — the draft died with the save.
   expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
-  expect(screen.queryByText(/restored unsaved entries/i)).toBeNull()
+  expect(screen.queryByText(/restored unsaved/i)).toBeNull()
 })
 
 it('keeps a draft per month across ribbon switches', async () => {
@@ -356,10 +354,10 @@ it('keeps a draft per month across ribbon switches', async () => {
     expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('0.00'),
   )
   // June is untouched: no draft, no banner — August's work never leaks sideways.
-  expect(screen.queryByText(/restored unsaved entries/i)).toBeNull()
+  expect(screen.queryByText(/restored unsaved/i)).toBeNull()
 
   fireEvent.click(screen.getByRole('button', { name: /^Aug 2026/ }))
-  await screen.findByText(/restored unsaved entries/i)
+  await screen.findByText(/restored unsaved/i)
   expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1600.00')
 })
 
@@ -668,7 +666,7 @@ it('a post-save blur never resurrects a phantom draft', async () => {
     again.focus()
   })
   fireEvent.blur(again)
-  expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toBeNull()
+  expect(sessionStorage.getItem('finance-update-draft:flows:2026-08-01')).toBeNull()
 })
 
 it('offers a Retry instead of a dead form when the month fails to load', async () => {
@@ -1149,7 +1147,7 @@ it('renders the cue for a server-seeded positive liability and Flip marks the dr
   expect(screen.getByText(/liabilities are entered negative/i)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Flip sign on Visa' }))
   // Flip is an edit like any other: the draft machinery files it immediately.
-  expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).not.toBeNull()
+  expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).not.toBeNull()
   expect((screen.getByLabelText('Visa') as HTMLInputElement).value).toBe('-$500.00')
 })
 
@@ -1285,7 +1283,8 @@ it('arms on the typed month, fires both deletes tolerating a 404, clears the dra
   vi.mocked(spendingApi.deleteSpendingMonth).mockRejectedValue(
     new ApiError('no spending or net pay recorded for this month', 404),
   )
-  sessionStorage.setItem('finance-update-draft:2026-07-01', '{"balances":{"1":"9.00"}}')
+  sessionStorage.setItem('finance-update-draft:balances:2026-07-01', '{"balances":{"1":"9.00"}}')
+  sessionStorage.setItem('finance-update-draft:flows:2026-07-01', '{"amounts":{"7":"5.00"}}')
   renderWizardAt('/update?month=2026-07-01&step=review')
   await openMonthActions()
   const button = (await screen.findByRole('button', {
@@ -1300,7 +1299,8 @@ it('arms on the typed month, fires both deletes tolerating a 404, clears the dra
   await waitFor(() => expect(netWorthApi.deleteMonthBalances).toHaveBeenCalledWith('2026-07-01'))
   expect(spendingApi.deleteSpendingMonth).toHaveBeenCalledWith('2026-07-01')
   await screen.findByText(`Deleted ${formatMonth('2026-07-01')} — balances and spending removed.`)
-  expect(sessionStorage.getItem('finance-update-draft:2026-07-01')).toBeNull()
+  expect(sessionStorage.getItem('finance-update-draft:balances:2026-07-01')).toBeNull()
+  expect(sessionStorage.getItem('finance-update-draft:flows:2026-07-01')).toBeNull()
   // The deleted month has no feeds left: the ribbon must re-read coverage so its chip
   // empties, exactly as a save fills one.
   await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(1))
@@ -2045,7 +2045,7 @@ it('a restored draft keeps the handover, so the entered component still ships', 
   first.unmount()
 
   renderWizard()
-  await screen.findByText(/restored unsaved entries/i)
+  await screen.findByText(/restored unsaved/i)
   // Still the sum: putting the parent back as a typed box while restoring the cells under it
   // would drop the very component the draft exists to preserve.
   const row = screen.getByText('Fidelity 401(k)').closest('tr') as HTMLElement
@@ -2079,12 +2079,12 @@ it('discarding a restored draft puts the hand-typed parent back', async () => {
   first.unmount()
 
   renderWizard()
-  await screen.findByText(/restored unsaved entries/i)
+  await screen.findByText(/restored unsaved/i)
   // NOW hand the parent over, then change your mind.
   fireEvent.change(await screen.findByLabelText(/^401\(k\) pre-tax/), {
     target: { value: '700.00' },
   })
-  fireEvent.click(screen.getByRole('button', { name: /discard restored entries/i }))
+  fireEvent.click(screen.getByRole('button', { name: /discard restored balances/i }))
 
   // Back to the month as STORED. A discard that restored the figures but left the handover
   // standing would render a derived row printing $1,000.00 over cells that read $0.00 — and
@@ -2359,7 +2359,7 @@ it('keeps the draft and prevents silent overwrite when the server revision chang
   fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
   fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
   expect((await screen.findByRole('alert')).textContent).toContain('changed since it was loaded')
-  expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toContain('1900')
+  expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).toContain('1900')
   expect(screen.queryByRole('heading', { name: 'Progress saved' })).toBeNull()
 })
 
@@ -2401,7 +2401,7 @@ it('keeps the new month and its pending save intact when the prior month finishe
   expect(screen.getByRole('heading', { name: 'Monthly update — Jun 2026' })).toBeTruthy()
   expect((screen.getByRole('button', { name: 'Saving…' }) as HTMLButtonElement).disabled).toBe(true)
   expect(screen.queryByRole('heading', { name: 'Progress saved' })).toBeNull()
-  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:2026-06-01')!)).toMatchObject({
+  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:balances:2026-06-01')!)).toMatchObject({
     balances: { 1: '2200' }, notes: 'June draft',
   })
 
@@ -2410,7 +2410,7 @@ it('keeps the new month and its pending save intact when the prior month finishe
   fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
   expect((await screen.findByLabelText('Checking') as HTMLInputElement).value).toBe('2200')
   expect((screen.getByLabelText('Notes') as HTMLInputElement).value).toBe('June draft')
-  expect(sessionStorage.getItem('finance-update-draft:2026-06-01')).toBeNull()
+  expect(sessionStorage.getItem('finance-update-draft:balances:2026-06-01')).toBeNull()
 })
 
 it('preserves entries typed during a save and submits them against the returned revision', async () => {
@@ -2431,8 +2431,11 @@ it('preserves entries typed during a save and submits them against the returned 
 
   await act(async () => { pending.resolve(savedMonthResult('2026-08-01')) })
   await screen.findByText('You have new unsaved changes. Save again to include them.')
-  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:2026-08-01')!)).toMatchObject({
-    balances: { 1: '1900' }, amounts: { 7: '275' }, netPay: '9100', notes: 'Entered while saving',
+  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')!)).toMatchObject({
+    balances: { 1: '1900' }, notes: 'Entered while saving',
+  })
+  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:flows:2026-08-01')!)).toMatchObject({
+    amounts: { 7: '275' }, netPay: '9100',
   })
   fireEvent.click(screen.getByRole('button', { name: 'Save progress' }))
   await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(2))
@@ -2443,7 +2446,8 @@ it('preserves entries typed during a save and submits them against the returned 
       spending: { amounts: [{ category_id: 7, amount: '275' }], net_pay: '9100' },
     }),
   ])
-  await waitFor(() => expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toBeNull())
+  await waitFor(() => expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).toBeNull())
+  expect(sessionStorage.getItem('finance-update-draft:flows:2026-08-01')).toBeNull()
   expect(screen.queryByText('You have new unsaved changes. Save again to include them.')).toBeNull()
 })
 
@@ -2489,7 +2493,7 @@ it('keeps a late save conflict out of the newly loaded month', async () => {
   expect(screen.queryByRole('alert')).toBeNull()
   expect(screen.queryByRole('button', { name: 'Reload latest and compare draft' })).toBeNull()
   expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('2300')
-  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:2026-06-01')!)).toMatchObject({ balances: { 1: '2300' } })
+  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:balances:2026-06-01')!)).toMatchObject({ balances: { 1: '2300' } })
   fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
   expect((await screen.findByRole('button', { name: 'Save progress' }) as HTMLButtonElement).disabled).toBe(false)
 })
@@ -2558,4 +2562,71 @@ describe('zero accounts (2026-09-14 guide spec §7.2)', () => {
     expect(screen.queryByText(/No accounts yet/)).toBeNull()
     expect(document.querySelector('table.entry-table')?.hasAttribute('hidden')).toBe(false)
   })
+})
+
+// --- the two-part monthly update (2026-09-23 spec §M1–§M6) ---------------------------------
+
+describe('drafts per part (2026-09-23 spec §M6)', () => {
+  it('drafts each part under its own key and names the part it restores', async () => {
+    const first = renderWizard()
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+    fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
+    fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '250.00' } })
+    expect(JSON.parse(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')!)).toMatchObject({
+      balances: { 1: '1600.00' },
+    })
+    expect(JSON.parse(sessionStorage.getItem('finance-update-draft:flows:2026-08-01')!)).toMatchObject({
+      amounts: { 7: '250.00' },
+    })
+    first.unmount()
+
+    renderWizard()
+    expect(await screen.findByText('Restored unsaved Aug 1 balances — they are not saved yet.')).toBeTruthy()
+    expect(screen.getByText('Restored unsaved August spending & take-home — they are not saved yet.')).toBeTruthy()
+    // Discarding one part puts back that part's seed and leaves the other's draft — and banner — standing.
+    fireEvent.click(screen.getByRole('button', { name: 'Discard restored balances' }))
+    expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1500.00')
+    expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).toBeNull()
+    expect(sessionStorage.getItem('finance-update-draft:flows:2026-08-01')).not.toBeNull()
+    expect(screen.queryByText('Restored unsaved Aug 1 balances — they are not saved yet.')).toBeNull()
+    expect(screen.getByText('Restored unsaved August spending & take-home — they are not saved yet.')).toBeTruthy()
+  })
+
+  it('splits a legacy whole-month draft into the two parts on first read and drops its date', async () => {
+    sessionStorage.setItem(
+      'finance-update-draft:2026-08-01',
+      JSON.stringify({ balances: { 1: '1700.00' }, amounts: { 7: '99.00' }, netPay: '', recordedOn: '2026-08-03', notes: '' }),
+    )
+    renderWizard()
+    expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1700.00')
+    expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toBeNull()
+    expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).not.toBeNull()
+    expect(JSON.parse(sessionStorage.getItem('finance-update-draft:flows:2026-08-01')!)).toEqual({
+      amounts: { 7: '99.00' },
+      netPay: '',
+    })
+    expect(screen.getByText('Restored unsaved Aug 1 balances — they are not saved yet.')).toBeTruthy()
+    expect(screen.getByText('Restored unsaved August spending & take-home — they are not saved yet.')).toBeTruthy()
+  })
+
+  it('a reformatted figure is not an edit: no draft is filed', async () => {
+    renderWizard()
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1500' } })
+    expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Checking'), { target: { value: '1500.5' } })
+    expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).not.toBeNull()
+  })
+})
+
+it('has no Recorded-on box and never sends recorded_on (2026-09-23 spec §M4)', async () => {
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  expect(screen.queryByLabelText(/recorded on/i)).toBeNull()
+  fireEvent.change(screen.getByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+  await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+  const sent = vi.mocked(monthReviewApi.saveMonthReview).mock.calls[0][1]
+  expect(sent.balances).toBeDefined()
+  expect('recorded_on' in sent.balances!).toBe(false)
 })
