@@ -115,6 +115,8 @@ describe('FilingStatusMenu (2026-09-23 spec §W8)', () => {
       'Sam’s withholding leaves the Will I owe? card.',
       '2025’s prior-year safe harbor uses this year’s total tax.',
     ])
+    // Announced as it appears: the list lives in a polite live region that is always there.
+    expect(dialog().querySelector('[aria-live="polite"] > .filing-status-consequences')).toBeTruthy()
     expect(onChange).not.toHaveBeenCalled()
 
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Change to Married filing separately' }))

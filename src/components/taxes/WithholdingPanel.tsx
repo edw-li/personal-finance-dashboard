@@ -665,9 +665,15 @@ export default function WithholdingPanel({
               withholding.vest.income_ytd,
             )}`}
           </p>
-          {/* The primary's own §W1 sentence, beside the check count it qualifies. */}
+          {/* The primary's own §W1 sentence, beside the check count it qualifies — and the
+              rule that makes a partial year honest, wherever one shows (§W1). */}
           {primaryGrid?.early_checks_note != null && (
-            <p className="hint withholding-start">{sentence(primaryGrid.early_checks_note)}</p>
+            <>
+              <p className="hint withholding-start">{sentence(primaryGrid.early_checks_note)}</p>
+              {primaryGrid.starts_on != null && (
+                <p className="drill-hint">{PROFILE_BY_DATE_NOTE}</p>
+              )}
+            </>
           )}
 
           {reconciliation !== null && (
@@ -779,7 +785,9 @@ export default function WithholdingPanel({
                   <>
                     <p className="drill-hint">
                       {`Simulated from ${
-                        partnerGrid?.name != null ? `${partnerGrid.name}’s` : 'their'
+                        // A straight apostrophe, like the server's own sentence beneath it
+                        // ("Grace's checks on or before …") — they read as one passage.
+                        partnerGrid?.name != null ? `${partnerGrid.name}'s` : 'their'
                       } paycheck profile — ${partnerLeg.checks_elapsed} of ${partnerLeg.checks_total} checks${
                         partnerGrid?.starts_on != null ? ` since ${dayLabel(partnerGrid.starts_on)}` : ''
                       } at their all-in withholding %. Their entered W-2 withholding rows are ignored while that profile exists.`}

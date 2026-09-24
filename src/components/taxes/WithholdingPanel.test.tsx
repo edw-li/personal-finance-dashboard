@@ -1239,7 +1239,7 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
     const block = (await screen.findByText('Partner — simulated')).closest('.withholding-partner') as HTMLElement
     expect(
       within(block).getByText(
-        /^Simulated from Grace’s paycheck profile — 1 of 8 checks since Sep 1 at their all-in withholding %\./,
+        /^Simulated from Grace's paycheck profile — 1 of 8 checks since Sep 1 at their all-in withholding %\./,
       ),
     ).toBeTruthy()
     expect(
@@ -1268,6 +1268,11 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
     render(<WithholdingPanel year={2026} />)
     const line = await screen.findByText(`${note}.`)
     expect(line.closest('.withholding-partner')).toBeNull()
+    // §W1's rule sentence goes wherever a partial year shows — the primary's too (review nit).
+    const rules = screen.getAllByText(
+      'Each check is priced by the paycheck profile in force on its date. For a raise or a new job, add a profile with its start date.',
+    )
+    expect(rules.some((rule) => rule.closest('.withholding-partner') === null)).toBe(true)
     // Both start-date sentences are inline; the three method notes are all that is folded.
     expect(screen.getByText('How this is estimated (3 notes)')).toBeTruthy()
   })

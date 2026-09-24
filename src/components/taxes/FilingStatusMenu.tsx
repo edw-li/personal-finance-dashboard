@@ -173,13 +173,17 @@ export default function FilingStatusMenu({
           </fieldset>
           {loading && <p className="drill-hint">Reading what each status means for {year}…</p>}
           <FeedBanner error={error} retry={load} />
-          {lines.length > 0 && (
-            <ul className="filing-status-consequences">
-              {lines.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-          )}
+          {/* A live region that is always there, so a reader hears what a status would mean
+              the moment it is chosen (review nit) — the list inside it comes and goes. */}
+          <div aria-live="polite">
+            {lines.length > 0 && (
+              <ul className="filing-status-consequences">
+                {lines.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
+          </div>
           <div className="filing-status-actions">
             <button
               type="button"

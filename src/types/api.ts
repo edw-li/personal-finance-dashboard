@@ -793,9 +793,6 @@ export interface TaxYearOut {
   bracket_count: number
 }
 
-// PATCH /taxes/years/{year} — the year row's one mutable field. Flipping it changes which
-// bracket tables the engine walks, whether the per-person inputs split into two columns,
-// and therefore every figure on the page: the caller reloads the year afterwards.
 /** What filing a year under one status would mean (2026-09-23 spec §W8) — the server's rules. */
 export interface TaxStatusOption {
   status: FilingStatus
@@ -811,6 +808,9 @@ export interface TaxStatusOptions {
   options: TaxStatusOption[]
 }
 
+// PATCH /taxes/years/{year} — the year row's one mutable field. Flipping it changes which
+// bracket tables the engine walks, whether the per-person inputs split into two columns,
+// and therefore every figure on the page: the caller reloads the year afterwards.
 export interface TaxYearUpdate {
   filing_status: FilingStatus
 }
@@ -1197,7 +1197,6 @@ export interface WithholdingLegOut {
   projected: string
 }
 
-/** The partner's SIMULATED salary leg — the primary's leg shape plus its own check grid. */
 /**
  * One simulated leg's check grid, summed over its COUNTED checks (2026-09-23 spec §W1–§W2): a
  * grid check on or before the person's first paycheck profile pays nothing and is not counted.
@@ -1272,6 +1271,7 @@ export interface Reconciliation {
   notes: string[]
 }
 
+/** The partner's SIMULATED salary leg — the primary's leg shape plus its own check grid. */
 export interface WithholdingPartnerLeg {
   ytd: string
   projected: string
