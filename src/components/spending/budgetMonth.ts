@@ -1,5 +1,4 @@
 import type { SpendingMatrix } from '../../types/api'
-import { addDays, addMonths } from '../../utils/months'
 
 // The Budgets view's month rules (2026-09-23 spec §B5). Pure. The matrix's RESOLVED budget
 // column is the only budget truth the page holds — there is no budget-history GET (the
@@ -9,6 +8,9 @@ import { addDays, addMonths } from '../../utils/months'
 // Known limit of reading the resolved column: a budget row dated AFTER the last entered month
 // resolves in no matrix month yet, so the card cannot see it until that month is entered —
 // exactly as the meters could not before.
+//
+// "Is this month still in progress" is charts/partial.isPartialMonth — the one partial rule
+// (2026-09-23 time-contract spec §K1); this file kept a second copy until then.
 
 type BudgetBook = Pick<SpendingMatrix, 'months' | 'series'>
 
@@ -88,11 +90,4 @@ export function budgetsElsewhere(book: BudgetBook, viewedIndex: number): Budgets
   const count = budgetCountAt(book, targetIndex)
   const everBudgeted = book.series.filter((series) => series.budgets.some(inForce)).length
   return { targetIndex, relation, count, everyBudget: count === everBudgeted }
-}
-
-/** The spec's one objective rule (§0): a month is in progress while its last day is still
- *  ahead of today. `todayIso` is a local YYYY-MM-DD. */
-export function isMonthInProgress(month: string, todayIso: string): boolean {
-  const lastDay = addDays(addMonths(`${monthKey(month)}-01`, 1), -1)
-  return lastDay > todayIso
 }

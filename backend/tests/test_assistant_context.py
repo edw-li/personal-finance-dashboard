@@ -197,6 +197,32 @@ async def test_net_worth_builder_honors_the_view_owner_and_granularity(db):
     assert section["accounts"][0]["name"] == "Checking"
 
 
+async def test_the_net_worth_section_carries_the_summary_date_fields(db, monkeypatch):
+    """K2 (2026-09-23 spec): the section hands the assistant the summary as it is, so the new
+    as-of / provisional / previous fields reach it without a line of context code."""
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+    account = Account(name="Checking", slug="checking", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    for month, recorded_on in (
+        (date(2026, 9, 1), date(2026, 9, 1)),
+        (date(2026, 10, 1), date(2026, 9, 22)),
+    ):
+        snap = NetWorthSnapshot(month=month, recorded_on=recorded_on)
+        db.add(snap)
+        await db.flush()
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal("10.00")))
+    await db.commit()
+    context = await build_context(db, route="/net-worth", search={}, view={})
+    summary = context["net_worth"]["summary"]
+    assert (summary["month"], summary["as_of"], summary["provisional"]) == (
+        "2026-10-01",
+        "2026-09-22",
+        True,
+    )
+    assert (summary["previous"]["month"], summary["days_since_previous"]) == ("2026-09-01", 21)
+
+
 async def test_a_failing_section_degrades_without_taking_the_context_down(db, monkeypatch):
     import app.services.assistant_context as ctx
 

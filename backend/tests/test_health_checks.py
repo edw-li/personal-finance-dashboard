@@ -12,6 +12,7 @@ from app.models import (
     Security,
     SpendingCategory,
 )
+from app.services import clock
 from app.services.coverage import load_coverage
 from app.services.health_checks import (
     BACKUP_ERROR_DAYS,
@@ -322,7 +323,11 @@ async def test_run_checks_returns_the_nine_in_order(db):
     ]
 
 
-async def test_spending_gap_names_months_missing_inside_the_balances_window(db):
+async def test_spending_gap_names_months_missing_inside_the_balances_window(db, monkeypatch):
+    # The windows end at the newest OVERDUE month since 2026-09-24 (2026-09-23 spec §K3): on
+    # Oct 20 flows are overdue through September, so the window is Jul..Sep — August still
+    # missing, September has rows.
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 10, 20))
     food, _rent = await categories(db)
     db.add_all(
         [
@@ -344,7 +349,9 @@ async def test_spending_gap_names_months_missing_inside_the_balances_window(db):
     assert check_zero_filled_spending(coverage).months == [date(2026, 9, 1)]
 
 
-async def test_spending_gap_is_ok_when_the_window_is_covered(db):
+async def test_spending_gap_is_ok_when_the_window_is_covered(db, monkeypatch):
+    # July is the newest overdue month on Aug 20 (spec §K3) — and it is covered.
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 8, 20))
     food, _rent = await categories(db)
     db.add_all(
         [

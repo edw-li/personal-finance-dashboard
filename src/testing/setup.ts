@@ -1,4 +1,4 @@
-import { afterAll } from 'vitest'
+import { afterAll, afterEach } from 'vitest'
 
 // The prefs store debounces its PATCH by 400ms on a MODULE-GLOBAL timer (prefsStore.ts's
 // `setLocal`). A test file that renders anything writing a pref and then finishes inside that
@@ -18,4 +18,13 @@ import { afterAll } from 'vitest'
 afterAll(async () => {
   const store = await import('../prefs/prefsStore')
   store.resetPrefsStoreForTests?.()
+})
+
+// The day the API last named (utils/productToday.ts, 2026-09-23 spec §K1) is module state: a test
+// that stubs a response carrying `X-Product-Today`, or seeds the day itself, must not leave it for
+// the next test in its file. Dynamic for the reason the prefs import above is: setup must never
+// instantiate a module ahead of a test file's own vi.mock of it.
+afterEach(async () => {
+  const store = await import('../utils/productToday')
+  store.resetServerTodayForTests?.()
 })

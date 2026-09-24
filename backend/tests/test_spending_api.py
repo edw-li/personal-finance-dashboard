@@ -1,6 +1,8 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import ANY
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select, update
 
@@ -16,7 +18,8 @@ from app.models import (
     Person,
     SpendingCategory,
 )
-from app.services.budgets import living_budget_total
+from app.models.month_review import MonthReviewAdoption
+from app.services.budgets import living_budget_total, load_suggestions
 
 
 async def test_spending_requires_auth(client):
@@ -1192,3 +1195,97 @@ async def test_put_month_confirm_zero_writes_every_zero(auth_client, db):
     assert resp.status_code == 200, resp.text
     assert (resp.json()["created"], resp.json()["skipped_blank"]) == (19, 0)
     assert len((await auth_client.get(put)).json()["amounts"]) == 19
+
+
+async def test_budget_suggestions_leave_out_a_month_saved_during_the_month(
+    auth_client, db, monkeypatch
+):
+    """K6 (2026-09-23 spec) on the wire: on Oct 3 September's rent was saved on Sep 7 (partial)
+    — the window ends at August; with no such write on record it would include September."""
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(rent)
+    await db.flush()
+    months = [date(2025, 10 + i, 1) for i in range(3)] + [date(2026, i, 1) for i in range(1, 10)]
+    for month in months:
+        db.add(MonthlySpending(month=month, category_id=rent.id, amount=Decimal("2000.00")))
+        db.add(MonthlyCashflow(month=month, net_pay=Decimal("6000.00")))
+    db.add(NetWorthSnapshot(month=date(2025, 10, 1), recorded_on=date(2025, 10, 1)))
+    db.add(MonthReviewAdoption(id=1, adopted_on=date(2026, 9, 12)))
+    db.add(
+        ChangeLog(
+            batch_id=uuid4(),
+            source="ui",
+            actor="me@example.com",
+            label="Saved Sep 2026 spending",
+            table_name="monthly_spending",
+            pk={"id": 1},
+            op="update",
+            before={"id": 1},
+            after={"id": 1},
+            month=date(2026, 9, 1),
+            at=datetime(2026, 9, 7, 12, tzinfo=ZoneInfo("America/Los_Angeles")),
+        )
+    )
+    await db.commit()
+    _pin_today(monkeypatch, date(2026, 10, 3))
+    window = (await auth_client.get("/api/v1/spending/budgets/suggestions")).json()["window"]
+    assert window == {"from": "2025-10-01", "to": "2026-08-01", "months": 11}
+
+
+def _k6_ui_write(month: date, at: datetime) -> ChangeLog:
+    """A `ui` spending write for `month` at `at` — the evidence K3 reads."""
+    return ChangeLog(
+        batch_id=uuid4(),
+        source="ui",
+        actor="me@example.com",
+        label="Saved spending",
+        table_name="monthly_spending",
+        pk={"id": 1},
+        op="update",
+        before={"id": 1},
+        after={"id": 1},
+        month=month,
+        at=at,
+    )
+
+
+async def _k6_book(db, months, *, no_take_home=(), adopted_on, snapshots) -> None:
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(rent)
+    await db.flush()
+    for month in months:
+        db.add(MonthlySpending(month=month, category_id=rent.id, amount=Decimal("2000.00")))
+        if month not in no_take_home:
+            db.add(MonthlyCashflow(month=month, net_pay=Decimal("6000.00")))
+    for month in snapshots:
+        db.add(NetWorthSnapshot(month=month, recorded_on=month))
+    db.add(MonthReviewAdoption(id=1, adopted_on=adopted_on))
+
+
+async def test_budget_window_keeps_a_month_due_only_for_its_take_home(db):
+    """Review minor 4 (the pin): August's spending is entered (no write on record) and only its
+    take-home is missing — it is listed as due, but its complete spending stays in the window."""
+    months = [date(2025, 10 + i, 1) for i in range(3)] + [date(2026, i, 1) for i in range(1, 10)]
+    await _k6_book(
+        db,
+        months,
+        no_take_home={date(2026, 8, 1)},
+        adopted_on=date(2026, 7, 12),
+        snapshots=[date(2025, 10, 1)],
+    )
+    await db.commit()
+    window, _ = await load_suggestions(db, date(2026, 10, 20))
+    assert date(2026, 8, 1) in window and window[-1] == date(2026, 9, 1) and len(window) == 12
+
+
+async def test_budget_window_leaves_out_a_partial_month_before_the_first_snapshot(db):
+    """Review minor 8: August 2026 was saved during August (partial) and the balances only start
+    on Sep 1, so `time.flows_due` never lists August — the window must still leave it out."""
+    months = [date(2025, 9 + i, 1) for i in range(4)] + [date(2026, i, 1) for i in range(1, 10)]
+    await _k6_book(db, months, adopted_on=date(2026, 7, 12), snapshots=[date(2026, 9, 1)])
+    august = date(2026, 8, 1)
+    db.add(_k6_ui_write(august, datetime(2026, 8, 10, 12, tzinfo=ZoneInfo("America/Los_Angeles"))))
+    await db.commit()
+    window, _ = await load_suggestions(db, date(2026, 10, 20))
+    assert august not in window
+    assert (window[0], window[-1], len(window)) == (date(2025, 9, 1), date(2026, 9, 1), 12)

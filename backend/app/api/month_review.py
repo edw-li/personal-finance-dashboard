@@ -87,7 +87,17 @@ async def save_month(
         balance_result = (
             None
             if body.balances is None
-            else await write_balances(month, body.balances, db, batch, record_metadata=True)
+            else await write_balances(
+                month,
+                body.balances,
+                db,
+                batch,
+                record_metadata=True,
+                # K4 (2026-09-23 spec): a legacy or closed month is never restamped — the new
+                # date would move its digest off the revision it was adopted or certified at.
+                # `current` is this month's state in the book read before the write.
+                restamp=current.state not in ("unreviewed_history", "closed"),
+            )
         )
         spending_result = (
             None if body.spending is None else await write_spending(month, body.spending, db, batch)
