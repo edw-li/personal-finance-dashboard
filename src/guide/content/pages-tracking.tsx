@@ -45,7 +45,7 @@ export const TRACKING_CARDS: GuideCard[] = [
         where: 'Overview → Needs attention',
         steps: [
           'Each line in the strip is a condition the data itself proves.',
-          'The monthly update’s two parts — the 1st’s balances, and last month’s spending and take-home — show as to-dos while due and as warnings once overdue, beside stale quotes, failed tickers, a stale backup and a missing tax year.',
+          'The monthly update’s two parts show as to-dos while due and warnings once overdue, beside stale quotes, failed tickers, a stale backup and a missing tax year.',
           'Click a line to land on the page that fixes it.',
           'With nothing outstanding the card reads **No outstanding data checks**.',
         ],
@@ -83,7 +83,7 @@ export const TRACKING_CARDS: GuideCard[] = [
         where: 'Overview → Data status',
         steps: [
           '**Prices as of** is the oldest quote on file — the staleness clock, not the newest quote.',
-          'Balances name the day they describe — provisional while typed before their 1st; spending and net pay name the newest complete month, then what is still to come.',
+          'Balances name the day they describe (provisional if typed before their 1st); spending and net pay name the newest complete month and what is still to come.',
           'A hand-entered feed turns amber only once one of its parts is overdue.',
         ],
         to: '/',
