@@ -16,6 +16,14 @@ import type {
 import { isAmount } from '../../utils/amount'
 import { classifyPaste, matchLabel } from '../../utils/paste'
 import { UNIT_KINDS, figureText, isEntry, isWholeCount, toBox, toWire } from './inputUnits'
+import {
+  clearTaxDraft,
+  inputsDraftKey,
+  isStringRecord,
+  resumeDraft,
+  sameRecord,
+  writeTaxDraft,
+} from './taxDrafts'
 import { FeedBanner } from '../shell/Feed'
 import { MOTION_MS } from '../../theme/motion'
 import './taxes.css'
@@ -286,13 +294,27 @@ export default function InputsForm({
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const { columns, split, sections, flatCells, allCells } = modelOf(inputs)
+  const draftKey = inputsDraftKey(inputs.year)
+
+  // What the last sitting left unsaved (2026-09-23 spec §W9), read ONCE per mount: restored
+  // while the server still returns the values it was typed over, dropped (and said so) once
+  // they have changed. A pure read — the write effect below forgets a draft that is not put
+  // back, because the boxes then match the server.
+  const [resume] = useState(() =>
+    resumeDraft(draftKey, valuesOf(flatCells), isStringRecord, sameRecord),
+  )
+  const [restored, setRestored] = useState(resume.kind === 'restored')
+  const [dropped, setDropped] = useState(resume.kind === 'dropped')
 
   // `values` is what the user sees, `baseline` what the server last confirmed — the PUT
   // body is their diff, so an untouched cell is never sent (sending one blank would DELETE
   // a stored input the user never looked at). Both seed from a useState INITIALIZER, so a
   // prop replacement (the page refetching the same year) cannot overwrite typed work —
-  // only a save echo, or a remount on a real year/status switch, re-adopts a baseline.
-  const [values, setValues] = useState<Record<string, string>>(() => valuesOf(flatCells))
+  // only a save echo, or a remount on a real year/status switch, re-adopts a baseline. A
+  // restored draft seeds `values` alone: it is unsaved work, and the diff says so.
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    resume.kind === 'restored' ? resume.edited : valuesOf(flatCells),
+  )
   const [baseline, setBaseline] = useState<Record<string, string>>(() => valuesOf(flatCells))
   // The computed totals on screen, seeded from the payload and replaced only by the server:
   // a preview answer while typing, the echo when a save lands.
@@ -315,8 +337,10 @@ export default function InputsForm({
   // still serializes to exactly that already agrees with its figures, so previewing it would
   // spend a request to be told what we were just told. A ref rather than a one-shot flag,
   // because StrictMode mounts effects twice in dev and a flag would be spent on the first
-  // pass and let the second one ask.
-  const serverBody = useRef(bodyJson)
+  // pass and let the second one ask. Seeded from the SERVER's values, not the boxes': a
+  // restored draft (§W9) is a form the figures have not been asked about yet.
+  const [mountBody] = useState(() => JSON.stringify(previewBodyOf(flatCells, valuesOf(flatCells))))
+  const serverBody = useRef(mountBody)
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
@@ -341,6 +365,20 @@ export default function InputsForm({
   useEffect(() => {
     onDirtyChange?.(changedCount > 0)
   }, [changedCount, onDirtyChange])
+
+  // The draft mirrors "what would be lost" continuously (§W9): written on every edit with the
+  // baseline it was typed over, and forgotten the moment the boxes match the server again —
+  // after a save, a discard, or typing a value back. No setState here.
+  useEffect(() => {
+    if (changedCount === 0) clearTaxDraft(draftKey)
+    else writeTaxDraft(draftKey, { loaded: baseline, edited: values })
+  }, [changedCount, values, baseline, draftKey])
+
+  // The restore banner's exit: the saved values back in every box, the draft forgotten.
+  const discardRestored = () => {
+    setValues(baseline)
+    setRestored(false)
+  }
 
   // Live totals (spec §1.7): a computed line follows its components as they are typed, and
   // the browser owns no formula — so every edit ASKS what the totals would be. Debounced
@@ -436,6 +474,9 @@ export default function InputsForm({
         // The note described a pending fill that the echo just replaced — it would be
         // narrating values that are no longer on screen.
         setPasteNote(null)
+        // Saved: nothing restored is unsaved any more, and a dropped draft is history.
+        setRestored(false)
+        setDropped(false)
         onSaved(echo)
       })
       .catch((err: unknown) => {
@@ -583,6 +624,23 @@ export default function InputsForm({
           One column: add the second person in Settings → Household to split the per-person
           lines (salary, W-2, 401k, HSA, pre-tax deductions) into two. Until then these values
           are stored against the primary person.
+        </p>
+      )}
+      {/* Advisory, never an error: nothing failed — work was preserved (the wizard's draft
+          note). Only while it is still unsaved work: typed back to the saved values, there is
+          nothing restored left to discard. */}
+      {restored && changedCount > 0 && (
+        <div className="tax-draft-note" role="status">
+          <span>Restored unsaved tax inputs for {inputs.year} — they are not saved yet.</span>
+          <button type="button" className="button" onClick={discardRestored}>
+            Discard restored entries
+          </button>
+        </div>
+      )}
+      {dropped && (
+        <p className="tax-draft-note" role="status">
+          Unsaved tax inputs for {inputs.year} were discarded: the saved values changed since you
+          typed them.
         </p>
       )}
       <FeedBanner error={error} />

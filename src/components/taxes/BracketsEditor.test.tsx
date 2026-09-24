@@ -104,6 +104,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // Unsaved tables are mirrored to sessionStorage (§W9): no test inherits another's draft.
+  sessionStorage.clear()
 })
 
 describe('BracketsEditor', () => {
@@ -422,6 +424,118 @@ describe('BracketsEditor', () => {
     fireEvent.click(save('Federal'))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('federal: at most 12 brackets per jurisdiction')
+  })
+})
+
+describe('BracketsEditor — unsaved tables survive (2026-09-23 spec §W9)', () => {
+  // bracketsFixture()'s tables as the boxes hold them: rates in percent, thresholds verbatim.
+  const LOADED = {
+    federal: [
+      { rate: '10', threshold: '0.00' },
+      { rate: '37', threshold: '100000.00' },
+    ],
+    state: [{ rate: '9.3', threshold: '0.00' }],
+    medicare: [{ rate: '1.45', threshold: '0.00' }],
+    social_security: [],
+    disability: [{ rate: '1', threshold: '0.00' }],
+    capital_gains: [],
+  }
+  const EDITED = {
+    ...LOADED,
+    federal: [
+      { rate: '10', threshold: '0.00' },
+      { rate: '35', threshold: '100000.00' },
+    ],
+  }
+  const SINGLE = 'finance-tax-brackets-draft:2024:single'
+  const MFJ = 'finance-tax-brackets-draft:2024:married_joint'
+  const stored = (key: string) => JSON.parse(sessionStorage.getItem(key) ?? 'null') as unknown
+  const seed = (key: string, draft: unknown) => sessionStorage.setItem(key, JSON.stringify(draft))
+
+  it('writes the tab’s draft under its year and status, with the tables it was typed over', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(sessionStorage.getItem(SINGLE)).toBeNull()
+    fireEvent.change(rate('Federal', 2), { target: { value: '35' } })
+    expect(stored(SINGLE)).toEqual({ loaded: LOADED, edited: EDITED })
+  })
+
+  it('restores it on the next mount, naming the year and the status; Discard puts the saved tables back', () => {
+    seed(MFJ, { loaded: LOADED, edited: EDITED })
+    render(
+      <BracketsEditor
+        brackets={statusFixture('married_joint', ['single', 'married_joint'])}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+    expect(rate('Federal', 2).value).toBe('35%')
+    expect(
+      screen.getByText('Restored unsaved tax tables for 2024 (MFJ) — they are not saved yet.'),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard restored entries' }))
+    expect(rate('Federal', 2).value).toBe('37%')
+    expect(sessionStorage.getItem(MFJ)).toBeNull()
+    expect(screen.queryByText(/Restored unsaved/)).toBeNull()
+  })
+
+  it('drops a draft typed over tables the server has since changed, and says why', () => {
+    seed(SINGLE, { loaded: { ...LOADED, state: [{ rate: '9', threshold: '0.00' }] }, edited: EDITED })
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(rate('Federal', 2).value).toBe('37%')
+    expect(
+      screen.getByText(
+        'Unsaved tax tables for 2024 (Single) were discarded: the saved values changed since you typed them.',
+      ),
+    ).toBeTruthy()
+    expect(sessionStorage.getItem(SINGLE)).toBeNull()
+  })
+
+  it('restores another status’ draft when its tab is opened', async () => {
+    // The MFJ tab's server tables are six empty ones (the file's fetch mock), and this draft
+    // was typed over exactly those.
+    const empty = {
+      federal: [], state: [], medicare: [], social_security: [], disability: [], capital_gains: [],
+    }
+    seed(MFJ, { loaded: empty, edited: { ...empty, federal: [{ rate: '12', threshold: '0.00' }] } })
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText(/Restored unsaved/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Married filing jointly' }))
+    await waitFor(() => expect(rate('Federal', 1).value).toBe('12%'))
+    expect(
+      screen.getByText('Restored unsaved tax tables for 2024 (MFJ) — they are not saved yet.'),
+    ).toBeTruthy()
+  })
+
+  it('an accepted discard on a tab switch forgets the tab being left', async () => {
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+    fireEvent.change(rate('Federal', 2), { target: { value: '35' } })
+    expect(sessionStorage.getItem(SINGLE)).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Married filing jointly' }))
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved Single bracket changes for 2024?')
+    await waitFor(() => expect(sessionStorage.getItem(SINGLE)).toBeNull())
+  })
+
+  it('a save that leaves nothing unsaved clears the draft', async () => {
+    const echo = bracketsFixture()
+    echo.jurisdictions.federal[1] = { bracket_index: 2, rate: '0.3500', threshold: '100000.00' }
+    vi.mocked(putTaxBrackets).mockResolvedValue(echo)
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    fireEvent.change(rate('Federal', 2), { target: { value: '35' } })
+    expect(sessionStorage.getItem(SINGLE)).not.toBeNull()
+    fireEvent.click(save('Federal'))
+    await waitFor(() => expect(sessionStorage.getItem(SINGLE)).toBeNull())
   })
 })
 

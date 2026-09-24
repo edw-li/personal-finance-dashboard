@@ -198,6 +198,114 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   vi.useRealTimers()
+  // Typed-but-unsaved work is mirrored to sessionStorage (§W9); a test that types without
+  // saving must not hand its draft to the next test's mount.
+  sessionStorage.clear()
+})
+
+describe('InputsForm — unsaved work survives (2026-09-23 spec §W9)', () => {
+  const KEY = 'finance-tax-inputs-draft:2024'
+  // The fixture's editable boxes as the server loads them (the computed line is not one).
+  const LOADED = {
+    annual_salary: '200000.0000',
+    hsa_contributions: '4150.0000',
+    qualified_dividends: '',
+  }
+  const EDITED = { ...LOADED, annual_salary: '210000' }
+  const stored = () => JSON.parse(sessionStorage.getItem(KEY) ?? 'null') as unknown
+  const seed = (draft: unknown) => sessionStorage.setItem(KEY, JSON.stringify(draft))
+  const RESTORED = 'Restored unsaved tax inputs for 2024 — they are not saved yet.'
+
+  it('writes a draft with the values it was typed over, from the first edit', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+    fireEvent.change(field('Annual Salary'), { target: { value: '210000' } })
+    expect(stored()).toEqual({ loaded: LOADED, edited: EDITED })
+    // Typed back to what was loaded: nothing would be lost, so nothing is kept.
+    fireEvent.change(field('Annual Salary'), { target: { value: '200000.0000' } })
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+  })
+
+  it('restores the draft on the next mount while the saved values are unchanged, and says so', () => {
+    seed({ loaded: LOADED, edited: EDITED })
+    const onDirtyChange = vi.fn()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} onDirtyChange={onDirtyChange} />)
+    expect(field('Annual Salary').value).toBe('$210,000.00')
+    expect(screen.getByText(RESTORED)).toBeTruthy()
+    // Restored work IS unsaved work: the page's guards see it, and Save sends it.
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+    expect(saveButton().disabled).toBe(false)
+  })
+
+  it('survives a 401 on save: a fresh mount after the login redirect puts the typing back', async () => {
+    vi.mocked(putTaxInputs).mockRejectedValue(new ApiError('Session expired', 401))
+    const first = render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(field('Annual Salary'), { target: { value: '210000' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+    // The redirect replaces the page; the next sitting mounts the form afresh.
+    first.unmount()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(field('Annual Salary').value).toBe('$210,000.00')
+    expect(screen.getByText(RESTORED)).toBeTruthy()
+  })
+
+  it('drops a draft typed over values the server no longer returns, and says why', () => {
+    // Another device saved 200000 over the 190000 this draft was typed over: restoring it
+    // would silently revert that on the next Save.
+    seed({ loaded: { ...LOADED, annual_salary: '190000.0000' }, edited: EDITED })
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(
+      screen.getByText(
+        'Unsaved tax inputs for 2024 were discarded: the saved values changed since you typed them.',
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText(RESTORED)).toBeNull()
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+  })
+
+  it('drops a draft equal to its own loaded values without a word', () => {
+    seed({ loaded: LOADED, edited: LOADED })
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+    expect(screen.queryByText(/unsaved tax inputs/i)).toBeNull()
+  })
+
+  it('a save clears the draft and the banner', async () => {
+    seed({ loaded: LOADED, edited: EDITED })
+    const echo = inputsFixture()
+    echo.sections[0].items[0].value = '210000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValue(echo)
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(sessionStorage.getItem(KEY)).toBeNull())
+    expect(screen.queryByText(RESTORED)).toBeNull()
+  })
+
+  it('asks for the totals of the restored boxes, not the saved ones', async () => {
+    vi.useFakeTimers()
+    seed({ loaded: LOADED, edited: EDITED })
+    vi.mocked(previewTaxInputs).mockResolvedValue(previewOut('8750.0000'))
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    await settle(300)
+    // The payload's figures describe the SAVED salary; the boxes hold the restored one.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: { annual_salary: '210000', hsa_contributions: '4150.0000', qualified_dividends: null },
+    })
+    expect(computed('Gross Paycheck').textContent).toBe('$8,750.00')
+  })
+
+  it('Discard restored entries puts the saved values back and forgets the draft', () => {
+    seed({ loaded: LOADED, edited: EDITED })
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Discard restored entries' }))
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+    expect(screen.queryByText(RESTORED)).toBeNull()
+    expect(saveButton().disabled).toBe(true)
+  })
 })
 
 describe('InputsForm', () => {

@@ -468,6 +468,98 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // Typed-but-unsaved work is mirrored to sessionStorage (§W9): no test inherits a draft.
+  sessionStorage.clear()
+})
+
+describe('TaxesPage — unsaved edits survive (2026-09-23 spec §W9)', () => {
+  const DRAFT_2024 = 'finance-tax-inputs-draft:2024'
+
+  it('asks the browser to hold a reload or a closed tab only while a form holds unsaved work', async () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
+    try {
+      renderPage('/taxes?section=inputs')
+      await readyInputs()
+      const registered = () => add.mock.calls.filter(([type]) => type === 'beforeunload')
+      expect(registered()).toHaveLength(0)
+
+      fireEvent.change(salary(), { target: { value: '$999,000' } })
+      await waitFor(() => expect(registered()).toHaveLength(1))
+      // The handler says "stay": the browser's own "Leave site?" prompt, nothing custom.
+      const handler = registered()[0][1] as (event: Event) => void
+      const event = new Event('beforeunload', { cancelable: true })
+      handler(event)
+      expect(event.defaultPrevented).toBe(true)
+
+      // Saved: nothing would be lost, so nothing holds the browser any more.
+      fireEvent.click(screen.getByRole('button', { name: /save inputs/i }))
+      await waitFor(() =>
+        expect(remove.mock.calls.some(([type, fn]) => type === 'beforeunload' && fn === handler)).toBe(
+          true,
+        ),
+      )
+    } finally {
+      add.mockRestore()
+      remove.mockRestore()
+    }
+  })
+
+  it('an accepted “Discard unsaved changes?” forgets the year’s drafts; a declined one keeps them', async () => {
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
+    fireEvent.change(salary(), { target: { value: '$999,000' } })
+    await waitFor(() => expect(sessionStorage.getItem(DRAFT_2024)).not.toBeNull())
+    sessionStorage.setItem(
+      'finance-tax-brackets-draft:2024:married_joint',
+      JSON.stringify({ loaded: {}, edited: { federal: [] } }),
+    )
+
+    confirmSpy.mockReturnValueOnce(false)
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    expect(sessionStorage.getItem(DRAFT_2024)).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    expect(confirmSpy).toHaveBeenLastCalledWith('Discard unsaved changes for 2024?')
+    // Discarded on purpose: coming back to 2024 must not resurrect it.
+    expect(sessionStorage.getItem(DRAFT_2024)).toBeNull()
+    expect(sessionStorage.getItem('finance-tax-brackets-draft:2024:married_joint')).toBeNull()
+  })
+
+  it('comes back after leaving the page: a fresh mount restores the typing, with the note', async () => {
+    const first = renderPage('/taxes?section=inputs')
+    await readyInputs()
+    fireEvent.change(salary(), { target: { value: '$999,000' } })
+    await waitFor(() => expect(sessionStorage.getItem(DRAFT_2024)).not.toBeNull())
+    // A route change unmounts the page without asking anything (no router guard exists).
+    first.unmount()
+    clearSnapshots()
+
+    renderPage('/taxes?section=inputs')
+    await waitFor(() => expect(salary().value).toBe('$999,000.00'))
+    expect(
+      screen.getByText('Restored unsaved tax inputs for 2024 — they are not saved yet.'),
+    ).toBeTruthy()
+  })
+
+  it('an Apply that rewrites the inputs forgets their draft, so the remount reports nothing lost', async () => {
+    const echo = inputsFor(2024)
+    echo.sections[0].items[0].value = '210000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValue(echo)
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
+    fireEvent.change(salary(), { target: { value: '$999,000' } })
+    await waitFor(() => expect(sessionStorage.getItem(DRAFT_2024)).not.toBeNull())
+
+    fireEvent.click(screen.getByRole('tab', { name: 'What-if' }))
+    // The confirm names the discard ("…, discarding its unsaved edits"), and it was accepted.
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    await waitFor(() => expect(salary().value).toBe('$210,000.00'))
+    expect(screen.queryByText(/were discarded: the saved values changed/)).toBeNull()
+    expect(sessionStorage.getItem(DRAFT_2024)).toBeNull()
+  })
 })
 
 describe('TaxesPage — frame', () => {

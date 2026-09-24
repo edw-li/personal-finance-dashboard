@@ -26,6 +26,7 @@ import InputsForm from '../components/taxes/InputsForm'
 import { figureText } from '../components/taxes/inputUnits'
 import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
+import { clearTaxDraft, clearYearDrafts, inputsDraftKey } from '../components/taxes/taxDrafts'
 import type { TaxSection } from '../components/taxes/taxSections'
 import TaxYearMenu from '../components/taxes/TaxYearMenu'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
@@ -285,6 +286,20 @@ export default function TaxesPage() {
     dirtyRef.current = dirty
   }, [dirty])
 
+  // A reload or a closed tab would take typed work with it (2026-09-23 spec §W9): while either
+  // editor holds some, the browser asks its own "Leave site?" first. The drafts are the net
+  // under a navigation it cannot ask about (an in-app route change, a login redirect); this is
+  // the question where one can be asked. Registered only while dirty, so a clean page never
+  // makes the browser hesitate.
+  useEffect(() => {
+    if (!dirty) return
+    const hold = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+    }
+    window.addEventListener('beforeunload', hold)
+    return () => window.removeEventListener('beforeunload', hold)
+  }, [dirty])
+
   // The assistant answers against the year on screen (2026-09-01 spec §6).
   useAssistantView({ year: selectedYear, filingStatus })
 
@@ -434,9 +449,14 @@ export default function TaxesPage() {
   }
 
   // The house confirm (TransactionsPanel's delete): a reload replaces both editors'
-  // payloads, so unsaved work is gone the moment one starts.
-  const confirmDiscard = () =>
-    !dirty || window.confirm(`Discard unsaved changes for ${selectedYear}?`)
+  // payloads, so unsaved work is gone the moment one starts. Accepted, it is gone on purpose —
+  // so the year's drafts go too, rather than resurrecting on the next visit (§W9).
+  const confirmDiscard = () => {
+    if (!dirty) return true
+    if (!window.confirm(`Discard unsaved changes for ${selectedYear}?`)) return false
+    if (selectedYear !== null) clearYearDrafts(selectedYear)
+    return true
+  }
 
   const selectYear = (year: number) => {
     // Re-clicking the selected chip must not refetch (MonthlyUpdatePage's same-month
@@ -557,6 +577,10 @@ export default function TaxesPage() {
   // The withholding card wrote the year's inputs from outside the form: the same landing
   // chain a save takes, plus the remount the form's protect-typed-work rule makes necessary.
   const onVestApplied = (echo: TaxInputsOut) => {
+    // Its confirm named the discard of any unsaved edits, and it was accepted: the draft goes
+    // with them, or the remount would call the Apply's own write "the saved values changed
+    // since you typed them" (§W9).
+    clearTaxDraft(inputsDraftKey(echo.year))
     setInputsEpoch((n) => n + 1)
     onInputsSaved(echo) // adopts the echo, refreshes the totals and the chip counts
   }
@@ -730,8 +754,10 @@ export default function TaxesPage() {
     deleteTaxYear(year)
       .then(() => {
         // Gone on the server whoever is looking at the page by now, so the chip goes
-        // unguarded — the create path's optimistic list edit, inverted.
+        // unguarded — the create path's optimistic list edit, inverted. Its drafts describe
+        // a year that no longer exists (§W9).
         setYears((current) => current.filter((y) => y.year !== year))
+        clearYearDrafts(year)
         if (seq !== seqRef.current) return
         // No year is selected any more — the ref that says which year the page belongs to
         // was nulled at click time, above — so the URL must stop naming one too.
