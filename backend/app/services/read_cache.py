@@ -91,9 +91,7 @@ MONTH_SAVINGS_TABLES: tuple[str, ...] = tuple(
 
 # Every table the withholding GET reads (2026-09-23 spec §W12) — the engine feed, the profiles
 # and grants, the employer's quote and bars, the year's limits and the sold ESPP lots of the
-# reconciliation. `price_history` is the one it reads only PART of: the employer ticker's bars
-# (`api/comp._employer_bars`), so its fingerprint cell is restricted to those rows — the nightly
-# refresh of every other holding's history must not cost the card its memo.
+# reconciliation. Pinned by the SQL-capture tests in test_withholding_cache.py.
 WITHHOLDING_TABLES: tuple[str, ...] = tuple(
     model.__tablename__
     for model in (
@@ -111,7 +109,14 @@ WITHHOLDING_TABLES: tuple[str, ...] = tuple(
         PriceHistory,
     )
 )
-EMPLOYER_BARS_TABLE = PriceHistory.__tablename__
+# Three of those tables it reads only PART of, so their fingerprint cells cover only those rows
+# (batch 2 integration, 2026-09-24; the projection's cells below have the same shape): two
+# settings — the employer ticker, and the plan's ESPP discount that prices a lot sold this year —
+# and the employer ticker's one quote and its bars (`api/comp._employer_bars`). A price refresh
+# writes its own bookkeeping keys and every holding's quote and bars; none of that can move the
+# card, so none of it costs the card its memo. The employer's own quote and bars still do.
+# Pinned complete by test_withholding_cache's capture of every setting and quote a build reads.
+WITHHOLDING_SETTING_KEYS: tuple[str, ...] = ("espp_ticker", "espp_discount_pct")
 
 type Fingerprint = tuple[str, ...]
 type BookKey = tuple[Fingerprint, date, tuple[date, ...]]
@@ -193,24 +198,27 @@ def _fingerprint_statement(
 _REVIEW_BOOK_FINGERPRINT = _fingerprint_statement(REVIEW_BOOK_TABLES)
 _MONTH_SAVINGS_FINGERPRINT = _fingerprint_statement(MONTH_SAVINGS_TABLES)
 
-
-def _withholding_fingerprint_statement() -> TextClause:
-    """`_fingerprint_statement` over the withholding tables, with the `price_history` cell
-    restricted to the employer ticker's security — the `:ticker` bind, read first by
-    `read_employer_ticker` and bound per request. A NULL ticker matches no security: no bars.
-    (`price_history` is the list's last table, so its cell stays last: the same statement.)"""
-    return _fingerprint_statement(
-        WITHHOLDING_TABLES,
-        {
-            EMPLOYER_BARS_TABLE: (
-                f'fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}"'
-                " WHERE ticker = :ticker)"
-            )
-        },
-    )
+# The employer ticker's rows of a table keyed by security: the `:ticker` bind, read by
+# `read_employer_ticker` just before the fingerprint and bound per request. A NULL ticker matches
+# no security, so no rows — as the build, with no ticker, reads none.
+_EMPLOYER_ROWS = (
+    f'fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}" WHERE ticker = :ticker)'
+)
 
 
-_WITHHOLDING_FINGERPRINT = _withholding_fingerprint_statement()
+def _setting_rows(keys: Iterable[str]) -> str:
+    """The app_settings rows a value reads: its keys, as literals (they are code, never input)."""
+    return "fp_row.key IN ({})".format(", ".join(f"'{key}'" for key in keys))
+
+
+_WITHHOLDING_FINGERPRINT = _fingerprint_statement(
+    WITHHOLDING_TABLES,
+    {
+        AppSetting.__tablename__: _setting_rows(WITHHOLDING_SETTING_KEYS),
+        LatestPrice.__tablename__: _EMPLOYER_ROWS,
+        PriceHistory.__tablename__: _EMPLOYER_ROWS,
+    },
+)
 
 
 async def _fingerprint(db: AsyncSession, statement: TextClause) -> Fingerprint:
@@ -320,10 +328,11 @@ async def cached_withholding(
 
     Bytes, not a model (R9's rule): the route returns them as they are, a direct caller decodes
     a model of its own, and nothing shared can be mutated by the next reader. Keyed on the
-    fingerprint AND the ticker the `price_history` cell was restricted with, which is read by
-    `read_employer_ticker`, the reader the build's quote chain (`api/espp._espp_quote`) uses too;
-    a ticker changed between the two fingerprints also changes `app_settings`' cell, so such a
-    build is never filed (rule 1). 422s and 404s raise out of `build` and are never cached."""
+    fingerprint AND the ticker the `latest_prices` and `price_history` cells were restricted
+    with, which is read by `read_employer_ticker`, the reader the build's quote chain
+    (`api/espp._espp_quote`) uses too; a ticker changed between the two fingerprints also
+    changes `app_settings`' cell (its narrowed keys include the ticker's), so such a build is
+    never filed (rule 1). 422s and 404s raise out of `build` and are never cached."""
     if _has_pending_changes(db):
         return await build()
     ticker = await read_employer_ticker(db)
@@ -392,13 +401,9 @@ PROJECTION_TABLES: tuple[str, ...] = tuple(
 # setting and quote a build reads.
 PROJECTION_SETTING_KEYS: tuple[str, ...] = ("swr_pct", "espp_ticker", PLAN_UNTIL_KEY)
 _PROJECTION_NARROWED = {
-    AppSetting.__tablename__: "fp_row.key IN ({})".format(
-        ", ".join(f"'{key}'" for key in PROJECTION_SETTING_KEYS)
-    ),
+    AppSetting.__tablename__: _setting_rows(PROJECTION_SETTING_KEYS),
     # A NULL ticker matches no security: no quote, as the build (no ticker, no vests) reads none.
-    LatestPrice.__tablename__: (
-        f'fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}" WHERE ticker = :ticker)'
-    ),
+    LatestPrice.__tablename__: _EMPLOYER_ROWS,
 }
 PROJECTION_CACHE_SIZE = 16
 # The SERIALIZED JSON bytes, never ProjectionOut models: seven series of up to 721 Decimals per
