@@ -8,6 +8,7 @@ import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type {
   Reconciliation,
+  ReconciliationApply,
   ReconciliationRow,
   TaxInputsOut,
   WithholdingJurisdiction,
@@ -438,7 +439,7 @@ export default function WithholdingPanel({
   // the server only while the typed figure differs from a complete projection — the row carries
   // its own figure. With no reconciliation (a refused year, an older payload) there is no Apply
   // at all: nothing has checked the vest figure against the stored input.
-  const writeVestIncome = (value: string) => {
+  const writeVestIncome = (apply: ReconciliationApply) => {
     if (onVestApplied === undefined || applying) return
     if (
       inputsDirty &&
@@ -449,10 +450,12 @@ export default function WithholdingPanel({
       return
     setApplying(true)
     setApplyError(null)
-    // The `values` shorthand IS the primary-person write: a per-person key with no owner
-    // resolves to the primary column server-side (TaxInputsUpdate's contract) — and the RSU
-    // row is always the primary's (the app models no partner equity).
-    putTaxInputs(year, { values: { w2_stock_rsus_sold: value } })
+    // The server's own target, person-qualified (code-quality M2): the row names the key, the
+    // column and the figure, so the browser assumes nothing about whose input it is.
+    putTaxInputs(year, {
+      values: {},
+      rows: [{ key: apply.key, person_id: apply.person_id, value: apply.value }],
+    })
       .then((echo) => {
         onVestApplied(echo)
         // This card's own liability just moved with the input it wrote.
@@ -668,7 +671,7 @@ export default function WithholdingPanel({
                 onVestApplied === undefined
                   ? undefined
                   : (row) => {
-                      if (row.apply !== null) writeVestIncome(row.apply.value)
+                      if (row.apply !== null) writeVestIncome(row.apply)
                     }
               }
               goTo={goTo}

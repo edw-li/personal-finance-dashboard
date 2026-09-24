@@ -1701,7 +1701,8 @@ describe('TaxesPage', () => {
     )
     await waitFor(() =>
       expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(thisYear, {
-        values: { w2_stock_rsus_sold: '48000.00' },
+        values: {},
+        rows: [{ key: 'w2_stock_rsus_sold', person_id: 1, value: '48000.00' }],
       }),
     )
     fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))

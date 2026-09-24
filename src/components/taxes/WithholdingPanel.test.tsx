@@ -1172,7 +1172,7 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
     expect(within(quiet).queryByText('differs')).toBeNull()
   })
 
-  it('offers Apply only on a differing RSU row, and it writes w2_stock_rsus_sold alone', async () => {
+  it('offers Apply only on a differing RSU row, and it writes the row’s own apply target', async () => {
     vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     vi.mocked(putTaxInputs).mockResolvedValue({ year: 2026, filing_status: 'married_joint', people: [], sections: [] })
     const onApplied = vi.fn()
@@ -1183,9 +1183,12 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
     // The vest sentence moved INTO the row: it is not repeated under the card.
     expect(screen.queryByText(/vests imply/)).toBeNull()
     fireEvent.click(chips[0])
+    // The server's own (key, person, value), person-qualified — never a primary shorthand the
+    // browser assumes (code-quality M2).
     await waitFor(() =>
       expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2026, {
-        values: { w2_stock_rsus_sold: '171235.24' },
+        values: {},
+        rows: [{ key: 'w2_stock_rsus_sold', person_id: 1, value: '171235.24' }],
       }),
     )
     expect(onApplied).toHaveBeenCalledTimes(1)
