@@ -243,6 +243,21 @@ describe('guide content — the time model (2026-09-23 spec §T11)', () => {
   })
 })
 
+// After lanes R and W landed: the setup steps name the new Plan until (year) field and the filing
+// status's own door, W8's **Change…** — not a "Filing status" control that no longer exists.
+describe('guide content — the setup steps follow the merged pages', () => {
+  const stepsOf = (id: string) => allTasks.find(({ task }) => task.id === id)?.task.steps.join(' ') ?? ''
+
+  it('names Plan until (year) among the plan assumptions', () => {
+    expect(stepsOf('setup-limits')).toContain('withdrawal rate, Plan until (year), ESPP ticker and discount')
+  })
+
+  it('sets a new year’s filing status with Change…', () => {
+    expect(stepsOf('setup-taxes')).toContain('set its filing status with **Change…**')
+    expect(stepsOf('setup-taxes')).not.toContain('**Filing status**')
+  })
+})
+
 describe('guide content — the Projection card claims no direction it cannot know', () => {
   it('names both ways the model’s omissions move the money-lasts share (2026-09-24 review minor 3)', () => {
     const card = allCards.find(({ card }) => card.id === 'page-projection')?.card
