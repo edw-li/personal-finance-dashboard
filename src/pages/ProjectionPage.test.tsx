@@ -244,7 +244,8 @@ describe('ProjectionPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Table' }))
     expect(await screen.findByRole('columnheader', { name: 'Projected (USD · future dollars)' })).toBeTruthy()
     expect(screen.getByRole('columnheader', { name: 'FI target (USD · future dollars)' })).toBeTruthy()
-    for (const band of ['p10', 'p25', 'p50', 'p75', 'p90']) {
+    // The fan's columns speak in words (2026-09-23 spec §R6) — never "p10".
+    for (const band of ['10th percentile balance', '25th percentile balance', 'Median balance', '75th percentile balance', '90th percentile balance']) {
       expect(screen.getByRole('columnheader', { name: `${band} (USD · future dollars)` })).toBeTruthy()
     }
     expect(box('Inflation').placeholder).toBe('3')

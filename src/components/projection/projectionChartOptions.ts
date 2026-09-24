@@ -36,6 +36,18 @@ export const BAND_SERIES = ['10–90% band', '25–75% band'] as const
  *  against the deterministic Projected line above it. */
 export const MEDIAN_SERIES = 'Median path'
 
+/** The payload's band keys — data, never words: a reader sees BAND_LABELS (2026-09-23 spec §R6,
+ *  where "p10" meant the pessimistic balance and the optimistic reach date on one chart). */
+export const BAND_KEYS = ['p10', 'p25', 'p50', 'p75', 'p90'] as const
+export type BandKey = (typeof BAND_KEYS)[number]
+export const BAND_LABELS: Record<BandKey, string> = {
+  p10: '10th percentile balance',
+  p25: '25th percentile balance',
+  p50: 'Median balance',
+  p75: '75th percentile balance',
+  p90: '90th percentile balance',
+}
+
 const monthBucket = (iso: string) => `${iso.slice(0, 7)}-01`
 
 /** A log axis cannot place zero or below — such points become GAPS (NaN keeps the arrays
@@ -381,8 +393,9 @@ export function netWorthProjectionCsv(
   }
 }
 
-/** The projection as a table (2026-08-25 spec §2a): month rows × projected/coast, plus
- * p10/p50/p90 when the Monte Carlo fan is on — verbatim server strings. */
+/** The projection as a table (2026-08-25 spec §2a): month rows × projected/coast, plus the
+ * fan's percentile balances when the Monte Carlo is on — verbatim server strings, headed in
+ * the reader's words (BAND_LABELS), never "p10". */
 export function projectionCsv(
   data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'bands'> & {
     target_values?: string[] | null
@@ -392,13 +405,13 @@ export function projectionCsv(
   references: ProjectionReference[] = [],
 ): ExportTable {
   const bands = data.bands ?? null
-  const percentiles = data.display_dollars ? ['p10', 'p25', 'p50', 'p75', 'p90'] : ['p10', 'p50', 'p90']
+  const percentiles: readonly BandKey[] = data.display_dollars ? BAND_KEYS : [BAND_KEYS[0], BAND_KEYS[2], BAND_KEYS[4]]
   const hasTarget = data.target_values !== undefined
   const unit = data.display_dollars === 'future' ? 'USD · future dollars'
     : `USD · ${data.start_month?.slice(0, 7) ?? 'today'} dollars`
   const name = (label: string) => data.display_dollars ? `${label} (${unit})` : label
   return {
-    headers: ['Month', name('Projected'), name('Growth only'), ...(hasTarget ? [name('FI target')] : []), ...(bands ? percentiles.map(name) : []), ...references.map((ref) => name(ref.name))],
+    headers: ['Month', name('Projected'), name('Growth only'), ...(hasTarget ? [name('FI target')] : []), ...(bands ? percentiles.map((key) => name(BAND_LABELS[key])) : []), ...references.map((ref) => name(ref.name))],
     rows: data.months.map((month, i) => [
       month,
       data.projected[i],

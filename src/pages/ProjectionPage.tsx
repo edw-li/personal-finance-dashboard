@@ -121,7 +121,7 @@ export default function ProjectionPage() {
                 hint="Investable balance as a share of the FI target." />
               <StatTile label="Investable balance" value={formatCurrency(data.starting_balance)} delta={`as of ${formatMonth(data.base_month)}`}
                 tone="neutral" evidence={receipts.balance} hint="Pre-tax + post-tax + taxable + equity from the latest snapshot; cash and liabilities excluded." />
-              <StatTile label="Projected FI date" value={data.fi_month === null ? data.fi_target === null ? '—' : 'Not reached' : formatMonth(data.fi_month)} evidence={receipts.reachDate}
+              <StatTile label="Projected FI date" value={data.fi_month === null ? data.fi_target === null ? '—' : 'Not reached' : formatMonth(data.fi_month)} evidence={receipts.fiDate}
                 delta={data.coast_fi_month === null ? 'At your assumed constant return' : `growth alone: ${formatMonth(data.coast_fi_month)}`}
                 tone="neutral" hint="First month the deterministic projection reaches the target. Growth alone repeats it with contributions off." />
               {/* Short enough for a fifth of the row. The no-break space keeps the figure and its
@@ -129,7 +129,7 @@ export default function ProjectionPage() {
                   the icon in one nowrap unit (audit P-11). */}
               <StatTile label={`Reach FI within ${data.years}\u00A0yrs`} value={formatPct(data.fi_probability, { signed: false })}
                 delta={data.fi_month_p50 === null ? undefined : `Median reach: ${formatMonth(data.fi_month_p50)}`}
-                tone="neutral" evidence={receipts.probability} hint="Share of 500 simulated paths reaching the target within this horizon. It does not measure retirement spending sustainability." />
+                tone="neutral" evidence={receipts.moneyLasts} hint="Share of 500 simulated paths reaching the target within this horizon. It does not measure retirement spending sustainability." />
             </div>
             <div className="projection-workspace">
               <div className="projection-chart-area">

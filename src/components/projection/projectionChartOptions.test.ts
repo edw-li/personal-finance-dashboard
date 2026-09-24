@@ -480,7 +480,7 @@ describe('projectionCsv', () => {
     })
   })
 
-  it('appends p10/p50/p90 when the fan is on', () => {
+  it('appends the 10th, median and 90th percentile balances when the fan is on — in words', () => {
     const csv = projectionCsv({
       ...BASE,
       bands: {
@@ -488,7 +488,9 @@ describe('projectionCsv', () => {
         p75: ['1050.00', '1180.00'], p90: ['1200.00', '1300.00'],
       },
     })
-    expect(csv.headers).toEqual(['Month', 'Projected', 'Growth only', 'p10', 'p50', 'p90'])
+    expect(csv.headers).toEqual([
+      'Month', 'Projected', 'Growth only', '10th percentile balance', 'Median balance', '90th percentile balance',
+    ])
     expect(csv.rows[1]).toEqual(['2026-10-01', '1100.00', '1005.00', '950.00', '1080.00', '1300.00'])
   })
 })
