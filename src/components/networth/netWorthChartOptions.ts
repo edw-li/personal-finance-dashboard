@@ -345,8 +345,6 @@ export interface NetWorthDrillInput {
   selected: Record<string, boolean>
 }
 
-/** Individual account balances over time — up to eight picks on their own slots. Aligned
- *  with the stack above it (F8: same `endLabel` grid, same month axis, one `group`). */
 /** A provisional snapshot on a drill line (2026-09-23 spec §T7): the lines draw their dots on
  *  hover only — `showSymbol: false` hides every at-rest symbol, a per-point one included — so the
  *  point is a silent marker ON the line. The value stays on the line (a real balance, only
@@ -375,6 +373,8 @@ function provisionalMarker(
   }
 }
 
+/** Individual account balances over time — up to eight picks on their own slots. Aligned
+ *  with the stack above it (F8: same `endLabel` grid, same month axis, one `group`). */
 export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDrillInput): EChartsOption | null {
   if (drill.length === 0 || ts.months.length === 0) return null
   const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
