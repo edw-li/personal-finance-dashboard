@@ -24,6 +24,8 @@ async def test_coverage_is_empty_on_an_empty_book(auth_client):
         "adopted_on": None,
         "eligible_spending": [],
         "eligible_savings": [],
+        # 2026-09-23 spec §K3: nothing recorded, nothing due — `time` is null on an empty book.
+        "time": None,
     }
 
 
