@@ -44,15 +44,20 @@ from app.models import (
     AppSetting,
     CategoryBudget,
     ContributionLimit,
+    EsppLot,
     LatestPrice,
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
     PaycheckProfile,
     Person,
+    PriceHistory,
     RsuGrant,
     Security,
     SpendingCategory,
+    TaxBracket,
+    TaxInput,
+    TaxYear,
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock
@@ -82,6 +87,30 @@ MONTH_SAVINGS_TABLES: tuple[str, ...] = tuple(
     model.__tablename__
     for model in (MonthlySpending, SpendingCategory, MonthlyCashflow, PaycheckProfile)
 )
+
+# Every table the withholding GET reads (2026-09-23 spec §W12) — the engine feed, the profiles
+# and grants, the employer's quote and bars, the year's limits and the sold ESPP lots of the
+# reconciliation. `price_history` is the one it reads only PART of: the employer ticker's bars
+# (`api/comp._employer_bars`), so its fingerprint cell is restricted to those rows — the nightly
+# refresh of every other holding's history must not cost the card its memo.
+WITHHOLDING_TABLES: tuple[str, ...] = tuple(
+    model.__tablename__
+    for model in (
+        TaxYear,
+        TaxInput,
+        TaxBracket,
+        Person,
+        PaycheckProfile,
+        ContributionLimit,
+        RsuGrant,
+        Security,
+        LatestPrice,
+        AppSetting,
+        EsppLot,
+        PriceHistory,
+    )
+)
+EMPLOYER_BARS_TABLE = PriceHistory.__tablename__
 
 type Fingerprint = tuple[str, ...]
 type BookKey = tuple[Fingerprint, date, tuple[date, ...]]
@@ -120,16 +149,22 @@ class LRU[K: Hashable, V]:
 
 REVIEW_BOOKS: LRU[BookKey, ReviewBook] = LRU(CACHE_SIZE)
 MONTH_SAVINGS: LRU[Fingerprint, Savings] = LRU(CACHE_SIZE)
+# (fingerprint, employer ticker, product day, year) -> the GET's serialized JSON bytes (§W12).
+type WithholdingKey = tuple[Fingerprint, str | None, date, int]
+WITHHOLDINGS: LRU[WithholdingKey, bytes] = LRU(CACHE_SIZE)
 # The builds in flight, per key: the single-flight half of each cache (rule 4).
 _BOOK_BUILDS: dict[BookKey, asyncio.Future[ReviewBook]] = {}
 _SAVINGS_BUILDS: dict[Fingerprint, asyncio.Future[Savings]] = {}
+_WITHHOLDING_BUILDS: dict[WithholdingKey, asyncio.Future[bytes]] = {}
 
 
 def clear_read_caches() -> None:
     REVIEW_BOOKS.clear()
     MONTH_SAVINGS.clear()
+    WITHHOLDINGS.clear()
     _BOOK_BUILDS.clear()
     _SAVINGS_BUILDS.clear()
+    _WITHHOLDING_BUILDS.clear()
     PROJECTIONS.clear()
     _PROJECTION_BUILDS.clear()
 
@@ -156,6 +191,30 @@ def _fingerprint_statement(
 
 _REVIEW_BOOK_FINGERPRINT = _fingerprint_statement(REVIEW_BOOK_TABLES)
 _MONTH_SAVINGS_FINGERPRINT = _fingerprint_statement(MONTH_SAVINGS_TABLES)
+
+
+def _withholding_fingerprint_statement() -> TextClause:
+    """`_fingerprint_statement` over the withholding tables, with the `price_history` cell
+    restricted to the employer ticker's security — the `:ticker` bind, read first by
+    `_employer_ticker` and bound per request. A NULL ticker matches no security: no bars."""
+    whole = [name for name in WITHHOLDING_TABLES if name != EMPLOYER_BARS_TABLE]
+    cells = [
+        "(SELECT count(*)::text || ':' || "
+        "coalesce(sum(hashtextextended(fp_row::text, 0)), 0)::text"
+        f' FROM "{name}" AS fp_row)'
+        for name in whole
+    ]
+    cells.append(
+        "(SELECT count(*)::text || ':' || "
+        "coalesce(sum(hashtextextended(fp_row::text, 0)), 0)::text"
+        f' FROM "{EMPLOYER_BARS_TABLE}" AS fp_row'
+        f' WHERE fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}"'
+        " WHERE ticker = :ticker))"
+    )
+    return text(f"SELECT {', '.join(cells)}")
+
+
+_WITHHOLDING_FINGERPRINT = _withholding_fingerprint_statement()
 
 
 async def _fingerprint(db: AsyncSession, statement: TextClause) -> Fingerprint:
@@ -250,6 +309,50 @@ async def cached_review_book(
         before,
         _REVIEW_BOOK_FINGERPRINT,
         lambda: load_review_book_snapshot(db, extra_months=list(extras), today=today),
+    )
+
+
+async def _employer_ticker(db: AsyncSession) -> str | None:
+    """The employer ticker exactly as the GET resolves it — `api/espp._espp_quote`'s first hop,
+    normalization included (blank/absent/malformed → none, "nvda" → "NVDA"). Mirrored rather
+    than imported because a service may not import a router; `api/app_settings` keeps the
+    other copy and the two are one rule."""
+    setting = await db.get(AppSetting, "espp_ticker")
+    if setting is None or not isinstance(setting.value, dict):
+        return None
+    raw = setting.value.get("value")
+    ticker = raw.strip().upper() if isinstance(raw, str) else ""
+    return ticker or None
+
+
+async def cached_withholding(
+    db: AsyncSession,
+    year: int,
+    build: Callable[[], Awaitable[bytes]],
+    *,
+    today: date,
+) -> bytes:
+    """The withholding GET's serialized bytes for READ paths (2026-09-23 spec §W12), built once
+    per data version, product day and year.
+
+    Bytes, not a model (R9's rule): the route returns them as they are, a direct caller decodes
+    a model of its own, and nothing shared can be mutated by the next reader. Keyed on the
+    fingerprint AND the ticker the `price_history` cell was restricted with; a ticker changed
+    between the two fingerprints also changes `app_settings`' cell, so such a build is never
+    filed (rule 1). 422s and 404s raise out of `build` and are never cached."""
+    if _has_pending_changes(db):
+        return await build()
+    ticker = await _employer_ticker(db)
+    statement = _WITHHOLDING_FINGERPRINT.bindparams(ticker=ticker)
+    before = await _fingerprint(db, statement)
+    return await _memoised(
+        db,
+        WITHHOLDINGS,
+        _WITHHOLDING_BUILDS,
+        (before, ticker, today, year),
+        before,
+        statement,
+        build,
     )
 
 

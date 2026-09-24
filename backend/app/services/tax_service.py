@@ -105,8 +105,10 @@ FOLDED_TO_BASE_CG = dict(zip(FOLDED_CG_RATES, BASE_CG_RATES, strict=True))
 
 # Suggestions land in tax_inputs, Numeric(14,4).
 SUGGESTION_QUANTUM = Decimal("0.0001")
-# The sheet divides annual salary by a hardcoded 24 — `pay_periods` is the year-to-date
-# count of checks received, not the annual cadence.
+# The sheet divides annual salary by a hardcoded 24 — `pay_periods` is the number of
+# semi-monthly periods in the WHOLE year, 24 for a full year, including those still to come
+# (2026-09-23 spec §W2): the withholding side always projects the full year, so a
+# year-to-date count here would put the two halves of "Will I owe?" on different bases.
 PAYCHECKS_PER_YEAR = Decimal("24")
 SALT_CAP_FIRST_RAISED_YEAR = 2025
 SALT_CAP_BEFORE = Decimal("10000")
@@ -314,6 +316,12 @@ class EarnerWages:
     w2_wages: Decimal
     pretax_hsa: Decimal = ZERO
     other_pretax: Decimal = ZERO
+    # The ESPP ordinary income inside `w2_wages` (2026-09-23 spec §W6): a §423 disposition's
+    # ordinary income is W-2 box-1 income — income-tax wages, so it stays in `w2_wages` — but
+    # NOT Medicare / Social Security wages (IRC §3121(a)(22)), and California's SDI base follows
+    # the FICA one here. Both payroll bases below subtract it. ZERO on every year whose ESPP
+    # component is 0, which is every golden and every stored year on the 09-23 data.
+    espp_ordinary: Decimal = ZERO
     # The per-worker tables THIS earner walks instead of the year's defaults (2026-09-11
     # spec §2.2), keyed by jurisdiction — only ever `tax_keys.PER_WORKER_JURISDICTIONS`,
     # because Social Security's wage base and California's SDI (or the employer Voluntary
@@ -334,13 +342,15 @@ class EarnerWages:
 
     @property
     def fica_wages(self) -> Decimal:
-        """The Medicare / Social Security base for this person."""
-        return self.w2_wages - (self.pretax_hsa + self.other_pretax)
+        """The Medicare / Social Security base for this person: pre-tax deductions and the
+        ESPP ordinary income out (§W6)."""
+        return self.w2_wages - (self.pretax_hsa + self.other_pretax + self.espp_ordinary)
 
     @property
     def sdi_wages(self) -> Decimal:
-        """The CA SDI base: dental/vision out, HSA deliberately left IN."""
-        return self.w2_wages - self.other_pretax
+        """The CA SDI base: dental/vision out, HSA deliberately left IN, ESPP ordinary income
+        out (§W6)."""
+        return self.w2_wages - self.other_pretax - self.espp_ordinary
 
 
 def earner_from_inputs(
@@ -371,6 +381,7 @@ def earner_from_inputs(
         w2_wages=value("latest_w2_income") + value("other_w2_income"),
         pretax_hsa=value("hsa_contributions") + value("hsa_contributions_employer"),
         other_pretax=value("other_pretax_deductions"),
+        espp_ordinary=value("w2_espp_sale_component"),
         payroll_tables=payroll_tables or {},
     )
 
@@ -779,14 +790,19 @@ def compute_breakdown(
 
     # Totals (rows 121-125). Gross income sums the *_standard / *_brokerage COMPONENTS,
     # not the netted totals, so a netted-away loss still shows up in the top line; total
-    # income repeats the clean AGI formula.
+    # income repeats the clean AGI formula. The two ESPP gain components are components of
+    # the same kind (2026-09-23 spec §W6): leaving them out understated take-home and
+    # overstated the effective rate of every year with an ESPP sale. `.get`, because neither
+    # is an engine key (they reach the engine through the netted totals) — absent is 0 here.
     gross_income = (
         values[W2_INCOME_KEY]
         + values["stcg_standard"]
+        + values.get("stcg_espp_component", ZERO)
         + values["unqualified_dividends"]
         + values["interest_total"]
         + values["other_income_1099"]
         + values["ltcg_brokerage"]
+        + values.get("ltcg_espp_component", ZERO)
         + values["qualified_dividends"]
         + values["other_capital_gains"]
     )

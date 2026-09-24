@@ -97,7 +97,12 @@ class PaceItem:
     soft_ratio: Decimal | None = None  # ESPP: annualized / soft_limit — the tone is judged here
     window_label: str | None = None
     halves: list[PaceHalf] | None = None
+    # Always None since 2026-09-23 spec §W1 — a payday before the first profile credits
+    # nothing rather than borrowing it; kept for older readers of the wire.
     backfilled_from: date | None = None
+    # The person's first profile's date when the walk cut paydays on or before it out of the
+    # window (§W1): "Nothing counts before Sep 1, when the first paycheck profile starts."
+    starts_on: date | None = None
     projected_full_year: Decimal | None = None
     projected_excess: Decimal | None = None
     current_rate: Decimal | None = None  # ESPP: the espp_pct the projection used (9 dp fraction)
@@ -165,6 +170,7 @@ def _item(
     employer_hsa: Decimal | None = None,
     so_far: Decimal | None = None,
     backfilled_from: date | None = None,
+    starts_on: date | None = None,
     remaining_checks: int | None = None,
     remaining_gross: Decimal | None = None,
     to_cap_rate: Decimal | None = None,
@@ -187,6 +193,7 @@ def _item(
             employer_hsa=employer_hsa,
             so_far=walked_so_far,
             backfilled_from=backfilled_from,
+            starts_on=starts_on,
             remaining_checks=remaining_checks,
             remaining_gross=remaining_gross,
             to_cap_rate=to_cap_rate,
@@ -210,6 +217,7 @@ def _item(
         employer_hsa=employer_hsa,
         so_far=walked_so_far,
         backfilled_from=backfilled_from,
+        starts_on=starts_on,
         remaining_checks=remaining_checks,
         remaining_gross=remaining_gross,
         to_cap_rate=to_cap_rate,
@@ -327,6 +335,7 @@ def paycheck_pace(
             limits,
             so_far=elective_so_far,
             backfilled_from=None if walked is None else walked.backfilled_from,
+            starts_on=None if walked is None else walked.starts_on,
             # The rate is the row's OWN cap against the row's OWN so-far: traditional and Roth
             # together, because 402(g) counts them together and a preset that moved only one
             # of them would aim at a cap the other half is already eating into.
@@ -349,6 +358,7 @@ def paycheck_pace(
                 else _total_additions_so_far(policy_so_far, walked, elective_cap)
             ),
             backfilled_from=None if walked is None else walked.backfilled_from,
+            starts_on=None if walked is None else walked.starts_on,
             **tail,
         ),
     ]
@@ -394,6 +404,7 @@ def paycheck_pace(
                     )
                 ),
                 backfilled_from=None if walked is None else walked.backfilled_from,
+                starts_on=None if walked is None else walked.starts_on,
                 # The employee amount that lands on the cap. Measured against the deferrals
                 # already made PLUS the employer's whole year — the deposit arrives whatever
                 # the employee elects, so the room the remaining checks may fill is the cap

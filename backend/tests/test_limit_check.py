@@ -469,19 +469,22 @@ def walked(**over) -> Walked:
     return Walked(**fields)
 
 
-def test_every_walked_row_carries_the_walks_backfill_caveat():
-    """A new hire's January paydays borrow the earliest profile, and each row the walk feeds
-    says so — the caveat belongs to the FIGURE, not to the ESPP row alone."""
+def test_every_walked_row_says_when_the_first_profile_starts():
+    """A new hire's paydays before their first profile credit nothing (2026-09-23 spec §W1),
+    and each row the walk feeds says when the job starts — the note belongs to the FIGURE, not
+    to the ESPP row alone."""
     profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
     limits = {LIMIT_HSA_SELF: Decimal("4400.00")}
-    items = paycheck_pace(profile, limits, "self", walked(backfilled_from=date(2026, 3, 1)))
-    assert [item.backfilled_from for item in items] == [date(2026, 3, 1)] * 3
-    # A timeline that covers the whole window borrowed nothing, and neither does an unwalked
-    # row — which has no window to have borrowed in.
-    assert [item.backfilled_from for item in paycheck_pace(profile, limits, "self", walked())] == [
+    items = paycheck_pace(profile, limits, "self", walked(starts_on=date(2026, 3, 1)))
+    assert [item.starts_on for item in items] == [date(2026, 3, 1)] * 3
+    # A timeline that covers the whole window starts nothing inside it, and an unwalked row
+    # has no window at all.
+    assert [item.starts_on for item in paycheck_pace(profile, limits, "self", walked())] == [
         None
     ] * 3
-    assert [item.backfilled_from for item in paycheck_pace(profile, limits, "self")] == [None] * 3
+    assert [item.starts_on for item in paycheck_pace(profile, limits, "self")] == [None] * 3
+    # `backfilled_from` still rides the rows for older readers — and nothing borrows any more.
+    assert [item.backfilled_from for item in items] == [None] * 3
 
 
 def test_a_try_it_knob_cannot_rewrite_the_employer_legs_already_paid():

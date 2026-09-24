@@ -47,6 +47,29 @@ class TaxPersonOut(BaseModel):
     name: str
 
 
+class TaxStatusOptionOut(BaseModel):
+    """What filing the year under one status would mean (2026-09-23 spec §W8) — the server's
+    own rules, so the Change… dialog never re-derives them: whose rows count on the return
+    (`_return_people`) and which bracket tables the engine would refuse the year without
+    (`_missing_for_status`)."""
+
+    status: FilingStatus
+    label: str
+    people: list[TaxPersonOut]
+    tables_missing: list[str]
+    computable: bool
+    # Whose withholding the Will I owe? card would count under this status — the card's own
+    # rule (`_withholding_people`), so the dialog names who joins or leaves it without one of
+    # its own. Empty for any year but the one the card answers for (the product year).
+    withholding_people: list[TaxPersonOut] = Field(default_factory=list)
+
+
+class TaxStatusOptionsOut(BaseModel):
+    year: int
+    current: FilingStatus
+    options: list[TaxStatusOptionOut]
+
+
 class TaxInputItemOut(BaseModel):
     key: str
     label: str
@@ -337,8 +360,13 @@ class WhatIfDelta(BaseModel):
 class ChangedInput(BaseModel):
     key: str
     label: str
+    # In the key's own unit and precision (2026-09-23 spec §W10): money at cents, a count
+    # whole, a percent as the 4 dp FRACTION the engine multiplies by (0.9753) — the client
+    # renders each through its unit's box rule ("97.53% → 95%", "18 → 20").
     before: Decimal  # 0 when the key was absent
     after: Decimal
+    # Defaulted, so the assistant's compact result and older payloads keep validating.
+    unit: InputUnit = "money"
 
 
 class SaleDetailOut(BaseModel):
@@ -366,6 +394,22 @@ class EsppSaleDetailOut(BaseModel):
     warnings: list[str]
 
 
+class SaleSummaryOut(BaseModel):
+    """A scenario's sales in cash terms (2026-09-23 spec §W7).
+
+    `proceeds` is every leg's sale value; `gain` the brokerage gains plus ESPP ordinary and
+    capital income; `tax_due` the total tax the SALES add to the stored year — the overrides
+    left out, so it equals `delta.total_tax` exactly when the scenario has none; `net_cash`
+    is proceeds − tax due and `after_tax_gain` gain − tax due.
+    """
+
+    proceeds: Decimal
+    gain: Decimal
+    tax_due: Decimal
+    net_cash: Decimal
+    after_tax_gain: Decimal
+
+
 class WhatIfOut(BaseModel):
     year: int
     baseline: TaxSummaryOut
@@ -375,6 +419,9 @@ class WhatIfOut(BaseModel):
     sale_details: list[SaleDetailOut]
     espp_sale_details: list[EsppSaleDetailOut]
     warnings: list[str]
+    # Present when the scenario sells something (a brokerage or an ESPP leg); null for an
+    # overrides-only scenario. Additive and defaulted (§W7).
+    sale_summary: SaleSummaryOut | None = None
 
 
 # --- the "Will I owe?" tracker (2026-08-21 spec §4). Every figure is computed at read time
@@ -405,6 +452,95 @@ class WithholdingPartnerLegOut(BaseModel):
     projected: Decimal
     checks_elapsed: int
     checks_total: int
+
+
+class WithholdingGridOut(BaseModel):
+    """One simulated leg's check grid, summed over its COUNTED checks (2026-09-23 spec §W1–§W2).
+
+    A grid check on or before the person's first paycheck profile pays nothing and is not
+    counted, so `checks_total` is the checks after that date and every sum below is over those
+    alone. The 401(k) and HSA sums are what payroll would take at these rates BEFORE any 402(g)
+    or HSA stop — the reconciliation applies the year's stored limits. `starts_on` is the first
+    profile's date when it left grid checks at $0, and `early_checks_note` is the exact
+    sentence the payload's `warnings` carries for it, so the card can show it beside the figure
+    and keep it out of the folded notes by equality.
+    """
+
+    role: Literal["primary", "partner"]
+    # The person the leg belongs to: the primary's column (null on a roster-less database) or
+    # the one partner the return covers (null when several partners share the folded leg).
+    person_id: int | None
+    name: str | None
+    checks_elapsed: int
+    checks_total: int
+    first_check: date | None
+    starts_on: date | None
+    gross_projected: Decimal
+    trad_401k_projected: Decimal
+    roth_401k_projected: Decimal
+    hsa_projected: Decimal
+    early_checks_note: str | None = None
+
+
+class ReconciliationApplyOut(BaseModel):
+    """The one write the strip offers (2026-09-23 spec §W3): the RSU row's existing chip, shown
+    only when the figures differ — an explicit user action, never applied server-side."""
+
+    key: str
+    person_id: int | None
+    value: Decimal
+
+
+class ReconciliationFactsOut(BaseModel):
+    """What a row's two figures were built from, for the strip's detail text. Every field is
+    null on the rows it does not describe."""
+
+    typed_pay_periods: Decimal | None = None
+    typed_checkpoint: Decimal | None = None
+    projected_checks: int | None = None
+    projected_from: date | None = None  # the first counted check (§W1)
+    capped_at: Decimal | None = None  # trad_401k / hsa: the cap that stopped the projection
+    future_vest_income: Decimal | None = None  # rsu: the not-yet-vested part, today's quote
+    quote_tolerance: Decimal | None = None  # rsu: the income band that never flags
+    reference_price: Decimal | None = None  # rsu: the flag's price (close on or before the 1st)
+    reference_date: date | None = None  # rsu: that close's date (null: the latest quote)
+
+
+class ReconciliationRowOut(BaseModel):
+    """One typed input against what the app's own records project for it (§W3). `typed` null
+    means none of its inputs is entered ("not entered"); `difference` is projected − (typed or
+    0); `tax_effect` is the liability with this row's projection laid over the stored rows
+    minus the typed liability (positive = more tax); `flagged` is |effect| > 250.00 — for the
+    RSU row, the effect priced at the month's reference close inside a ±10 % band (§W3's
+    stateless hysteresis), while the figures shown stay on today's quote."""
+
+    key: Literal["salary", "trad_401k", "hsa", "rsu", "espp"]
+    person_id: int | None
+    person_name: str | None
+    label: str
+    source: Literal["paycheck", "comp", "espp"]
+    typed: Decimal | None
+    typed_keys: list[str]
+    projected: Decimal
+    difference: Decimal
+    tax_effect: Decimal
+    flagged: bool
+    facts: ReconciliationFactsOut
+    apply: ReconciliationApplyOut | None = None
+
+
+class ReconciliationOut(BaseModel):
+    """Your typed inputs against your records, per person on the return (§W3). Compute-only:
+    nothing is written, and the headline balance stays the one on the typed inputs —
+    `balance_if_matched` (liability with every row matched, minus projected withholding) is
+    what it would be if they agreed."""
+
+    rows: list[ReconciliationRowOut]
+    flagged_count: int
+    liability_if_matched: Decimal | None
+    balance_if_matched: Decimal | None
+    flag_above: Decimal = Decimal("250.00")
+    notes: list[str] = Field(default_factory=list)
 
 
 class SafeHarborOut(BaseModel):
@@ -507,3 +643,12 @@ class WithholdingOut(BaseModel):
     # its combined meaning either way — the calendar and the assistant read those.
     jurisdictions: WithholdingJurisdictionsOut | None = None
     warnings: list[str]
+    # Each simulated leg's counted-check facts (2026-09-23 spec §W2): the primary's when they
+    # have a usable profile, then the partner's when their leg is simulated. Additive and
+    # defaulted, so a replayed older payload still validates.
+    grids: list[WithholdingGridOut] = Field(default_factory=list)
+    # Your typed inputs against Paycheck, Comp and ESPP (2026-09-23 spec §W3, contract
+    # §0.4(f)). NULL when the engine refused the year (`liability_total` null) and on the
+    # calendar's internal reads, which never ask for it. The Overview reads `flagged_count`
+    # and `rows[].tax_effect` only.
+    reconciliation: ReconciliationOut | None = None

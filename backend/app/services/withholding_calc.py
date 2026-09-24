@@ -10,7 +10,9 @@ carries it (user decision, 2026-08-21). The partner leg has TWO modes (2026-08-2
 primary's uses (no vest or ESPP legs — lean scope); without one it falls back to the
 2026-08-26 behavior, where their W-2 wages and their two withholding figures are read
 straight from the year's per-person tax inputs and the module's only arithmetic on them is
-the sum and the additional-Medicare gap below. The two never mix.
+the sum and the additional-Medicare gap below. The two never mix. Either simulated leg starts
+at the person's FIRST profile (2026-09-23 spec §W1): a grid check on or before that day pays
+nothing and is not counted, rather than borrowing a profile that was not yet in force.
 
 The marginal FICA split is an APPROXIMATION, and a deliberate one: vest income is stacked ON
 TOP of the salary gross as of `today` rather than interleaved with the checks by date, so when
@@ -45,6 +47,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from app.services import day_labels
 from app.services.paycheck_calc import breakdown
 from app.services.tax_service import Bracket, walk
 
@@ -70,7 +73,14 @@ EMPLOYER_ADDITIONAL_MEDICARE_FLOOR = Decimal("200000")
 # pay-periods fence, so an empty list can equally mean every stored row was hand-edited into
 # something `breakdown` cannot divide by (Task 6 review).
 NO_PROFILES_WARNING = "no usable paycheck profile — salary withholding estimated as 0"
-EARLY_CHECKS_WARNING = "checks before the first profile's effective date use that profile"
+# One payroll start (2026-09-23 spec §W1): a grid check on or before a person's FIRST profile's
+# effective date pays nothing. The sentence names the person and the day, and is shown beside
+# the figure it explains (the card's W4 strip), not only in the folded notes. `{whose}` is
+# "Grace's" when the router knows the name, else "your" / "your partner's".
+EARLY_CHECKS_WARNING = (
+    "{whose} checks on or before {start}, the first paycheck profile's start, count as $0 — "
+    "add a profile for an earlier job or salary to include them"
+)
 PARTNER_WITHHOLDING_MISSING_WARNING = (
     "partner withholding not entered — their W-2 withholding counts as 0 until you enter it"
 )
@@ -78,7 +88,8 @@ PARTNER_WITHHOLDING_MISSING_WARNING = (
 # shared one with a name in it: these are wire strings the panel renders verbatim, and the
 # primary's copy must not move when the partner's does.
 PARTNER_EARLY_CHECKS_WARNING = (
-    "partner checks before their first profile's effective date use that profile"
+    "{whose} checks on or before {start}, the first paycheck profile's start, count as $0 — "
+    "add a profile for an earlier job or salary to include them"
 )
 PARTNER_TRACKER_IGNORED_NOTE = (
     "partner withholding simulated from their paycheck profile — the entered "
@@ -107,6 +118,15 @@ NEGATIVE_PAYROLL_WARNING = (
 
 # (vest date, shares, price) — past vests carry the vest-date FMV, future ones a quote.
 VestTuple = tuple[date, int, Decimal]
+
+
+def _early_note(template: str, whose: str, starts_on: date | None, year: int) -> str | None:
+    """The §W1 sentence for one leg, or None when no grid check fell on or before its start."""
+    if starts_on is None:
+        return None
+    # The card's own year goes without saying; any other is named ("Jan 1, 2027": a job that
+    # starts after the tax year would otherwise read as this year's Jan 1).
+    return template.format(whose=whose, start=day_labels.day_label(starts_on, year))
 
 
 @dataclass
@@ -169,6 +189,26 @@ class WithholdingEstimate:
     # no state rate, and half a year's federal figure is not a federal figure.
     jurisdictions: JurisdictionLegs | None = None
     warnings: list[str] = field(default_factory=list)
+    # --- each simulated leg's COUNTED-check facts (2026-09-23 spec §W1–§W2), for the
+    # reconciliation and the card's inline notes. Sums over the checks after the person's first
+    # profile only, at cents; the 401(k) and HSA sums are UNCAPPED here (payroll's caps are the
+    # reconciliation's business — `paycheck_calc.breakdown` never caps). `*_starts_on` is the
+    # first profile's date when it left grid checks at $0, else None; `*_early_note` is the exact
+    # sentence appended to `warnings` for it, so the card can show it inline and drop it from the
+    # folded notes by equality. All defaulted, so a single-earner caller reads what it always did.
+    salary_first_check: date | None = None
+    salary_starts_on: date | None = None
+    salary_trad_401k_projected: Decimal = ZERO
+    salary_roth_401k_projected: Decimal = ZERO
+    salary_hsa_projected: Decimal = ZERO
+    salary_early_note: str | None = None
+    partner_gross_projected: Decimal = ZERO
+    partner_first_check: date | None = None
+    partner_starts_on: date | None = None
+    partner_trad_401k_projected: Decimal = ZERO
+    partner_roth_401k_projected: Decimal = ZERO
+    partner_hsa_projected: Decimal = ZERO
+    partner_early_note: str | None = None
 
 
 def check_dates(year: int, periods: int) -> list[date]:
@@ -274,14 +314,27 @@ class _SalaryLeg:
     # False as soon as ONE check is priced by a profile missing either rate. True on an
     # EMPTY leg — a person with no profile withholds nothing and has nothing to veto.
     split: bool = True
-    # The grid's FIRST check predates the earliest profile, so those checks are priced with
-    # a profile that was not yet in force.
-    early_checks: bool = False
+    # The counted checks' deferrals (2026-09-23 spec §W2), uncapped: what payroll would take
+    # at these rates before any 402(g) or HSA stop.
+    trad_401k_projected: Decimal = ZERO
+    roth_401k_projected: Decimal = ZERO
+    hsa_projected: Decimal = ZERO
+    # The first COUNTED check, and the first profile's date when it left grid checks at $0
+    # (2026-09-23 spec §W1) — None when every grid check is after it.
+    first_check: date | None = None
+    starts_on: date | None = None
 
 
 def _salary_leg(year: int, today: date, profiles: list) -> _SalaryLeg:
     """The check-grid walk, per person: cadence from the profile in force TODAY, then one
     `breakdown` per check against the profile in force on THAT day.
+
+    One payroll start (2026-09-23 spec §W1): a grid check dated ON OR BEFORE the person's
+    earliest profile's effective date pays nothing and is not counted. The grid's check on the
+    1st pays the half-month BEFORE it, so a job that starts on the 1st is first paid on the
+    16th — and a check dated on a LATER profile's effective date is still priced by that
+    profile (a switch keeps "on or after"). A first profile on or before Jan 1 excludes nothing
+    (the first grid check is Jan 16), which is what keeps such a household byte-identical.
 
     Preconditions are the module's (see the header): every profile's
     `pay_periods_per_year` >= 1, fenced at the API boundary. An empty list is not an
@@ -293,16 +346,27 @@ def _salary_leg(year: int, today: date, profiles: list) -> _SalaryLeg:
         return _SalaryLeg(0, 0, ZERO, ZERO, ZERO, ZERO)
     current = [p for p in ordered if p.effective_date <= today] or [ordered[0]]
     grid = check_dates(year, current[-1].pay_periods_per_year)
+    starts = ordered[0].effective_date
     withheld_ytd = withheld_projected = gross_ytd = gross_projected = ZERO
     fed_ytd = fed_projected = state_ytd = state_projected = ZERO
+    trad_projected = roth_projected = hsa_projected = ZERO
     split = True
-    elapsed = 0
+    elapsed = counted = 0
+    first_check: date | None = None
     for check_day in grid:
-        in_force = [p for p in ordered if p.effective_date <= check_day] or [ordered[0]]
-        profile = in_force[-1]
+        if check_day <= starts:
+            continue  # before the job: $0, and not a check anybody received (§W1)
+        # Never empty past the fence above: the earliest profile is in force from here on.
+        profile = [p for p in ordered if p.effective_date <= check_day][-1]
         lines = breakdown(profile)
+        counted += 1
+        if first_check is None:
+            first_check = check_day
         withheld_projected += lines["withholding"]
         gross_projected += lines["gross"]
+        trad_projected += lines["trad_401k"]
+        roth_projected += lines["roth_401k"]
+        hsa_projected += lines["hsa"]
         # getattr with a default, not an attribute read: this module takes "anything with
         # the profile's columns" (the sandbox's ScenarioProfile, a test stub), and a
         # missing pair is exactly the unavailable-split state rather than an AttributeError.
@@ -324,7 +388,7 @@ def _salary_leg(year: int, today: date, profiles: list) -> _SalaryLeg:
                 state_ytd += state_rate * lines["taxable"]
     return _SalaryLeg(
         checks_elapsed=elapsed,
-        checks_total=len(grid),
+        checks_total=counted,
         withheld_ytd=withheld_ytd,
         withheld_projected=withheld_projected,
         gross_ytd=gross_ytd,
@@ -334,7 +398,11 @@ def _salary_leg(year: int, today: date, profiles: list) -> _SalaryLeg:
         state_ytd=state_ytd,
         state_projected=state_projected,
         split=split,
-        early_checks=ordered[0].effective_date > grid[0],
+        trad_401k_projected=trad_projected,
+        roth_401k_projected=roth_projected,
+        hsa_projected=hsa_projected,
+        first_check=first_check,
+        starts_on=starts if grid and grid[0] <= starts else None,
     )
 
 
@@ -351,6 +419,8 @@ def estimate(
     # The two-earner block (2026-08-26 spec §5.6). Wages are the year's stored W-2 figures
     # PER PERSON — the same numbers the liability is computed on — not the paycheck
     # simulation, because the additional-Medicare split is about what each EMPLOYER saw.
+    # MEDICARE wages, so the router passes them without ESPP ordinary income (2026-09-23
+    # spec §W6: it is W-2 income but not Medicare wages).
     primary_wages: Decimal = ZERO,
     partner_wages: Decimal = ZERO,
     # The ENTERED fallback (P2): None means "no row stored" (which warns); Decimal("0")
@@ -367,13 +437,23 @@ def estimate(
     # own distinction, for the same reason.
     bonuses: Decimal = ZERO,
     bonus_withholding: Decimal | None = None,
+    # Whose legs these are, for the §W1 sentences only ("Grace's checks on or before Sep 1 …").
+    # None — a roster with no name, or a caller that has none — reads "your" / "your partner's".
+    primary_name: str | None = None,
+    partner_name: str | None = None,
 ) -> WithholdingEstimate:
     warnings: list[str] = []
     leg = _salary_leg(year, today, profiles)
+    salary_early_note = _early_note(
+        EARLY_CHECKS_WARNING,
+        "your" if primary_name is None else f"{primary_name}'s",
+        leg.starts_on if profiles else None,
+        year,
+    )
     if not profiles:
         warnings.append(NO_PROFILES_WARNING)
-    elif leg.early_checks:
-        warnings.append(EARLY_CHECKS_WARNING)
+    elif salary_early_note is not None:
+        warnings.append(salary_early_note)
 
     def fica(wages: Decimal) -> Decimal:
         return walk(medicare, wages) + walk(social_security, wages) + walk(disability, wages)
@@ -416,12 +496,22 @@ def estimate(
 
     simulated = bool(partner_profiles)
     partner_leg = _salary_leg(year, today, partner_profiles or [])
+    partner_early_note = (
+        _early_note(
+            PARTNER_EARLY_CHECKS_WARNING,
+            "your partner's" if partner_name is None else f"{partner_name}'s",
+            partner_leg.starts_on,
+            year,
+        )
+        if simulated
+        else None
+    )
     if simulated:
         # SIMULATED: the tracker keys are not blended in, not halved, not preferred when
         # larger — they are ignored, and said to be.
         partner_withheld_total = ZERO
-        if partner_leg.early_checks:
-            warnings.append(PARTNER_EARLY_CHECKS_WARNING)
+        if partner_early_note is not None:
+            warnings.append(partner_early_note)
         if partner_withheld_fed is not None or partner_withheld_state is not None:
             warnings.append(PARTNER_TRACKER_IGNORED_NOTE)
     else:
@@ -558,4 +648,19 @@ def estimate(
         bonus_source=bonus_source,
         jurisdictions=jurisdictions,
         warnings=warnings,
+        salary_first_check=leg.first_check,
+        salary_starts_on=leg.starts_on if profiles else None,
+        salary_trad_401k_projected=_cents(leg.trad_401k_projected),
+        salary_roth_401k_projected=_cents(leg.roth_401k_projected),
+        salary_hsa_projected=_cents(leg.hsa_projected),
+        salary_early_note=salary_early_note,
+        # The partner's facts only when their leg was SIMULATED — an entered leg walked no
+        # grid, and zeros there would read as "simulated, and it came to nothing".
+        partner_gross_projected=_cents(partner_leg.gross_projected if simulated else ZERO),
+        partner_first_check=partner_leg.first_check if simulated else None,
+        partner_starts_on=partner_leg.starts_on if simulated else None,
+        partner_trad_401k_projected=_cents(partner_leg.trad_401k_projected if simulated else ZERO),
+        partner_roth_401k_projected=_cents(partner_leg.roth_401k_projected if simulated else ZERO),
+        partner_hsa_projected=_cents(partner_leg.hsa_projected if simulated else ZERO),
+        partner_early_note=partner_early_note,
     )
