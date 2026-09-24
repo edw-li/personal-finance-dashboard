@@ -28,16 +28,18 @@ today. Absent, the response is the pre-retirement one plus an empty `retirements
 
 The PRODUCT clock (services/clock.py) is read HERE and only here (paycheck.py's
 posture): it anchors the starting balance and the month axis; services/projection.py
-takes no clock.
+takes no clock. The route serves JSON BYTES and `run_projection` validates them into a
+model for direct callers (the assistant), so every caller gets its own copy.
 """
 
 import re
+from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -49,7 +51,7 @@ from app.api.deps import get_current_user
 from app.api.paycheck import MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE, _default_profile, _limits_for
 from app.database import get_db
 from app.limit_keys import LIMIT_401K_ELECTIVE
-from app.models import NetWorthSnapshot
+from app.models import Account, AccountBalance, NetWorthSnapshot, PaycheckProfile, Person
 from app.schemas.projection import (
     ContributionBreakdownOut,
     DerivedWindowOut,
@@ -63,7 +65,7 @@ from app.services.limit_check import employer_match
 from app.services.metrics import planning_window
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
-from app.services.net_worth_calc import get_swr_pct, investable_base
+from app.services.net_worth_calc import INVESTABLE_GROUPS, get_swr_pct
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
@@ -103,12 +105,14 @@ DEFAULT_CONTRIBUTION_GROWTH = Decimal("0.03")
 CONTRIBUTION_MAX_ABS = Decimal(10) ** 7
 SPEND_MAX_ABS = Decimal(10) ** 9
 
-# Named, not inline: assistant_context decodes a `years` entry from the page's URL by
-# calling this router's function DIRECTLY, where FastAPI's Query validation never runs. It
-# fences the horizon against these two, so the sandbox and the assistant cannot drift.
+# Named, not inline: assistant_context decodes a `years` entry from the page's URL and runs
+# the projection DIRECTLY, where FastAPI's Query validation never runs. It fences the
+# horizon against these two, and so does `_build` (YEARS_MESSAGE), so the sandbox and the
+# assistant cannot drift.
 YEARS_MIN = 1
 YEARS_MAX = 60
 YearsQuery = Annotated[int, Query(ge=YEARS_MIN, le=YEARS_MAX)]
+YEARS_MESSAGE = f"years must be between {YEARS_MIN} and {YEARS_MAX}"
 
 # Repeated, order-free, and STRINGS: "<person_id>:<YYYY-MM>" is one value the user can see
 # in the URL, where two parallel int/date lists could arrive at different lengths. No count
@@ -149,8 +153,107 @@ def employer_monthly(profile, limits: dict[str, Decimal]) -> Decimal:
     )
 
 
-async def _payroll_savings(
-    db: AsyncSession, today: date
+@dataclass(frozen=True)
+class ProjectionKnobs:
+    """One request's knobs as the route received them — the unit the result cache keys on
+    (2026-09-23 spec §R9) and the one argument a direct caller (the assistant) passes, so a
+    new knob cannot be forgotten at one of the two doors."""
+
+    annual_return: Decimal | None = None
+    monthly_contribution: Decimal | None = None
+    annual_spend: Decimal | None = None
+    swr: Decimal | None = None
+    years: int = DEFAULT_YEARS
+    volatility: Decimal | None = None
+    inflation: Decimal | None = None
+    contribution_growth: Decimal | None = None
+    retire: tuple[str, ...] = ()
+    plan_until: int | None = None
+    vests: bool | None = None
+
+    def cache_key(self) -> tuple:
+        """Normalized so requests with one answer share one entry: equal Decimals spell one
+        key ("0.06" and "0.060" — every Decimal knob is quantized on the way in, so the run
+        cannot tell them apart), and retire entries are stripped and sorted (the params are
+        order-free). An absent knob stays None, never its default: the echo spells the two
+        differently. A non-finite Decimal keeps its own text — it 422s, and a 422 is never
+        cached, but its key is still looked up and must hash."""
+
+        def text(value: Decimal | None) -> str | None:
+            if value is None:
+                return None
+            return str(value.normalize()) if value.is_finite() else f"!{value}"
+
+        return (
+            text(self.annual_return),
+            text(self.monthly_contribution),
+            text(self.annual_spend),
+            text(self.swr),
+            self.years,
+            text(self.volatility),
+            text(self.inflation),
+            text(self.contribution_growth),
+            tuple(sorted(item.strip() for item in self.retire)),
+            self.plan_until,
+            self.vests,
+        )
+
+
+@dataclass(frozen=True)
+class _Earner:
+    """A person with a USABLE paycheck profile in force (2026-09-23 spec §R2's earners): the
+    set the derived contribution counts, and the set a drawdown waits for."""
+
+    person_id: int
+    name: str
+    profile: PaycheckProfile
+    payroll: Decimal  # payroll-deducted savings per month, cents
+    employer: Decimal  # the employer's 401(k) match per month, cents
+
+
+@dataclass(frozen=True)
+class _Household:
+    """Everything the run reads about people, read ONCE per build: the roster (primary
+    first), this year's limits, each person's profile in force (`_default_profile`'s rule),
+    the earners, and the people whose stored cadence would break `breakdown`."""
+
+    people: list[Person]
+    limits: dict[str, Decimal]
+    profiles: dict[int, PaycheckProfile | None]
+    earners: list[_Earner]
+    unusable: list[Person]
+
+
+async def _load_household(db: AsyncSession, today: date) -> _Household:
+    people = await load_people(db)
+    limits = await _limits_for(db, today.year)
+    profiles: dict[int, PaycheckProfile | None] = {}
+    earners: list[_Earner] = []
+    unusable: list[Person] = []
+    for person in people:
+        profile = await _default_profile(db, person.id, today)
+        profiles[person.id] = profile
+        if profile is None:
+            continue
+        if profile.pay_periods_per_year < MIN_PAY_PERIODS:
+            unusable.append(person)
+            continue
+        earners.append(
+            _Earner(
+                person_id=person.id,
+                name=person.name,
+                profile=profile,
+                payroll=half_up2(payroll_monthly(profile)),
+                employer=employer_monthly(profile, limits),
+            )
+        )
+    return _Household(
+        people=people, limits=limits, profiles=profiles, earners=earners, unusable=unusable
+    )
+
+
+def _payroll_savings(
+    household: _Household,
 ) -> tuple[Decimal, Decimal, list[PayrollSavingOut], list[str]]:
     """Every earner's monthly payroll savings from the profile in force today, summed.
 
@@ -162,37 +265,29 @@ async def _payroll_savings(
     total = ZERO
     employer_total = ZERO
     rows: list[PayrollSavingOut] = []
-    warnings: list[str] = []
-    limits = await _limits_for(db, today.year)
-    for person in await load_people(db):
-        profile = await _default_profile(db, person.id, today)
-        if profile is None:
-            continue
-        if profile.pay_periods_per_year < MIN_PAY_PERIODS:
-            warnings.append(
-                f"{person.name}'s paycheck profile: {PAY_PERIODS_MESSAGE} — "
-                "payroll savings left out of the contribution"
-            )
-            continue
-        monthly = half_up2(payroll_monthly(profile))
-        employer = employer_monthly(profile, limits)
-        if monthly <= ZERO and employer <= ZERO:
+    warnings = [
+        f"{person.name}'s paycheck profile: {PAY_PERIODS_MESSAGE} — "
+        "payroll savings left out of the contribution"
+        for person in household.unusable
+    ]
+    for earner in household.earners:
+        if earner.payroll <= ZERO and earner.employer <= ZERO:
             continue
         rows.append(
             PayrollSavingOut(
-                person_id=person.id,
-                name=person.name,
-                monthly=monthly,
-                employer_monthly=employer,
+                person_id=earner.person_id,
+                name=earner.name,
+                monthly=earner.payroll,
+                employer_monthly=earner.employer,
             )
         )
-        total += monthly
-        employer_total += employer
+        total += earner.payroll
+        employer_total += earner.employer
     return total, employer_total, rows, warnings
 
 
-async def _resolve_retirements(
-    db: AsyncSession, raw: list[str], months: list[date], years: int, today: date
+def _resolve_retirements(
+    household: _Household, raw: tuple[str, ...], months: list[date], years: int
 ) -> list[RetirementOut]:
     """`retire=<person_id>:<YYYY-MM>` params resolved to the echo rows, sorted by month.
 
@@ -202,14 +297,11 @@ async def _resolve_retirements(
     the order is fixed — format, person, duplicate, horizon, profile, cadence — so the
     message always names the nearest thing to fix.
 
-    The drop is that person's monthly take-home PLUS their payroll-deducted savings, both
-    from the profile `_default_profile` says is in force TODAY — retiring stops the whole
-    check, and the derived contribution counts both halves (2026-09-03). It is a today's-
-    dollars figure exactly like `monthly_contribution`, and the caller hands it to the
-    engine UNCONVERTED — see the Fisher note at the call.
+    `monthly_drop` is that person's monthly take-home PLUS their payroll-deducted savings
+    and employer match, all from the profile `_default_profile` says is in force TODAY —
+    the paycheck that stops, a today's-dollars figure like `monthly_contribution`.
     """
-    people = {person.id: person for person in await load_people(db)}
-    limits = await _limits_for(db, today.year)
+    people = {person.id: person for person in household.people}
     rows: list[RetirementOut] = []
     seen: set[int] = set()
     for item in raw:
@@ -241,7 +333,7 @@ async def _resolve_retirements(
                     f"({months[0]:%Y-%m} to {months[-1]:%Y-%m})"
                 ),
             )
-        profile = await _default_profile(db, person_id, today)
+        profile = household.profiles.get(person_id)
         if profile is None:
             raise HTTPException(
                 status_code=422,
@@ -259,60 +351,135 @@ async def _resolve_retirements(
             # An over-committed check nets negative; a retirement must never ADD to the
             # stream, so a negative take-home simply has nothing to drop.
             drop = ZERO
-        # The deductions stop with the paycheck too — the same figure the derived
-        # contribution added for this person, so a retirement removes exactly what the
-        # profile put in. Non-negative by construction (pcts and riders are fenced ≥ 0).
+        # The deductions and the employer's leg stop with the paycheck too — the same figures
+        # the derived contribution added for this person.
         drop += half_up2(payroll_monthly(profile))
-        # The employer's leg stops with the job too — the same figure `_payroll_savings`
-        # added for this person, so a retirement removes exactly what the profile put in.
-        drop += employer_monthly(profile, limits)
+        drop += employer_monthly(profile, household.limits)
         rows.append(
             RetirementOut(person_id=person_id, name=person.name, month=month, monthly_drop=drop)
         )
     # Sorted by month (person id breaks a tie) so the echo, the chart's markLines and the
-    # engine's schedule all read in the order the drops actually happen.
+    # engine's schedule all read in the order the retirements actually happen.
     rows.sort(key=lambda row: (row.month, row.person_id))
     return rows
 
 
-@router.get("", response_model=ProjectionOut)
-async def projection(
-    annual_return: Decimal | None = Query(default=None),
-    monthly_contribution: Decimal | None = Query(default=None),
-    annual_spend: Decimal | None = Query(default=None),
-    swr: Decimal | None = Query(default=None),
-    years: YearsQuery = DEFAULT_YEARS,
-    volatility: Decimal | None = Query(default=None),
-    inflation: Decimal | None = Query(default=None),
-    contribution_growth: Decimal | None = Query(default=None),
-    retire: RetireQuery = None,
-    db: AsyncSession = Depends(get_db),
-) -> ProjectionOut:
-    today = clock.product_today()  # the ONLY clock read (module docstring)
-    start_month = today.replace(day=1)
+@dataclass(frozen=True)
+class BaseSnapshot:
+    """The snapshot the starting balance stands on (2026-09-23 spec §R5): its key, the date
+    its balances describe, the stored recorded date and whether it is provisional."""
 
-    # The starting balance and the month it stands on. A missing snapshot is the ESPP
-    # modeler's 404 class: "nothing to model yet", answered by the page's empty state.
-    base_month = (
+    id: int
+    month: date
+    as_of: date | None
+    recorded_on: date | None
+    provisional: bool
+
+
+async def _base_snapshot(db: AsyncSession, today: date) -> BaseSnapshot | None:
+    """THE one read of "which snapshot is now" (spec §R5) — the seam lane K's
+    `snapshot_state.current_and_previous` replaces. Until then: the latest snapshot whose
+    month is on or before today, its balances describing that month's 1st."""
+    row = (
         await db.execute(
-            select(NetWorthSnapshot.month)
+            select(NetWorthSnapshot.id, NetWorthSnapshot.month, NetWorthSnapshot.recorded_on)
             .where(NetWorthSnapshot.month <= today)
             .order_by(NetWorthSnapshot.month.desc())
             .limit(1)
         )
-    ).scalar_one_or_none()
-    starting = await investable_base(db, today)
-    if base_month is None or starting is None:
+    ).first()
+    if row is None:
+        return None
+    return BaseSnapshot(
+        id=row.id, month=row.month, as_of=row.month, recorded_on=row.recorded_on, provisional=False
+    )
+
+
+async def _investable_total(db: AsyncSession, snapshot_id: int) -> Decimal:
+    """Non-component pre/post-tax + taxable + equity balances of ONE snapshot — the sum
+    net_worth_calc.investable_base runs once it has picked its snapshot, taken here by id so
+    the snapshot is picked exactly once (spec §R5)."""
+    total = (
+        await db.execute(
+            select(func.coalesce(func.sum(AccountBalance.balance), 0))
+            .join(Account, Account.id == AccountBalance.account_id)
+            .where(
+                AccountBalance.snapshot_id == snapshot_id,
+                Account.is_component.is_(False),
+                Account.group.in_(INVESTABLE_GROUPS),
+            )
+        )
+    ).scalar_one()
+    return Decimal(total)
+
+
+@router.get("", response_model=ProjectionOut)
+async def projection(
+    annual_return: Annotated[Decimal | None, Query()] = None,
+    monthly_contribution: Annotated[Decimal | None, Query()] = None,
+    annual_spend: Annotated[Decimal | None, Query()] = None,
+    swr: Annotated[Decimal | None, Query()] = None,
+    years: YearsQuery = DEFAULT_YEARS,
+    volatility: Annotated[Decimal | None, Query()] = None,
+    inflation: Annotated[Decimal | None, Query()] = None,
+    contribution_growth: Annotated[Decimal | None, Query()] = None,
+    retire: RetireQuery = None,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """The answer as JSON bytes (`response_model` documents the shape). Direct callers use
+    `run_projection`, never this function: its parameters are FastAPI's, and its body is
+    the serialized answer."""
+    knobs = ProjectionKnobs(
+        annual_return=annual_return,
+        monthly_contribution=monthly_contribution,
+        annual_spend=annual_spend,
+        swr=swr,
+        years=years,
+        volatility=volatility,
+        inflation=inflation,
+        contribution_growth=contribution_growth,
+        retire=tuple(retire or ()),
+    )
+    return Response(content=await projection_json(db, knobs), media_type="application/json")
+
+
+async def projection_json(db: AsyncSession, knobs: ProjectionKnobs) -> bytes:
+    """The serialized answer for `knobs` — by alias, the wire's own spelling."""
+    today = clock.product_today()  # the ONLY clock read (module docstring)
+    model = await _build(db, knobs, today)
+    return model.model_dump_json(by_alias=True).encode()
+
+
+async def run_projection(db: AsyncSession, knobs: ProjectionKnobs) -> ProjectionOut:
+    """The route's answer for a DIRECT caller (assistant_context): the same bytes, validated
+    into a model of the caller's own (2026-09-23 spec §R9)."""
+    return ProjectionOut.model_validate_json(await projection_json(db, knobs))
+
+
+async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> ProjectionOut:
+    start_month = today.replace(day=1)
+
+    # The starting balance and the snapshot it stands on, picked ONCE. A missing snapshot is
+    # the ESPP modeler's 404 class: "nothing to model yet", answered by the page's empty state.
+    base = await _base_snapshot(db, today)
+    if base is None:
         raise HTTPException(status_code=404, detail=NO_SNAPSHOTS)
+    starting = await _investable_total(db, base.id)
 
     warnings: list[str] = []
 
+    annual_return = knobs.annual_return
     if annual_return is None:
         annual_return = DEFAULT_ANNUAL_RETURN
     else:
         if not annual_return.is_finite() or not RETURN_MIN <= annual_return <= RETURN_MAX:
             raise HTTPException(status_code=422, detail=RETURN_MESSAGE)
         annual_return = quantize_pct(annual_return)
+
+    years = knobs.years
+    if not YEARS_MIN <= years <= YEARS_MAX:
+        # FastAPI's YearsQuery fences HTTP; this is a direct caller's fence.
+        raise HTTPException(status_code=422, detail=YEARS_MESSAGE)
 
     # ONE window for both derivations (spec §3): the last twelve months with spending rows
     # AND take-home. Before this, the spend mean and the savings mean averaged DIFFERENT
@@ -322,6 +489,8 @@ async def projection(
     window, planning_receipt = planning_window(savings_rows, review_book)
     has_cashflow = any(row.net_pay is not None for row in savings_rows)
     has_spending = any(row.has_spending_rows for row in savings_rows)
+    monthly_contribution = knobs.monthly_contribution
+    annual_spend = knobs.annual_spend
     # Read BEFORE the two blocks below overwrite the knobs with their resolved values.
     derives = monthly_contribution is None or annual_spend is None
     # The echo describes a DERIVATION, so it is null when the user typed both knobs —
@@ -353,9 +522,11 @@ async def projection(
         # NO_CASHFLOW_WARNING or NO_SPEND_WARNING instead, so nothing says it twice.
         warnings.append(NO_MATCHED_MONTHS_WARNING)
 
+    household = await _load_household(db, today)
+
     contribution_breakdown: ContributionBreakdownOut | None = None
     if monthly_contribution is None:
-        payroll, employer, by_person, payroll_warnings = await _payroll_savings(db, today)
+        payroll, employer, by_person, payroll_warnings = _payroll_savings(household)
         warnings.extend(payroll_warnings)
         if not window:
             cash_part = ZERO
@@ -413,6 +584,7 @@ async def projection(
         if annual_spend <= 0:
             raise HTTPException(status_code=422, detail="annual_spend must be positive")
 
+    swr = knobs.swr
     if swr is None:
         swr = await get_swr_pct(db)  # already bounded to [0, 1]; 0 is handled below
     else:
@@ -426,18 +598,21 @@ async def projection(
     # explicit value always wins, zeros included (volatility 0 turns the fan off, the
     # gate below; inflation 0 reads nominal; growth 0 keeps contributions flat), and the
     # quantize runs on both paths so the echo always names what actually ran at 6dp.
+    volatility = knobs.volatility
     if volatility is None:
         volatility = DEFAULT_VOLATILITY
     elif not volatility.is_finite() or not Decimal(0) <= volatility <= Decimal(1):
         raise HTTPException(status_code=422, detail=VOLATILITY_MESSAGE)
     volatility = quantize_pct(volatility)
 
+    inflation = knobs.inflation
     if inflation is None:
         inflation = DEFAULT_INFLATION
     elif not inflation.is_finite() or not INFLATION_MIN <= inflation <= INFLATION_MAX:
         raise HTTPException(status_code=422, detail=INFLATION_MESSAGE)
     inflation = quantize_pct(inflation)
 
+    contribution_growth = knobs.contribution_growth
     if contribution_growth is None:
         contribution_growth = DEFAULT_CONTRIBUTION_GROWTH
     elif not contribution_growth.is_finite() or not Decimal(0) <= contribution_growth <= GROWTH_MAX:
@@ -453,18 +628,12 @@ async def projection(
 
     month_count = years * 12
     months = _months_from(start_month, month_count)
-    retirements = await _resolve_retirements(db, retire or [], months, years, today)
+    retirements = _resolve_retirements(household, knobs.retire, months, years)
     # (month_index, amount), sorted — the SAME schedule feeds the deterministic line and
     # the fan, which is what keeps the bands wrapped around the line they belong to.
     # `months` is contiguous from t0, so the horizon check above guarantees every month
-    # is on the axis.
-    #
-    # The drop does NOT go through the real-terms conversion below: `monthly_drop` is a
-    # TODAY's-dollars take-home, exactly like `monthly_contribution`, and the engine's
-    # escalator is what carries both forward. Deflating it would model a nominal FUTURE
-    # paycheck, which is not what `_default_profile` read. The honest asterisk — the
-    # remaining stream escalates in real terms while the drop does not — is named in the
-    # page's hint rather than papered over here.
+    # is on the axis. The drop does NOT go through the real-terms conversion: it is a
+    # TODAY's-dollars take-home, exactly like `monthly_contribution`.
     drops = [(months.index(row.month), row.monthly_drop) for row in retirements]
     # Every ARRAY below runs on `real_return` (= annual_return under an EXPLICIT
     # inflation=0, which is what reproduces the pre-Monte-Carlo arrays byte for byte);
@@ -476,8 +645,7 @@ async def projection(
     )
     # The coast line: the same growth with the contributions turned off — the distance
     # between the two lines is what the saving is buying. Nothing to escalate, so the
-    # escalator is 0 here too, and nothing to drop either: a retirement cannot move a
-    # stream that is already off.
+    # escalator is 0 here too, and nothing to drop either.
     coast = project(starting, ZERO, real_return, month_count, Decimal("0"))
 
     fi_target: Decimal | None = None
@@ -529,7 +697,6 @@ async def projection(
             p90 = reach_percentile(mc.reach_indices, 90)
             # Defense in depth only: an interpolation of order statistics all <= month_count
             # cannot exceed it (branch review N4) — the clamp just makes that not load-bearing.
-            # onto the axis rather than invent a month the chart does not have.
             fi_month_p10 = None if p10 is None else months[min(p10, month_count)]
             fi_month_p50 = None if p50 is None else months[min(p50, month_count)]
             fi_month_p90 = None if p90 is None else months[min(p90, month_count)]
@@ -537,14 +704,16 @@ async def projection(
     # The budgets' own annual figure rides beside the derived one (spec §4): a preset the
     # card can offer, never a replacement for what the data derived. The echo keeps THIS
     # route's clock — `start_month`, from the module's one clock read — and `budget_month`
-    # below says which month was resolved, so a reader chasing a month-turnover
-    # difference has the answer here. One product clock now, so the two agree.
+    # below says which month was resolved.
     budget_total = await living_budget_total(db, start_month)
     budget_annual_spend = None if budget_total is None else budget_total * 12
 
     return ProjectionOut(
         starting_balance=starting,
-        base_month=base_month,
+        base_month=base.month,
+        base_as_of=base.as_of,
+        base_recorded_on=base.recorded_on,
+        base_provisional=base.provisional,
         start_month=start_month,
         annual_return=annual_return,
         monthly_contribution=monthly_contribution,

@@ -572,21 +572,26 @@ def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]
 async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
     from fastapi import HTTPException
 
-    from app.api.projection import projection
+    from app.api.projection import ProjectionKnobs, run_projection
 
     scenario, honored = _projection_scenario(_whatif_entries(search, view))
     try:
-        p = await projection(
-            annual_return=scenario.get("annual_return"),
-            monthly_contribution=scenario.get("monthly_contribution"),
-            annual_spend=scenario.get("annual_spend"),
-            swr=scenario.get("swr"),
-            years=scenario["years"],
-            volatility=scenario.get("volatility"),
-            inflation=scenario.get("inflation"),
-            contribution_growth=scenario.get("contribution_growth"),
-            retire=scenario["retire"],
-            db=db,
+        # Every knob named explicitly (the direct-call trap, 2026-09-23 spec §R10): the route
+        # serves bytes, and `run_projection` validates the SAME cached bytes into this
+        # section's own model.
+        p = await run_projection(
+            db,
+            ProjectionKnobs(
+                annual_return=scenario.get("annual_return"),
+                monthly_contribution=scenario.get("monthly_contribution"),
+                annual_spend=scenario.get("annual_spend"),
+                swr=scenario.get("swr"),
+                years=scenario["years"],
+                volatility=scenario.get("volatility"),
+                inflation=scenario.get("inflation"),
+                contribution_growth=scenario.get("contribution_growth"),
+                retire=tuple(scenario["retire"] or ()),
+            ),
         )
     except HTTPException as exc:
         # NO_SNAPSHOTS on a fresh database — or a knob the router refuses, which is the

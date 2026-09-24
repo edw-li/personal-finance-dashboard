@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
+from app.api.projection import ProjectionKnobs, run_projection
 from app.models import (
     Account,
     AccountBalance,
@@ -158,6 +159,44 @@ async def test_projection_defaults_derive_from_the_data(auth_client, db):
     # 100k toward 1.5M needs ~67 years) does not.
     assert body["fi_month"] is not None
     assert body["coast_fi_month"] is None
+
+
+async def test_projection_echoes_the_base_snapshot_it_started_from(auth_client, db):
+    # 2026-09-23 spec §R5: the starting balance names its snapshot — the month key, the date the
+    # balances describe, the recorded date and whether they are provisional.
+    this_month = await _seed_book(db)
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["base_month"] == this_month.isoformat()
+    assert body["base_as_of"] == this_month.isoformat()
+    assert body["base_recorded_on"] is None  # _seed_book stores no recorded date
+    assert body["base_provisional"] is False
+
+
+async def test_run_projection_is_the_routes_answer_as_a_model_of_its_own(db):
+    # Direct callers (the assistant) get the SAME answer the route serves, validated into a
+    # model of their own: mutating one can never reach the next caller (spec §R9).
+    await _seed_book(db)
+    first = await run_projection(db, ProjectionKnobs(years=2))
+    second = await run_projection(db, ProjectionKnobs(years=2))
+    assert first == second and first is not second
+    first.warnings.append("mutated")
+    assert "mutated" not in (await run_projection(db, ProjectionKnobs(years=2))).warnings
+
+
+def test_the_cache_key_normalizes_what_cannot_change_the_answer():
+    a = ProjectionKnobs(annual_return=Decimal("0.06"), retire=(" 2:2035-06", "1:2031-01"))
+    b = ProjectionKnobs(annual_return=Decimal("0.060"), retire=("1:2031-01", "2:2035-06"))
+    assert a.cache_key() == b.cache_key()
+    # An absent knob and its default are DIFFERENT answers (the echo spells them differently).
+    assert (
+        ProjectionKnobs(annual_return=None).cache_key()
+        != ProjectionKnobs(annual_return=Decimal("0.05")).cache_key()
+    )
+    assert ProjectionKnobs(vests=False).cache_key() != ProjectionKnobs(vests=None).cache_key()
+    assert ProjectionKnobs(plan_until=2070).cache_key() != ProjectionKnobs().cache_key()
+    # A key that will 422 must still hash (a 422 is never cached, but it is looked up).
+    hash(ProjectionKnobs(swr=Decimal("NaN")).cache_key())
+    hash(ProjectionKnobs(swr=Decimal("sNaN")).cache_key())
 
 
 async def test_projection_zero_return_is_an_exact_chain(auth_client, db):

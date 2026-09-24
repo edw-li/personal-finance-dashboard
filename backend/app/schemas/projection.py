@@ -117,3 +117,10 @@ class ProjectionOut(BaseModel):
     # budgets; nullable-with-default so a stored older payload still validates.
     budget_annual_spend: Decimal | None = None
     budget_month: date | None = None
+    # 2026-09-23 spec §R5: the snapshot the starting balance stands on, beside `base_month`
+    # (its key) — the date its balances describe (None = unknown), the stored recorded date,
+    # and whether it is provisional (recorded before its 1st). Defaulted so an older stored
+    # payload still validates.
+    base_as_of: date | None = None
+    base_recorded_on: date | None = None
+    base_provisional: bool = False
