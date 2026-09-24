@@ -204,7 +204,9 @@ it('banners a failed load and refetches on Retry', async () => {
 it('says the app ships no values of its own', async () => {
   render(<LimitsCard />)
   const card = within(await screen.findByRole('region', { name: 'Contribution limits' }))
-  expect(card.getByText(/publishes new figures every year/i)).toBeTruthy()
+  // The sentence renders with the loaded limits, a beat after the region itself — wait for it
+  // (under a full-suite load the region can appear first; a plain getByText then races).
+  expect(await card.findByText(/publishes new figures every year/i)).toBeTruthy()
 })
 
 it('renders a refused save inline with no Retry beside it (motion spec §9)', async () => {
