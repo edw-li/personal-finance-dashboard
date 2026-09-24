@@ -17,7 +17,6 @@ from sqlalchemy import event, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api import projection as projection_api
-from app.api.espp import _espp_quote
 from app.api.projection import ProjectionKnobs, projection_json, run_projection
 from app.limit_keys import LIMIT_401K_ELECTIVE
 from app.models import (
@@ -38,7 +37,6 @@ from app.models import (
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock, read_cache
-from app.services.employer_ticker import read_employer_ticker
 from app.services.month_review import adopt_existing_history
 
 URL = "/api/v1/projection?years=5"
@@ -351,29 +349,9 @@ async def test_the_narrowed_cells_cover_every_setting_and_quote_the_build_reads(
     assert keyed["latest_prices"] == {ids["security"]}
 
 
-@pytest.mark.parametrize(
-    "stored",
-    [
-        None,
-        {"value": "NVDA"},
-        {"value": "  nvda "},
-        {"value": ""},
-        {"value": "   "},
-        {"value": None},
-        {"value": 7},
-        ["NVDA"],
-        {},
-    ],
-)
-async def test_the_bound_ticker_is_the_one_the_build_prices(db, stored):
-    # The latest_prices cell is restricted with the ticker the cache resolves BEFORE the build
-    # (employer_ticker.read_employer_ticker); the build prices vests with _espp_quote's. Pinned
-    # equal on every envelope shape, so the cell can never cover a different security
-    # (test_employer_ticker.py pins every reader of the setting against the expected ticker).
-    if stored is not None:
-        db.add(AppSetting(key="espp_ticker", value=stored))
-        await db.commit()
-    assert await read_employer_ticker(db) == (await _espp_quote(db))[0]
+# The quote cell's ticker and the build's are one reader's now (services/employer_ticker), and
+# test_employer_ticker.py holds this cache's bound ticker and _espp_quote's to the expected
+# ticker on every envelope shape — a test comparing the reader with itself would add nothing.
 
 
 async def test_422s_and_404s_are_never_cached(auth_client, db):
