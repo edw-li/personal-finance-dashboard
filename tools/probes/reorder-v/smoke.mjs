@@ -29,7 +29,9 @@
 // roster's last group never scrolls under lane R0's range-end stop) and the 440px Categories &
 // weights box — the scroll stopping at the range's first slot clear below the sticky header (lane
 // R7), its group heading too, the header recorded while the row in hand crosses it mid-scroll and
-// at the stop — and on the page (the ledger at 1280×800);
+// at the stop — and inside the ledger's capped box at 1280×800, the page staying put (2026-09-24
+// table-scroll spec §2.6); the ledger on arrival, where a drag held at the window's foot scrolls the
+// box to its end and then the page on, and reaches the last slot (read mid-drag, then Escape);
 // the Accounts roster's groups, nesting and carried components, and a component held to its
 // siblings; the ledger in a person scope and a sell dragged above its buy; the credit-line colours
 // through a reorder and in every person scope, and the rewards matrix's columns; Escape inside the
@@ -150,6 +152,8 @@ const ACC_BOX = '#accounts .settings-scroll:has(table.accounts-table)'
 const LEDGER_PANEL = '#portfolio-records-transactions' // R3
 const LEDGER = `${LEDGER_PANEL} table`
 const TXN_ROWS = `${LEDGER} tbody tr[data-reorder-id]`
+// The ledger's capped box (2026-09-24 table-scroll spec §3.2): since the cap, a drag auto-scrolls it.
+const LEDGER_BOX = `${LEDGER_PANEL} .table-scroll`
 const DIALOG = '[role="dialog"][aria-label="Customize overview"]' // R4
 const TILE_ROWS = `${DIALOG} fieldset:nth-of-type(1) .overview-customize-row[data-reorder-id]`
 const ROSTER = '.roster-table' // R5
@@ -726,14 +730,19 @@ const standAt = (selector, fraction = 0.45) =>
     },
     [selector, fraction],
   )
-/** A capped box centred in the window and scrolled to its top. */
+/** A capped box scrolled to its top and brought toward the window's centre (scrollIntoView, block
+ *  'center') — as far as the page can scroll. The ledger's box is the last thing on Manage, so the
+ *  page stops at its max there, the box's foot ~69px above the window's (its top at y≈250.7 in a
+ *  1280×800 window, not the ≈176 centring would give under the root's 32px scroll-padding). */
 const boxTop = (box) =>
   page.evaluate((sel) => {
     const el = document.querySelector(sel)
     el.scrollIntoView({ block: 'center' })
     el.scrollTop = 0
   }, box)
-/** A capped box centred in the window, a row of it `offset` px below its top edge. */
+/** A capped box brought toward the window's centre as boxTop brings it (the ledger's short of it, the
+ *  page at its max), a row of it `offset` px below its top edge — or as near as the box's scroll
+ *  range allows (a first row stays put; a last one leaves the box at its end). */
 const boxTo = (box, selector, offset) =>
   page.evaluate(
     ([b, sel, off]) => {
@@ -1218,38 +1227,243 @@ async function reducedMotion({ rows, id, k, popover = false }) {
     await page.waitForTimeout(150)
   }
 }
-/** The ledger at 1280×800 is taller than the window: a pointer parked in the bottom 40px zone
- *  scrolls the page under the lifted row (spec §2.3.5, §10). Lane R3's long drag. */
+/** The ledger at 1280×800 is taller than its capped box (2026-09-24 table-scroll spec §2.6): a
+ *  pointer parked in the bottom 40px zone of the box's visible band scrolls the BOX under the lifted
+ *  row, and the page stays put (spec §2.3.5, §10). Lane R3's long drag, re-aimed when the ledger
+ *  got its cap — before it, the same drag scrolled the page. boxTo puts the box at its top (the
+ *  first row clamps it at 0), so it has its whole height to scroll, but leaves the page at its max
+ *  (boxTop's note), where no downward page scroll could register. So the page is moved back until
+ *  the box's foot stands 8px inside the window, and the room left below it is recorded: the
+ *  page-stays-put check needs room to fail. */
 async function longDrag(rows, id) {
   await clearToasts()
   await ready(rows)
   const before = await order(rows)
   const from = before.indexOf(String(id))
-  await standAt(rowSel(rows, id), 0.35)
+  await boxTo(LEDGER_BOX, rowSel(rows, id), 80)
+  const roomBelow = await page.evaluate((sel) => {
+    window.scrollBy(0, document.querySelector(sel).getBoundingClientRect().bottom - window.innerHeight + 8)
+    return Math.round((document.documentElement.scrollHeight - window.innerHeight - window.scrollY) * 10) / 10
+  }, LEDGER_BOX)
   await page.waitForTimeout(250)
-  const scrollBefore = await page.evaluate(() => window.scrollY)
+  // Measured after the page move: the row's grip and the band stand where the drag starts.
+  const pageBefore = await page.evaluate(() => window.scrollY)
+  const boxBefore = await scrollTopOf(LEDGER_BOX)
+  const band = await visibleBand(LEDGER_BOX)
   const g = await page.locator(gripSel(rows, id)).boundingBox()
   const x = g.x + g.width / 2
   const y0 = g.y + g.height / 2
   await page.mouse.move(x, y0)
   await page.mouse.down()
   await page.mouse.move(x, y0 + 6, { steps: 2 })
-  await page.mouse.move(x, size.height - 12, { steps: 20 })
+  await page.mouse.move(x, band.bottom - 12, { steps: 20 })
   await page.waitForTimeout(1200)
   const mid = await liftState(rows)
-  const scrolled = (await page.evaluate(() => window.scrollY)) - scrollBefore
+  const boxScrolled = (await scrollTopOf(LEDGER_BOX)) - boxBefore
+  const pageScrolled = (await page.evaluate(() => window.scrollY)) - pageBefore
   await snap('ledger-auto-scroll')
-  await page.mouse.move(x, size.height / 2, { steps: 10 })
+  await page.mouse.move(x, (band.top + band.bottom) / 2, { steps: 10 })
   await page.waitForTimeout(250)
   await page.mouse.up()
   await page.waitForTimeout(MOTION + 700)
   const after = await order(rows)
   const to = after.indexOf(String(id))
   check('a row lifts and the page says grabbing', mid !== null && mid.grabbing, mid)
-  check('the page auto-scrolls under a pointer held in the bottom 40px zone', scrolled > 200, { scrolled })
+  check('the ledger box auto-scrolls under a pointer held in its bottom 40px zone', boxScrolled > 200, {
+    boxScrolled,
+    band: [Math.round(band.top), Math.round(band.bottom)],
+  })
+  check('the page stays put while the box scrolls — with room below it to move', roomBelow >= 20 && pageScrolled === 0, {
+    pageScrolled,
+    roomBelow,
+  })
   check('the row travels with the scroll', to - from >= 8, { from, to })
   check('nothing else moved', same(after, moveTo(before, from, to)), after)
   return after
+}
+/** Samples a capped box and the page every 200ms from the moment the pointer is held, until neither
+ *  scroll has moved over three consecutive intervals — four equal samples, 600ms, where a held
+ *  auto-scroll steps up to 18px a frame; the margin is for a loaded box — or `timeout` passes. It
+ *  records the ORDER the two scrolls came in, too: the first sample with the box at its end, the
+ *  first with the page moved off `pageFrom` (where it stood before the press), and whether any
+ *  sample caught the page moved while the box still had room. A hook that scrolled both together
+ *  would spend the page's share — the box's overhang, a few frames' worth — long before the box's
+ *  end, which takes over a second at the ledger's length, so the first samples would catch it.
+ *  `trace` holds every sample: [ms, box scrollTop, page scrollY]. */
+async function holdUntilStill(box, pageFrom, timeout = 12000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      return {
+        boxTop: el.scrollTop,
+        boxMax: el.scrollHeight - el.clientHeight,
+        pageY: window.scrollY,
+        boxBottom: Math.round(el.getBoundingClientRect().bottom * 10) / 10,
+        innerHeight: window.innerHeight,
+      }
+    }, box)
+  const start = Date.now()
+  const trace = []
+  const seen = {
+    boxEndSample: null,
+    boxEndMs: null,
+    pageMovedSample: null,
+    pageMovedMs: null,
+    pageMovedBeforeBoxEnd: false,
+  }
+  const log = (sample) => {
+    const index = trace.length
+    const ms = Date.now() - start
+    trace.push([ms, Math.round(sample.boxTop), Math.round(sample.pageY)])
+    const atEnd = sample.boxTop >= sample.boxMax - 1
+    const moved = sample.pageY !== pageFrom
+    if (atEnd && seen.boxEndSample === null) Object.assign(seen, { boxEndSample: index, boxEndMs: ms })
+    if (moved && seen.pageMovedSample === null) Object.assign(seen, { pageMovedSample: index, pageMovedMs: ms })
+    if (moved && !atEnd) seen.pageMovedBeforeBoxEnd = true
+  }
+  let prev = await read()
+  log(prev)
+  let quiet = 0
+  for (;;) {
+    await page.waitForTimeout(200)
+    const now = await read()
+    log(now)
+    quiet = now.boxTop === prev.boxTop && now.pageY === prev.pageY ? quiet + 1 : 0
+    if (quiet >= 3 || Date.now() - start > timeout) {
+      return { ...now, still: quiet >= 3, ms: Date.now() - start, ...seen, trace }
+    }
+    prev = now
+  }
+}
+/** Arrival on Manage (2026-09-24 table-scroll spec §2.6; its Task 4 review), on a fresh visit: the
+ *  page at scroll 0 and the ledger's capped box at its own top — the product's claim, checked. The
+ *  scenario: the box hangs past the window's foot (147px at 1280×800, 67px at 1600×1000 in this
+ *  book), so its last slots lie below any pointer. A pointer drag held at the WINDOW's bottom edge
+ *  scrolls the box to its end, and only then hands the scroll to the page (reorderDom.ts
+ *  autoScrollBy; the order sampled by holdUntilStill), until the box's foot is inside the window —
+ *  and the row in hand stands in the LAST slot, read mid-drag off lane R0's rows (liftState: every
+ *  row below it made room, and its offset is aim's travel to that slot) and the live region. Before
+ *  the hand-off the drop landed short (3 slots at 1280, 1 at 1600). Where the box does not hang (a
+ *  smaller book, or less above the ledger) or has nothing to scroll, no hand-off arises: that is
+ *  noted, and the drag must still reach the last slot — with the page where it stood, when the box
+ *  scrolls. Then Escape, never a drop: nothing is sent. */
+async function arrivalDrag(rows) {
+  await clearToasts()
+  await ready(rows)
+  const writes = writesNow()
+  const before = await order(rows)
+  const id = before[0] // the first row: in view at the box's top on arrival
+  const from = 0
+  const last = before.length - 1
+  const travel = aim(await boxes(rows), from, last - from)
+  const start = await page.evaluate((sel) => {
+    const el = document.querySelector(sel)
+    const bottom = el.getBoundingClientRect().bottom
+    return {
+      pageY: window.scrollY,
+      boxTop: el.scrollTop,
+      boxRoom: el.scrollHeight - el.clientHeight,
+      // Decided on the raw rect, as autoScrollBy compares it; only the recorded overhang is rounded.
+      hangs: bottom > window.innerHeight,
+      hangsBelowWindow: Math.round((bottom - window.innerHeight) * 10) / 10,
+    }
+  }, LEDGER_BOX)
+  check('arrival: the page at its top and the ledger box at its own', start.pageY === 0 && start.boxTop === 0, start)
+  const boxScrolls = start.boxRoom > 1
+  const handOff = boxScrolls && start.hangs
+  if (!handOff) {
+    note(
+      `arrival: no hand-off arises at this width — ${boxScrolls ? "the box's foot is inside the window" : 'the ledger fits under its cap, so the page is its scroller'}; the drag must still reach the last slot`,
+      start,
+    )
+  }
+  const g = await page.locator(gripSel(rows, id)).boundingBox()
+  if (g === null) throw new Error(`no grip on screen for row ${id}`)
+  const x = g.x + g.width / 2
+  const y0 = g.y + g.height / 2
+  const edge = size.height - 2 // the window's bottom edge: as far down as a pointer goes
+  await page.mouse.move(x, y0)
+  await page.mouse.down()
+  await page.mouse.move(x, y0 + 6, { steps: 2 })
+  await page.mouse.move(x, edge, { steps: 12 })
+  const held = await holdUntilStill(LEDGER_BOX, start.pageY)
+  const mid = await liftState(rows)
+  const said = await live(LEDGER_PANEL)
+  await snap('ledger-arrival-held')
+  await page.keyboard.press('Escape')
+  // The hook eases the rows home (MOTION_MS.fast) before it clears them: polled, never a fixed wait.
+  const clear = { lifted: null, residue: 0, cursor: false }
+  const cancelled = await waitFor(
+    async () => ({
+      lifted: await liftState(rows),
+      residue: await page.$$eval(
+        rows,
+        (els) => els.filter((el) => el.hasAttribute('data-reorder') || el.style.transform !== '').length,
+      ),
+      cursor: await grabbing(),
+    }),
+    clear,
+    2000,
+  )
+  await page.mouse.up()
+  await page.waitForTimeout(MOTION + 300)
+  check('arrival: a row lifts and the page says grabbing', mid !== null && mid.grabbing, mid)
+  const { trace, ...end } = held
+  if (handOff) {
+    // The page stops once the box's foot is inside the window — one frame's step (18px at most) past it.
+    const overshoot = Math.round((end.innerHeight - end.boxBottom) * 10) / 10
+    check(
+      "arrival: held at the window's bottom edge, the hold ends with the box at its end and the page scrolled on, the box's foot inside the window",
+      end.still && end.boxTop >= end.boxMax - 1 && end.pageY > start.pageY && overshoot >= 0 && overshoot <= 18.5,
+      { ...end, pageScrolled: end.pageY - start.pageY, overshoot, pointerY: edge },
+    )
+    // The order, not just the end state: the page is the box's successor, never its partner.
+    check(
+      'arrival: the box reaches its end BEFORE the page moves — no 200ms sample from the hold on caught the page off its start while the box still had room',
+      end.boxEndSample !== null &&
+        end.pageMovedSample !== null &&
+        !end.pageMovedBeforeBoxEnd &&
+        end.boxEndSample <= end.pageMovedSample,
+      {
+        boxEndSample: end.boxEndSample,
+        boxEndMs: end.boxEndMs,
+        pageMovedSample: end.pageMovedSample,
+        pageMovedMs: end.pageMovedMs,
+        pageMovedBeforeBoxEnd: end.pageMovedBeforeBoxEnd,
+        trace,
+      },
+    )
+  } else if (boxScrolls) {
+    check(
+      "arrival (no hand-off): held at the window's bottom edge, the hold ends with the box at its end and the page where it stood",
+      end.still && end.boxTop >= end.boxMax - 1 && end.pageY === start.pageY,
+      { ...end, pointerY: edge, trace },
+    )
+  } else {
+    // The page is the list's scroller here and may carry it up to its range-end stop — but it must
+    // come to rest: a runaway page scroll would still leave the row clamped in the last slot.
+    check(
+      "arrival (the ledger fits under its cap): held at the window's bottom edge, the hold settles — the page, the list's scroller here, comes to rest",
+      end.still,
+      { ...end, pageScrolled: end.pageY - start.pageY, pointerY: edge, trace },
+    )
+  }
+  check(
+    'arrival: the row in hand stands in the LAST slot — every row below it made room, it rides at the travel to that slot, and the live region says so',
+    mid !== null &&
+      mid.displaced === last - from &&
+      Math.abs(mid.offset - travel) <= 2 &&
+      said.endsWith(`, position ${last + 1} of ${last + 1}.`),
+    { from, last, displaced: mid?.displaced ?? null, offset: mid?.offset ?? null, travel, said },
+  )
+  check(
+    'arrival: Escape cancels it — nothing lifted, no transform left, no grabbing cursor (polled, 2s at most)',
+    same(cancelled, clear),
+    cancelled,
+  )
+  check('arrival: …with no request, and the order unchanged', writesNow() === writes && same(await order(rows), before), {
+    writes: writesNow() - writes,
+  })
 }
 /** Inside a capped box: the LAST of `ids` (a range of single-row units, in order) dragged to the
  *  box's top edge — the box scrolls up under the held pointer and the row lands first (spec §10).
@@ -1528,7 +1742,9 @@ function comparePngs(a, b, zones, lines) {
  *  class itself stays on: it also carries the grip column's width, and taking it off would move
  *  every column and compare nothing. Pinned (sticky) cells are judged apart: the collapsed model
  *  paints row lines on the table, UNDER a pinned cell's opaque background; the separate model has
- *  each cell draw its own, so a difference there is expected and is a person's call (Task 7). */
+ *  each cell draw its own, so a difference there is expected and is a person's call (Task 7).
+ *  The shots are the part of `clipOf` in the window — a capped box's view, never the rows it hides —
+ *  less a TableScroll box's "more below" fade, which dims the rows under it on purpose. */
 async function restingLook(table, clipOf, name) {
   await clearToasts()
   await page.mouse.move(2, 2) // off every row: no hover state in either shot
@@ -1539,11 +1755,22 @@ async function restingLook(table, clipOf, name) {
   const geo = await page.evaluate(
     ([t, c]) => {
       const el = document.querySelector(t)
-      const r = document.querySelector(c).getBoundingClientRect()
+      const box = document.querySelector(c)
+      const r = box.getBoundingClientRect()
+      // A capped TableScroll box (2026-09-24 table-scroll spec §2.2) lays its "more below" fade — its
+      // sticky ::after, --table-fade-h tall — over the foot of its view while rows hide below: the
+      // rows under it are dimmed on purpose, in both models alike, and their hairlines with them. So
+      // the look stops at the fade's top, where the table is drawn at full strength.
+      const after = getComputedStyle(box, '::after')
+      const fadeH =
+        box.matches('.table-scroll') && after.display !== 'none' && parseFloat(after.opacity) > 0
+          ? parseFloat(after.height) || 0
+          : 0
+      const fadeTop = r.top + box.clientTop + box.clientHeight - fadeH
       const x = Math.max(0, Math.floor(r.left))
       const y = Math.max(0, Math.floor(r.top))
       const right = Math.min(window.innerWidth, Math.ceil(r.right))
-      const bottom = Math.min(window.innerHeight, Math.ceil(r.bottom))
+      const bottom = Math.min(window.innerHeight, Math.ceil(r.bottom), fadeH > 0 ? Math.floor(fadeTop) : Infinity)
       const pinned = [...el.querySelectorAll('th, td')]
         .filter((cell) => getComputedStyle(cell).position === 'sticky')
         .map((cell) => {
@@ -1552,7 +1779,14 @@ async function restingLook(table, clipOf, name) {
         })
       // Every row boundary: the pixel row just above the row's rounded bottom edge, where the
       // separate model draws the row's own hairline (the collapsed one is at most a pixel lower).
+      // Not a row whose cells are ALL pinned — a sticky header's: its line is drawn inside those
+      // cells and judged with them (the JUDGE note). Where the header's bottom sits past a half
+      // pixel (the ledger box's, at y=280.7), its boundary's five-row window reaches one row past
+      // their mask — the first body row's padding, no line in either model — and the boundary read
+      // as missing though the header's hairline was drawn, alike in both (measured, table-scroll
+      // Task 10).
       const lines = [...el.querySelectorAll('tr')]
+        .filter((tr) => ![...tr.children].every((cell) => getComputedStyle(cell).position === 'sticky'))
         .map((tr) => Math.round(tr.getBoundingClientRect().bottom) - y - 1)
         .filter((line) => line >= 0 && line < bottom - y)
       // One hairline per boundary by construction: no cell draws a top border (spec §2.5 — each
@@ -1560,7 +1794,14 @@ async function restingLook(table, clipOf, name) {
       const topBorders = [...el.querySelectorAll('th, td')].filter(
         (cell) => parseFloat(getComputedStyle(cell).borderTopWidth) > 0,
       ).length
-      return { clip: { x, y, width: right - x, height: bottom - y }, pinned, lines, topBorders, model: getComputedStyle(el).borderCollapse }
+      return {
+        clip: { x, y, width: right - x, height: bottom - y },
+        pinned,
+        lines,
+        topBorders,
+        model: getComputedStyle(el).borderCollapse,
+        fade: fadeH > 0 ? { height: fadeH, top: Math.round(fadeTop * 10) / 10 } : null,
+      }
     },
     [table, clipOf],
   )
@@ -1586,7 +1827,7 @@ async function restingLook(table, clipOf, name) {
       diff.boundaries > 0 &&
       diff.lineMismatchCount === 0 &&
       diff.outside <= budget,
-    { model: geo.model, clip: geo.clip, topBorders: geo.topBorders, budget, ...stats },
+    { model: geo.model, clip: geo.clip, fadeExcluded: geo.fade, topBorders: geo.topBorders, budget, ...stats },
   )
   note('JUDGE (plan Task 7): pixels that differ INSIDE the pinned (sticky) cells', {
     inside: diff.inside,
@@ -2026,16 +2267,20 @@ async function portfolioWalk() {
   check('the grip column comes first', same(rest.gripHead, ['reorder-grip-cell', 'true']), rest.gripHead)
   check('the hint says the list is the replay order (spec §8.1)', rest.hint.includes(LEDGER_HINT), rest.hint)
   check('the rows are the server order', same(await order(TXN_ROWS), L0), await order(TXN_ROWS))
-  await standAt(`${LEDGER} thead`, 0.2)
-  await restingLook(LEDGER, LEDGER, 'ledger-rest')
+  // The ledger scrolls inside its capped box (table-scroll spec §2.6), as the Settings tables do in
+  // theirs: the look is the box's view at its top — the rows it hides below are no part of it.
+  await boxTop(LEDGER_BOX)
+  await restingLook(LEDGER, LEDGER_BOX, 'ledger-rest')
 
+  // Every ledger row below is placed with boxTo, never standAt: a window scroll cannot bring up a
+  // row the box hides, and the auto-scroll zones a drag must stay clear of are the box's own.
   step('ledger-drag')
   const movedFirst = size.width === 1280 ? L0[0] : L0[1]
   let bOrder
   if (size.width === 1280) {
     bOrder = await longDrag(TXN_ROWS, L0[0])
   } else {
-    await standAt(rowSel(TXN_ROWS, L0[1]))
+    await boxTo(LEDGER_BOX, rowSel(TXN_ROWS, L0[1]), 80)
     await page.waitForTimeout(250)
     bOrder = await mouseDrag({ rows: TXN_ROWS, id: L0[1], k: 3, shot: 'ledger-mid-drag' })
   }
@@ -2049,7 +2294,7 @@ async function portfolioWalk() {
   check('put back through the API', same(await order(TXN_ROWS), L0), await order(TXN_ROWS))
 
   step('ledger-undo')
-  await standAt(rowSel(TXN_ROWS, L0[1]))
+  await boxTo(LEDGER_BOX, rowSel(TXN_ROWS, L0[1]), 80)
   await page.waitForTimeout(250)
   await mouseDrag({ rows: TXN_ROWS, id: L0[1], k: 3 })
   await toastText(/^Moved the /)
@@ -2061,7 +2306,7 @@ async function portfolioWalk() {
   check('…and the ledger shows it', same(await waitFor(() => order(TXN_ROWS), L0), L0), await order(TXN_ROWS))
 
   step('ledger-keyboard')
-  await standAt(rowSel(TXN_ROWS, L0[0]))
+  await boxTo(LEDGER_BOX, rowSel(TXN_ROWS, L0[0]), 80)
   const dOrder = await keyboardMove({ rows: TXN_ROWS, id: L0[0], keys: ['ArrowDown', 'ArrowDown'] })
   await toastSays('the toast names the trade', /^Moved the /, quiet(L0[0]))
   await waitIdle(LEDGER_PANEL)
@@ -2087,7 +2332,7 @@ async function portfolioWalk() {
       const scoped = await read.transactions(person)
       await visit(`/portfolio?section=manage&owner=${person}`, TXN_ROWS)
       check('the scope lists exactly its own rows', same(await order(TXN_ROWS), scoped), await order(TXN_ROWS))
-      await standAt(rowSel(TXN_ROWS, scoped[0]))
+      await boxTo(LEDGER_BOX, rowSel(TXN_ROWS, scoped[0]), 80)
       await page.waitForTimeout(250)
       const put = page.waitForRequest(
         (r) => r.method() === 'PUT' && r.url().includes('/portfolio/transactions/order'),
@@ -2142,7 +2387,11 @@ async function portfolioWalk() {
         same((await order(TXN_ROWS)).slice(-2), [String(buy.id), String(sell.id)]),
         (await order(TXN_ROWS)).slice(-3),
       )
-      await standAt(rowSel(TXN_ROWS, sell.id))
+      // The sell lands LAST, ~1,800px down a box that arrives at its top: brought into the box's view
+      // (a window scroll alone left its grip below the window). The box stops at its end, the sell at
+      // its foot and the foot inside the window — where the bottom zone has nothing left to scroll —
+      // and the drag heads up, away from it.
+      await boxTo(LEDGER_BOX, rowSel(TXN_ROWS, sell.id), 120)
       await page.waitForTimeout(250)
       await mouseDrag({ rows: TXN_ROWS, id: sell.id, k: -1, shot: 'ledger-figures-mid-drag' })
       // Buy 10 @ 100 then sell 4 @ 150 realizes $200; the sell replayed first finds no shares
@@ -2169,9 +2418,15 @@ async function portfolioWalk() {
   }
 
   step('ledger-reduced-motion')
-  await standAt(rowSel(TXN_ROWS, L0[2]))
+  await boxTo(LEDGER_BOX, rowSel(TXN_ROWS, L0[2]), 80)
   await page.waitForTimeout(250)
   await reducedMotion({ rows: TXN_ROWS, id: L0[2], k: 2 })
+
+  // Last, on a fresh arrival (page and box at their tops): the capped box's last slot is reachable
+  // from the window's foot (table-scroll spec §2.6). Run last so a throw here costs this step alone.
+  step('ledger-arrival')
+  await visit(HOUSEHOLD_LEDGER, TXN_ROWS)
+  await arrivalDrag(TXN_ROWS)
 }
 
 // ── Overview › Customize (lane R4) ───────────────────────────────────────────────────────────

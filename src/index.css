@@ -175,9 +175,34 @@ button {
    for weight: :is() counts its most specific argument, so this is (0,3,0) and moves the
    components' own rings too — `.button:focus-visible` (0,2,0), and portfolio.css's bare
    `.row-actions button:focus-visible` (0,2,1), which loads after this sheet and reaches the
-   Settings tables' Edit buttons. */
-:is(.attention-strip, .settings-scroll, .categories-scroll) :is(a, button, .button):focus-visible {
+   Settings tables' Edit buttons. Every capped table box (TableScroll, 2026-09-24) clips the same
+   way, so it is listed too. */
+:is(.attention-strip, .settings-scroll, .categories-scroll, .table-scroll) :is(a, button, .button):focus-visible {
   outline-offset: -2px;
+}
+
+/* Paper has no scroller (2026-09-24 table-scroll spec §2.5): every capped table box prints whole —
+   TableScroll's and the four older caps, which until now printed only their visible slice. Here,
+   not in tableScroll.css: route chunks load their sheets lazily (Settings and Comp never load that
+   sheet), and a page's own cap sheet can load after it at the same specificity. `:root` lifts the
+   rule to (0,2,0), so it wins over every (0,1,0) cap whatever order the sheets arrive in.
+   Released, a box no longer scrolls, so its sticky cells pin to the PAGE instead — a totals row
+   printed over the next table's rows, pinned action cells over a data column (Task 3 review, an Edge
+   PDF) — so they print static; the browser repeats a table's header and totals rows on every
+   printed page by itself. The edge mask goes too: a box that printed with a sideways token kept its
+   fade on paper. Both are !important, print only: the pinned action header,
+   `.port-table:has(td.row-actions) th:last-child`, is (0,3,2), and panels.css's two-token mask rule
+   is (0,4,0). */
+@media print {
+  :root :is(.table-scroll, .settings-scroll, .categories-scroll, .vest-scroll, .chart-table-scroll) {
+    max-height: none;
+    overflow: visible;
+    mask-image: none !important;
+  }
+
+  :root :is(.table-scroll, .settings-scroll, .categories-scroll, .vest-scroll, .chart-table-scroll) :is(th, td) {
+    position: static !important;
+  }
 }
 
 /* One switch for the whole grammar. Rules gated by `no-preference` never see these values;

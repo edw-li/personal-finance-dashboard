@@ -145,7 +145,8 @@ function box(top: number, height: number, width = 300): DOMRect {
 /** A scroller box at client `top`, `height` tall, holding a `header`-px sticky header (0: none)
  *  and the rows in CURRENT DOM order, `rowHeight` each, below it. Unlike layoutRows, the rows MOVE
  *  with scrollTop — clamped to the content, as a browser clamps it — so a re-measure after a scroll
- *  sees where they went. Returns the scroller. */
+ *  sees where they went. `top` is where the box stands with the page unscrolled: the box and all it
+ *  holds rise with window.scrollY, as client rects do (pageScroll moves it). Returns the scroller. */
 function scrollBox({
   top,
   height,
@@ -172,14 +173,41 @@ function scrollBox({
   })
   Object.defineProperty(scroller, 'scrollHeight', { value: content, configurable: true })
   Object.defineProperty(scroller, 'clientHeight', { value: height, configurable: true })
-  scroller.getBoundingClientRect = () => box(top, height)
+  const at = () => top - window.scrollY // the box's client top now
+  scroller.getBoundingClientRect = () => box(at(), height)
   scroller.querySelectorAll('th').forEach((th) => {
-    th.getBoundingClientRect = () => box(top, header) // stuck at the box's top
+    th.getBoundingClientRect = () => box(at(), header) // stuck at the box's top
   })
   rowsInOrder.forEach((element, index) => {
-    element.getBoundingClientRect = () => box(top + header + index * rowHeight - offset, rowHeight)
+    element.getBoundingClientRect = () => box(at() + header + index * rowHeight - offset, rowHeight)
   })
   return scroller
+}
+
+/** The page as a browser scrolls it, `max` px at most, from `start`: scrollBy moves window.scrollY —
+ *  which scrollBox's rects follow — and fires the scroll event a real page scroll fires. */
+function pageScroll(max: number, start = 0) {
+  let y = start
+  vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => y)
+  const scrollBy = vi.fn((_x: number, dy: number) => {
+    const next = Math.min(max, Math.max(0, y + dy))
+    if (next === y) return
+    y = next
+    window.dispatchEvent(new Event('scroll'))
+  })
+  window.scrollBy = scrollBy as unknown as typeof window.scrollBy
+  return { scrollBy, y: () => y }
+}
+
+/** `count` rows r0, r1, … in a box that scrolls — a long ledger in its capped box. */
+function renderLongList(count: number, onCommit?: (next: string[], moved: string) => void): string[] {
+  const ids = Array.from({ length: count }, (_, index) => `r${index}`)
+  render(
+    <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+      <Stateful initial={flat(...ids)} onCommit={onCommit} />
+    </div>,
+  )
+  return ids
 }
 
 function row(id: string): HTMLElement {
@@ -772,6 +800,96 @@ describe('useReorder — pointer', () => {
       vi.advanceTimersByTime(500)
     })
     expect(scroller.scrollTop).toBe(held) // still held in the zone: the box stays put
+  })
+
+  it("a box at its own end that still hangs past the window scrolls the PAGE on — the last slots stay in reach (table-scroll Task 4 review)", () => {
+    const onCommit = vi.fn()
+    const ids = renderLongList(20, onCommit)
+    const page = pageScroll(400)
+    // A 420px box at 500 over 800px of rows (its end: 380), its foot 152px below jsdom's 768px
+    // window — the capped transactions ledger hung 147px below a 1280×800 window on arrival.
+    const scroller = scrollBox({ top: 500, height: 420 })
+    fireEvent.pointerDown(grip('r0'), { pointerId: 1, button: 0, clientY: 520 })
+    fireEvent.pointerMove(grip('r0'), { pointerId: 1, clientY: 526 })
+    fireEvent.pointerMove(grip('r0'), { pointerId: 1, clientY: 760 }) // held in the window's bottom zone
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+    expect(scroller.scrollTop).toBe(380) // the box first, to its end…
+    // …then the page, until the box's foot (920) is inside the window: 152, by at most one step more.
+    // Without it the rows past the window stayed out of the pointer's reach: position 17 of 20 at best.
+    expect(page.y()).toBeGreaterThanOrEqual(152)
+    expect(page.y()).toBeLessThan(152 + AUTO_SCROLL_MAX)
+    expect(live()).toBe('r0, position 20 of 20.') // each page scroll re-tracked the row in hand
+    const scrolls = page.scrollBy.mock.calls.length
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(page.scrollBy.mock.calls.length).toBe(scrolls) // still held in the zone: the page stays put
+    fireEvent.pointerUp(grip('r0'), { pointerId: 1, clientY: 760 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).toHaveBeenCalledWith([...ids.slice(1), 'r0'], 'r0')
+  })
+
+  it('a box with room left takes the whole scroll — the page stays put under it', () => {
+    renderLongList(60)
+    const page = pageScroll(400)
+    // The same hanging box over 2400px of rows: 1980 to its end.
+    const scroller = scrollBox({ top: 500, height: 420 })
+    fireEvent.pointerDown(grip('r0'), { pointerId: 1, button: 0, clientY: 520 })
+    fireEvent.pointerMove(grip('r0'), { pointerId: 1, clientY: 526 })
+    fireEvent.pointerMove(grip('r0'), { pointerId: 1, clientY: 760 })
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(scroller.scrollTop).toBeGreaterThan(0)
+    expect(scroller.scrollTop).toBeLessThan(1980)
+    expect(page.scrollBy).not.toHaveBeenCalled()
+  })
+
+  it('a box at its end that the window shows whole scrolls nothing — its last slot is already in reach', () => {
+    renderLongList(20)
+    const page = pageScroll(400)
+    // A 420px box at 200, its foot at 620 inside the window, scrolled to its end: r10 at 220..260.
+    const scroller = scrollBox({ top: 200, height: 420, scrollTop: 380 })
+    fireEvent.pointerDown(grip('r10'), { pointerId: 1, button: 0, clientY: 240 })
+    fireEvent.pointerMove(grip('r10'), { pointerId: 1, clientY: 246 })
+    fireEvent.pointerMove(grip('r10'), { pointerId: 1, clientY: 610 }) // held in the box's bottom zone
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(scroller.scrollTop).toBe(380)
+    expect(page.scrollBy).not.toHaveBeenCalled()
+    expect(live()).toBe('r10, position 20 of 20.')
+  })
+
+  it("the upward twin: a box at its top whose head the page has scrolled away brings it back — only as far as the window's top", () => {
+    const onCommit = vi.fn()
+    const ids = renderLongList(20, onCommit)
+    // The page scrolled 300: the box, laid out at 250, stands at −50..370, its first rows above the
+    // window. r5 at 150..190.
+    const page = pageScroll(400, 300)
+    const scroller = scrollBox({ top: 250, height: 420 })
+    fireEvent.pointerDown(grip('r5'), { pointerId: 1, button: 0, clientY: 170 })
+    fireEvent.pointerMove(grip('r5'), { pointerId: 1, clientY: 164 })
+    fireEvent.pointerMove(grip('r5'), { pointerId: 1, clientY: 10 }) // held in the window's top zone
+    expect(live()).toBe('r5, position 2 of 20.') // r0 stands above the window, out of reach
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+    expect(scroller.scrollTop).toBe(0)
+    // The page rose until the box's top (250 − scrollY) was inside the window: 250, at most one
+    // step past it — never further, so the rows above the list stay where the reader left them.
+    expect(page.y()).toBeLessThanOrEqual(250)
+    expect(page.y()).toBeGreaterThan(250 - AUTO_SCROLL_MAX)
+    expect(live()).toBe('r5, position 1 of 20.')
+    fireEvent.pointerUp(grip('r5'), { pointerId: 1, clientY: 10 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).toHaveBeenCalledWith(['r5', ...ids.filter((id) => id !== 'r5')], 'r5')
   })
 
   it('a throwing onCommit still leaves every row clean, and its error is rethrown after', () => {

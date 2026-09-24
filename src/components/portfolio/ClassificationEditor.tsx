@@ -7,6 +7,7 @@ import { undoBatch } from '../../api/lifecycle'
 import { formatDate } from '../../utils/format'
 import Segmented from '../shell/Segmented'
 import { useToast } from '../ToastProvider'
+import TableScroll from '../TableScroll'
 import {
   CLASSIFICATION_FILTERS, coverageSentence, defaultClassificationFilter, emptyFilterSentence,
   filterClassificationRows, isUnclassified, isUnreviewed,
@@ -43,6 +44,9 @@ export default function ClassificationEditor({ classifications, onChanged, ref }
   const [search, setSearch] = useState('')
   const [focusTick, setFocusTick] = useState(0)
   const rootRef = useRef<HTMLElement>(null)
+  // The capped box — TableScroll's ref-as-prop (2026-09-24 table-scroll spec §2.1). Null while the
+  // list is empty: the box renders only with rows.
+  const boxRef = useRef<HTMLDivElement>(null)
   useImperativeHandle(ref, () => ({
     focusUnclassified() {
       setChosen('unclassified')
@@ -54,12 +58,20 @@ export default function ClassificationEditor({ classifications, onChanged, ref }
     },
   }), [])
   // The focus has to wait for the commit that renders the Unclassified rows — an effect keyed on
-  // the tick IS that commit. DOM focus only; no state is written here (react-hooks v7).
+  // the tick IS that commit. DOM focus and a scroll only; no state is written here (react-hooks v7).
+  // The filtered list's first row is the capped box's first row (2026-09-24 table-scroll spec §3.5):
+  // a box the reader had scrolled down would hold it out of view, and preventScroll moves neither
+  // the box nor the page — so the box goes back to its top first, and to its left edge: the select
+  // is the second column, which a box scrolled across to the notes hides as well (Task 5 review).
+  // Two assignments rather than scrollTo, which jsdom's elements lack.
   useEffect(() => {
     if (focusTick === 0) return
-    rootRef.current
-      ?.querySelector<HTMLSelectElement>('tbody select[data-field="asset_class"]')
-      ?.focus({ preventScroll: true })
+    const box = boxRef.current
+    if (box) {
+      box.scrollTop = 0
+      box.scrollLeft = 0
+    }
+    rootRef.current?.querySelector<HTMLSelectElement>('tbody select[data-field="asset_class"]')?.focus({ preventScroll: true })
   }, [focusTick])
   const rows = filterClassificationRows(classifications, filter, search)
   const counts: Record<ClassificationFilter, number> = {
@@ -68,6 +80,18 @@ export default function ClassificationEditor({ classifications, onChanged, ref }
     all: classifications.length,
   }
   const showAll = () => { setChosen('all'); setSearch('') }
+  // A new chip or search is a new list, read from its first row (Task 5 review). The box keeps its
+  // scroll across the change — its rows re-render in place — so a reader who had scrolled the All
+  // list would land mid-way down the new one, wherever the browser's scroll anchoring took it. Reset
+  // BEFORE the state update: at offset 0 anchoring has nothing to chase. (showAll needs none: its
+  // button renders only while the list is empty, when there is no box.)
+  const fromFirstRow = () => { if (boxRef.current) boxRef.current.scrollTop = 0 }
+  // Segmented reports every click, the chip already on included; that one changes no rows, so it
+  // keeps the reader's place.
+  const choose = (next: ClassificationFilter) => {
+    if (next !== filter) fromFirstRow()
+    setChosen(next)
+  }
   return <section ref={rootRef} id={CLASSIFICATION_CARD_ID} className="card allocation-classifications" aria-label="Security classifications">
     <h2 className="eyebrow">Security classifications</h2>
     <p className="allocation-coverage-sentence">{coverageSentence(classifications)}</p>
@@ -75,22 +99,22 @@ export default function ClassificationEditor({ classifications, onChanged, ref }
     <div className="classification-toolbar">
       <Segmented variant="chips" size="sm" ariaLabel="Classification filter"
         options={CLASSIFICATION_FILTERS.map((option) => ({ ...option, badge: counts[option.value] }))}
-        value={filter} onChange={setChosen} />
+        value={filter} onChange={choose} />
       <input className="field-input classification-search" type="search" aria-label="Find a security" placeholder="Find a security"
-        value={search} onChange={(event) => setSearch(event.target.value)} />
+        value={search} onChange={(event) => { fromFirstRow(); setSearch(event.target.value) }} />
     </div>
     {rows.length === 0
       ? <p className="empty-note">
           {emptyFilterSentence(filter, search)}
           {(filter !== 'all' || search.trim() !== '') && <>{' '}<button type="button" className="button" onClick={showAll}>Show all securities</button></>}
         </p>
-      : <div className="holdings-scroll"><table className="port-table classification-table">
+      : <TableScroll className="holdings-scroll" label="Security classifications table" ref={boxRef}><table className="port-table classification-table">
           <thead><tr>
             <th scope="col">Security</th><th scope="col">Asset class</th><th scope="col">Geography</th>
             <th scope="col">Industry</th><th scope="col">Note</th><th scope="col">Source</th>
           </tr></thead>
           <tbody>{rows.map((row) => <ClassificationRow key={row.security_id} row={row} onChanged={onChanged} />)}</tbody>
-        </table></div>}
+        </table></TableScroll>}
   </section>
 }
 

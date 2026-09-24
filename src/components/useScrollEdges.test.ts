@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react'
 import { createElement, useRef } from 'react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useScrollEdges } from './useScrollEdges'
 
 afterEach(cleanup)
@@ -74,5 +74,102 @@ describe('useScrollEdges', () => {
     // Without `active` in the effect's deps the effect never re-ran after its null-ref return, so
     // no listener existed and the table below an empty state stayed unmasked for its whole life.
     expect(el.getAttribute('data-scroll-more')).toBe('right')
+  })
+})
+
+// Vertical twins (2026-09-24 table-scroll spec §2.3). A capped table box scrolls both ways, and
+// `axes: 'xy'` names its hidden top and bottom edges too; every existing caller stays on 'x'.
+function BothWays({ axes }: { axes?: 'x' | 'xy' }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useScrollEdges(ref, true, axes)
+  // eslint-disable-next-line react-hooks/refs
+  return createElement('div', { ref, 'data-testid': 'scroller' }, createElement('table'))
+}
+
+function tall(el: HTMLElement, scrollHeight: number, clientHeight: number): void {
+  Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true })
+  Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true })
+}
+
+describe('useScrollEdges, vertical', () => {
+  it("names the hidden top and bottom after the sideways edges, with the right edge's 1px tolerance", () => {
+    const { getByTestId } = render(createElement(BothWays, { axes: 'xy' }))
+    const el = getByTestId('scroller')
+    tall(el, 1000, 400)
+    el.dispatchEvent(new Event('scroll'))
+    expect(el.getAttribute('data-scroll-more')).toBe('bottom')
+    el.scrollTop = 300
+    el.dispatchEvent(new Event('scroll'))
+    expect(el.getAttribute('data-scroll-more')).toBe('top bottom')
+    // 599.5 + 400 is within a pixel of 1000: a box whose content rounds fractionally is at its foot.
+    // …and 598.5 + 400 is a full 1.5px short of it: still "more below" — the tolerance is one pixel, not more.
+    el.scrollTop = 598.5
+    el.dispatchEvent(new Event('scroll'))
+    expect(el.getAttribute('data-scroll-more')).toBe('top bottom')
+    el.scrollTop = 599.5
+    el.dispatchEvent(new Event('scroll'))
+    expect(el.getAttribute('data-scroll-more')).toBe('top')
+    box(el, 600, 300)
+    el.scrollLeft = 100
+    el.dispatchEvent(new Event('scroll'))
+    expect(el.getAttribute('data-scroll-more')).toBe('left right top')
+  })
+
+  it('stays sideways-only by default, so every existing scroller keeps its exact attribute', () => {
+    const { getByTestId } = render(createElement(BothWays, {}))
+    const el = getByTestId('scroller')
+    tall(el, 1000, 400)
+    box(el, 600, 300)
+    el.dispatchEvent(new Event('scroll'))
+    expect(el.getAttribute('data-scroll-more')).toBe('right')
+  })
+
+  it("watches the box's table in 'xy', so rows landing refresh the edges without a scroll", () => {
+    const observed: Element[] = []
+    let fire: () => void = () => {}
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          fire = callback
+        }
+        observe(target: Element) {
+          observed.push(target)
+        }
+        disconnect() {}
+      },
+    )
+    try {
+      const { getByTestId } = render(createElement(BothWays, { axes: 'xy' }))
+      const el = getByTestId('scroller')
+      expect(observed).toHaveLength(2)
+      expect(observed[0]).toBe(el)
+      expect(observed[1]).toBe(el.querySelector('table'))
+      tall(el, 1000, 400)
+      fire()
+      expect(el.getAttribute('data-scroll-more')).toBe('bottom')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("observes only the box in the default 'x' — the table is watched in 'xy' alone", () => {
+    const observed: Element[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe(target: Element) {
+          observed.push(target)
+        }
+        disconnect() {}
+      },
+    )
+    try {
+      const { getByTestId } = render(createElement(BothWays, {}))
+      expect(observed).toHaveLength(1)
+      expect(observed[0]).toBe(getByTestId('scroller'))
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

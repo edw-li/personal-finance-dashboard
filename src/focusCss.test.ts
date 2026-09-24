@@ -59,7 +59,7 @@ describe('the ring inside a clipping scroll container (index.css)', () => {
 
   it('names every container the walk found cutting the ring', () => {
     expect(inset).toHaveLength(1)
-    for (const container of ['.attention-strip', '.settings-scroll', '.categories-scroll']) {
+    for (const container of ['.attention-strip', '.settings-scroll', '.categories-scroll', '.table-scroll']) {
       expect(inset[0].selector, container).toContain(container)
     }
   })
