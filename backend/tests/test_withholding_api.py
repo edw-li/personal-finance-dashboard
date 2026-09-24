@@ -1649,6 +1649,73 @@ async def test_the_rsu_apply_target_is_a_put_row_the_inputs_endpoint_takes_as_is
     assert (rsu["typed"], rsu["apply"]) == (apply["value"], None)
 
 
+async def test_a_mid_year_raise_blends_the_401k_share_across_both_profiles(
+    auth_client, db, definitions, frozen_today
+):
+    """§W3's mid-year raise (code-quality M4). Frozen at Jul 1: the 11 grid checks before it
+    are the Jan 2025 profile's (10,000 gross, 10 % traditional), the 13 from Jul 2 the raise's
+    (12,000 gross, 5 % traditional + 5 % Roth). 18,800 traditional + 7,800 Roth over a 24,500
+    limit: the traditional share of the CAP is the year's blend, 18,800 / 26,600 — not today's
+    profile's 1/2 (12,250) and not the first one's all-traditional 24,500."""
+    await seed_tax_year(db, YEAR, "600000.0000")
+    await seed_profile(db, trad_401k_pct=Decimal("0.100000000"))
+    await seed_profile(
+        db,
+        effective_date=date(2026, 7, 1),
+        annual_salary=Decimal("288000.00"),
+        trad_401k_pct=Decimal("0.050000000"),
+        roth_401k_pct=Decimal("0.050000000"),
+    )
+    db.add(ContributionLimit(year=YEAR, key="limit_401k_elective", value=Decimal("24500")))
+    await db.commit()
+    rows = rows_of(await get_withholding(auth_client))
+    # 11 x 10,000 + 13 x 12,000: each check at the profile in force on its date.
+    assert rows["salary"]["projected"] == "266000.00"
+    salary_facts = rows["salary"]["facts"]
+    assert (salary_facts["projected_checks"], salary_facts["projected_from"]) == (24, "2026-01-16")
+    # 24,500 x 18,800 / 26,600 = 17,315.789… — the blended traditional share of the cap.
+    assert (rows["trad_401k"]["projected"], rows["trad_401k"]["facts"]["capped_at"]) == (
+        "17315.79",
+        "24500.00",
+    )
+
+
+async def test_a_future_start_judges_the_hsa_cap_on_the_first_profile_to_start(
+    auth_client, db, definitions, frozen_today
+):
+    """§W3's future-start profile (code-quality M4). Frozen at Jul 1, nothing is in force yet:
+    `_in_force_today` falls back to the EARLIEST profile — the Sep 1 family one — for the HSA's
+    coverage and deposit, not the later self-only one. 3 checks at the Sep 1 profile + 5 at the
+    Nov 1 one, 1,000 each = 8,000, over the family room of 8,750 less its 1,000 deposit: capped
+    at 7,750 (the self-only room would have been 4,400 − 2,000 = 2,400)."""
+    await seed_tax_year(db, YEAR, "600000.0000")
+    await seed_profile(
+        db,
+        effective_date=date(2026, 9, 1),
+        hsa_per_check=Decimal("1000.00"),
+        hsa_coverage="family",
+        hsa_employer_annual=Decimal("1000.00"),
+    )
+    await seed_profile(
+        db,
+        effective_date=date(2026, 11, 1),
+        hsa_per_check=Decimal("1000.00"),
+        hsa_coverage="self",
+        hsa_employer_annual=Decimal("2000.00"),
+    )
+    db.add_all(
+        [
+            ContributionLimit(year=YEAR, key="limit_hsa_self", value=Decimal("4400")),
+            ContributionLimit(year=YEAR, key="limit_hsa_family", value=Decimal("8750")),
+        ]
+    )
+    await db.commit()
+    hsa = rows_of(await get_withholding(auth_client))["hsa"]
+    assert (hsa["projected"], hsa["facts"]["capped_at"]) == ("7750.00", "7750.00")
+    # The grid counts from the first check after the start (§W1): Sep 16 onward, 8 checks.
+    assert (hsa["facts"]["projected_checks"], hsa["facts"]["projected_from"]) == (8, "2026-09-16")
+
+
 async def test_two_earners_each_get_their_own_rows_and_the_partners_effect_is_a_save(
     auth_client, db, married_world, frozen_today
 ):
