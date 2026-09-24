@@ -38,6 +38,9 @@ from tests.test_withholding_api import (
     YEAR,
     seed_employer,
     seed_grants,
+    seed_household,
+    seed_married_year,
+    seed_partner_profile,
     seed_profile,
     seed_tax_year,
     url,
@@ -265,6 +268,46 @@ async def test_the_fingerprint_covers_exactly_the_tables_the_get_reads(
     db.expunge_all()
     with tables_read(engine) as seen:
         await taxes_api.withholding_estimate(db, YEAR, PINNED_TODAY, reconcile=True)
+    assert seen == set(read_cache.WITHHOLDING_TABLES)
+
+
+async def test_the_fingerprint_covers_the_joint_return_and_safe_harbor_reads_too(
+    db, engine, frozen_today
+):
+    """The same capture over the heavier paths (code-quality M5): a joint return with a
+    SIMULATED partner (their own profile, their own column) and a prior year on file, so the
+    safe-harbor reads of last year's return run too. Asserted to have happened, then held to
+    the same table list — a prior year or a partner must never read a table the fingerprint
+    misses."""
+    await seed_tax_definitions(db)
+    await db.commit()
+    me_id, partner_id = await seed_household(db)
+    await seed_married_year(db, YEAR, me_id, partner_id)
+    await seed_tax_year(db, YEAR - 1, "400000.0000")
+    await seed_profile(db)
+    await seed_partner_profile(db, partner_id)
+    await seed_employer(db)
+    await seed_grants(db)
+    db.add(ContributionLimit(year=YEAR, key="limit_401k_elective", value=Decimal("24500")))
+    db.add(
+        EsppLot(
+            purchase_date=date(2025, 8, 29),
+            qualifying_date=date(2027, 9, 1),
+            shares=Decimal("10.0000"),
+            subscription_price=Decimal("100.00000"),
+            purchase_fmv=Decimal("120.00000"),
+            purchase_price=Decimal("85.00000"),
+            sold_date=date(2026, 5, 1),
+            sold_price=Decimal("150.00000"),
+        )
+    )
+    await db.commit()
+    db.expunge_all()
+    with tables_read(engine) as seen:
+        out = await taxes_api.withholding_estimate(db, YEAR, PINNED_TODAY, reconcile=True)
+    assert out.partner_source == "simulated"
+    assert out.safe_harbor is not None and out.safe_harbor.prior_year == YEAR - 1
+    assert {row.person_id for row in out.reconciliation.rows} == {me_id, partner_id}
     assert seen == set(read_cache.WITHHOLDING_TABLES)
 
 
