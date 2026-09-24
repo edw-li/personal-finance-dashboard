@@ -11,6 +11,7 @@ import {
   inProgressSentence,
   metaOf,
   monthNameOf,
+  monthNotBegun,
   monthPhase,
   noBalancesBlocker,
   notBegunSentence,
@@ -48,6 +49,11 @@ describe('monthPhase (§M3)', () => {
     expect(monthPhase('2026-11-01')).toBe('next')
     expect(monthPhase('2026-12-01')).toBe('beyond')
     expect(monthPhase('2027-01-01', '2026-12-01')).toBe('next')
+  })
+
+  it('a month has not begun when it is next month or later', () => {
+    expect([monthNotBegun('2026-09-01'), monthNotBegun('2026-10-01')]).toEqual([false, false])
+    expect([monthNotBegun('2026-11-01'), monthNotBegun('2027-03-01')]).toEqual([true, true])
   })
 })
 

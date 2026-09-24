@@ -41,6 +41,12 @@ export function monthPhase(month: string, current: string = currentMonthIso()): 
   return month === addMonths(current, 1) ? 'next' : 'beyond'
 }
 
+/** Next month or later: its spending cannot be entered yet (spec §M3), through any door. */
+export function monthNotBegun(month: string, current: string = currentMonthIso()): boolean {
+  const phase = monthPhase(month, current)
+  return phase === 'next' || phase === 'beyond'
+}
+
 /** A month's snapshot as GET /net-worth/months/{m} describes it (spec §K2). */
 export interface BalancesMeta {
   exists: boolean

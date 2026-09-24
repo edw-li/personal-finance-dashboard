@@ -37,13 +37,20 @@ export interface BuiltMonthSave {
   sendSpending: boolean
 }
 
+/** The parts a Review save ("Save progress", "Save and close") sends: the DIRTY ones — an untouched
+ *  part is never re-sent, and pre-filled balances nobody touched are never recorded by it — and
+ *  never the spending of a month that has not begun (spec review G1). The one statement of the rule:
+ *  the builder, the Review's pre-save note and the receipt's "still unsaved" lines all read it. */
+export function reviewSends(input: Pick<MonthSaveInput, 'dirty' | 'notBegun'>): { balances: boolean; spending: boolean } {
+  return { balances: input.dirty.balances, spending: input.dirty.flows && !input.notBegun }
+}
+
 export function buildMonthSave(input: MonthSaveInput): BuiltMonthSave {
   const whole = input.kind === 'review' || input.kind === 'close'
-  // A part's own save sends that part; the Review sends the DIRTY parts — an untouched part is never
-  // re-sent, and pre-filled balances nobody touched are never recorded by it. Spending of a month
-  // that has not begun never leaves (spec review G1).
-  const sendBalances = input.kind === 'balances' || (whole && input.dirty.balances)
-  const sendSpending = input.kind === 'spending' || (whole && input.dirty.flows && !input.notBegun)
+  // A part's own save sends that part; the Review sends what reviewSends says.
+  const sends = reviewSends(input)
+  const sendBalances = input.kind === 'balances' || (whole && sends.balances)
+  const sendSpending = input.kind === 'spending' || (whole && sends.spending)
   const body: MonthSave = {
     expected_revision: input.revision,
     // A PUT stores the three ticks it carries (the one exception: a save that changes nothing on a

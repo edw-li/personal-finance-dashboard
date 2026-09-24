@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMonthSave, type MonthSaveInput, type SaveKind } from './monthSave'
+import { buildMonthSave, reviewSends, type MonthSaveInput, type SaveKind } from './monthSave'
 
 // The month-review PUT body the wizard sends (2026-09-23 spec §M1): each part's save carries its own
 // leg only, the Confirm carries none, the Review carries the dirty parts — and never recorded_on.
@@ -18,6 +18,14 @@ const input = (kind: SaveKind, overrides: Partial<MonthSaveInput> = {}): MonthSa
     recordZero: false,
   },
   ...overrides,
+})
+
+describe('reviewSends', () => {
+  it('names the parts a Review save sends: the dirty ones — never the spending of a month not begun', () => {
+    expect(reviewSends({ dirty: { balances: true, flows: true }, notBegun: false })).toEqual({ balances: true, spending: true })
+    expect(reviewSends({ dirty: { balances: false, flows: true }, notBegun: false })).toEqual({ balances: false, spending: true })
+    expect(reviewSends({ dirty: { balances: true, flows: true }, notBegun: true })).toEqual({ balances: true, spending: false })
+  })
 })
 
 describe('buildMonthSave', () => {

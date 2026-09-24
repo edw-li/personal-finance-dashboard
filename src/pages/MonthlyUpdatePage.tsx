@@ -54,6 +54,7 @@ import {
   inProgressSentence,
   metaOf,
   monthNameOf,
+  monthNotBegun,
   monthPhase,
   noBalancesBlocker,
   notBegunSentence,
@@ -63,7 +64,7 @@ import {
   unsavedPartNote,
   type BalancesMeta,
 } from '../components/monthly/monthlyCopy'
-import { buildMonthSave, type SaveKind } from '../components/monthly/monthSave'
+import { buildMonthSave, reviewSends, type SaveKind } from '../components/monthly/monthSave'
 import { balancesKey, committed, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
 import { restoreParts } from '../components/monthly/restore'
 import { monthStory, type NextSnapshot } from '../components/monthly/story'
@@ -376,7 +377,7 @@ function MonthlyUpdateWizard() {
   // month only; a month beyond it saves nothing; spending opens once its month has begun — and
   // until then no door leads to it: not its boxes, a paste, a restored draft or the Review.
   const phase = monthPhase(month)
-  const notBegun = phase === 'next' || phase === 'beyond'
+  const notBegun = monthNotBegun(month)
 
   const [accounts, setAccounts] = useState<AccountOut[]>([])
   const [categories, setCategories] = useState<CategoryOut[]>([])
@@ -734,7 +735,7 @@ function MonthlyUpdateWizard() {
           accountIds: visibleAccounts.map((a) => a.id),
           categoryIds: activeCategories.map((c) => c.id),
           derive: (typed, record) => deriveParents(derivationFor(byParent, typed), record),
-          notBegun: ['next', 'beyond'].includes(monthPhase(month)),
+          notBegun: monthNotBegun(month),
         })
         if (restored.drop.balances) removeDraft('balances', month)
         if (restored.drop.flows) removeDraft('flows', month)
@@ -958,6 +959,10 @@ function MonthlyUpdateWizard() {
     flowsBase.month === month &&
     (flowsKey({ amounts, netPay }) !== flowsKey(flowsBase.part) || recordZero !== flowsBase.part.recordZero)
 
+
+  // What a Review save would send now (monthSave.ts) — the pre-save note and the receipt's "still
+  // unsaved" lines say it in words.
+  const reviewSend = reviewSends({ dirty: { balances: balancesDirty, flows: flowsDirty }, notBegun })
 
   const confirmationInputs = {
     balances: JSON.stringify({ balances, notes, typedParents: sortedIds(typedParents) }),
@@ -1692,8 +1697,8 @@ function MonthlyUpdateWizard() {
             )}
             {/* Whatever is still unsaved once the save has landed — the other part, or typing done
                 while it ran — named with the step that saves it (review M2). */}
-            {balancesDirty && <p role="status">{unsavedPartNote('balances', month)}</p>}
-            {flowsDirty && !notBegun && <p role="status">{unsavedPartNote('flows', month)}</p>}
+            {reviewSend.balances && <p role="status">{unsavedPartNote('balances', month)}</p>}
+            {reviewSend.spending && <p role="status">{unsavedPartNote('flows', month)}</p>}
             {lastSave.nextDue !== null && (
               // The toast's "Next due" as a working link (spec §M2): the toast's one action is Undo.
               <p>
@@ -2317,7 +2322,7 @@ function MonthlyUpdateWizard() {
                 the parts that changed (spec §M1), and a user who expected the other part to be
                 written deserves to learn otherwise while they can still act on it. */}
             <p className="drill-hint" role="status">
-              {reviewSaveNote(month, { balances: balancesDirty, spending: flowsDirty && !notBegun, balancesExist: monthExisted })}
+              {reviewSaveNote(month, { ...reviewSend, balancesExist: monthExisted })}
             </p>
             <div className="wizard-footer">
               <button className="button" onClick={() => setStep('spending')}>
