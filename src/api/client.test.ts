@@ -12,6 +12,7 @@ import {
   setToken,
 } from './client'
 import { clearSnapshots, getSnapshot, setSnapshot } from './snapshotCache'
+import { getServerToday, resetServerTodayForTests } from '../utils/productToday'
 
 function mockFetchOk(body: unknown = {}) {
   const spy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body })
@@ -452,5 +453,38 @@ describe('the error grammar (motion spec §9)', () => {
     expect(describeLoadFailures([part('the lots', 'gone.', true), part('the model', 'gone.')])).toBe(
       "Couldn't load the lots and the model — gone. Showing earlier data for the lots.",
     )
+  })
+})
+
+describe('the server day rides every response (2026-09-23 spec §K1)', () => {
+  afterEach(() => resetServerTodayForTests())
+
+  const withDay = (status: number, body: unknown, day: string) =>
+    new Response(JSON.stringify(body), { status, headers: { 'X-Product-Today': day } })
+
+  it('a success names it', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(withDay(200, {}, '2026-10-03')))
+    await api('/anything')
+    expect(getServerToday()).toBe('2026-10-03')
+  })
+
+  it('an error names it too — read before the error is thrown', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(withDay(422, { detail: 'nope' }, '2026-10-04')))
+    await expect(api('/anything')).rejects.toBeInstanceOf(ApiError)
+    expect(getServerToday()).toBe('2026-10-04')
+  })
+
+  it('a 401 names it before the session ends', async () => {
+    // jsdom refuses real navigation, so the redirect is stubbed (the session tests' pattern).
+    vi.stubGlobal('location', { ...window.location, assign: vi.fn() })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(withDay(401, { detail: 'Not authenticated' }, '2026-10-05')))
+    await expect(api('/anything')).rejects.toMatchObject({ status: 401 })
+    expect(getServerToday()).toBe('2026-10-05')
+  })
+
+  it('an old stub with no headers names nothing', async () => {
+    mockFetchOk({})
+    await api('/anything')
+    expect(getServerToday()).toBeNull()
   })
 })

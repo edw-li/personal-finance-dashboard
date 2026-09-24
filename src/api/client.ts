@@ -1,8 +1,11 @@
 import { rememberReturnTo } from '../components/shell/returnTo'
+import { setServerToday } from '../utils/productToday'
 import { clearAssistantSession } from './assistantSession'
 import { clearSnapshots, clearSnapshotsWhere } from './snapshotCache'
 
 const TOKEN_KEY = 'finance_token'
+// The server's product day, on every /api response (2026-09-23 spec §K1; backend/app/main.py).
+const PRODUCT_TODAY_HEADER = 'X-Product-Today'
 
 // 15s: generous for a self-hosted API; without it a hung backend left token-bearing
 // users on a permanently blank page (Plan 1 forward note).
@@ -229,6 +232,13 @@ async function requestWithHeaders<T>(
     throw new ApiError('Network error — is the server reachable?', 0)
   }
 
+  // Older fetch stubs in this repo's tests build plain objects with no `headers`; a real
+  // Response always has one. (Named resHeaders because `headers` above is the REQUEST's.)
+  const resHeaders = res.headers ?? new Headers()
+  // One "today" (2026-09-23 spec §K1): every /api response names the server's product day —
+  // errors too, a 401 included — so it is read here, before anything else looks at the response.
+  setServerToday(resHeaders.get(PRODUCT_TODAY_HEADER))
+
   if (res.status === 401 && !path.startsWith('/auth/login')) {
     expireSession()
     throw new ApiError('Session expired', 401)
@@ -257,9 +267,6 @@ async function requestWithHeaders<T>(
   // not by accident: the mount-time identity check would otherwise renew on a bare page
   // load, and the first data fetch behind it renews anyway.
   if (token !== null && !path.startsWith('/auth/')) afterResponse?.()
-  // Older fetch stubs in this repo's tests build plain objects with no `headers`; a real
-  // Response always has one. (Named resHeaders because `headers` above is the REQUEST's.)
-  const resHeaders = res.headers ?? new Headers()
   if (res.status === 204) return { data: undefined as T, headers: resHeaders }
   return { data: (await res.json()) as T, headers: resHeaders }
 }
