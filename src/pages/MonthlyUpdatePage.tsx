@@ -65,7 +65,15 @@ import {
   type BalancesMeta,
 } from '../components/monthly/monthlyCopy'
 import { buildMonthSave, reviewSends, type SaveKind } from '../components/monthly/monthSave'
-import { balancesKey, committed, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
+import {
+  amountKey,
+  balancesKey,
+  committed,
+  flowsKey,
+  sortedIds,
+  type BalancesPart,
+  type FlowsPart,
+} from '../components/monthly/parts'
 import { restoreParts } from '../components/monthly/restore'
 import { monthStory, type NextSnapshot } from '../components/monthly/story'
 import InfoHint from '../components/InfoHint'
@@ -458,6 +466,9 @@ function MonthlyUpdateWizard() {
   // What this visit's last save wrote, part by part (the receipt). Cleared on month load, on a
   // delete, and at the start of every save attempt.
   const [lastSave, setLastSave] = useState<LastSave | null>(null)
+  // A landed save whose /coverage refresh has not answered yet: until it does, what is due on screen
+  // is the pre-save picture — the spending Confirm waits for it, or a second click confirms twice.
+  const [refreshing, setRefreshing] = useState(false)
   // A save that lands moves focus to its receipt's heading (review M15), so the result is announced
   // where the user is — once per save: the receipt's later "Next due" update does not move it again.
   // Not from a cell: Ctrl+S and Ctrl/Cmd+Enter save without leaving it, the cells stay editable,
@@ -618,6 +629,7 @@ function MonthlyUpdateWizard() {
         setError(null)
         setLoadError(null)
         setLastSave(null)
+        setRefreshing(false)
         setReview(monthReview)
         setReviewConfirmations({})
         setFinalCurrentMonth(false)
@@ -1026,7 +1038,10 @@ function MonthlyUpdateWizard() {
     return fetchCoverage()
       .catch((): CoverageOut | null => null)
       .then((fresh) => {
-        if (fresh !== null && loadedMonth.current === loaded) setCoverage(fresh)
+        if (loadedMonth.current === loaded) {
+          if (fresh !== null) setCoverage(fresh)
+          setRefreshing(false)
+        }
         return fresh
       })
   }
@@ -1105,9 +1120,7 @@ function MonthlyUpdateWizard() {
             ? {
                 result: result.spending,
                 blank: categories.length - sentCategories.length + result.spending.skipped_blank,
-                takeHome:
-                  canonNetPay !== '' &&
-                  flowsKey({ amounts: {}, netPay: canonNetPay }) !== flowsKey({ amounts: {}, netPay: flowsBase.part.netPay }),
+                takeHome: canonNetPay !== '' && amountKey(canonNetPay) !== amountKey(flowsBase.part.netPay),
               }
             : null,
         sentBalances: sendBalances,
@@ -1122,6 +1135,7 @@ function MonthlyUpdateWizard() {
       // Undo for exactly this save's batch and waits for that one /coverage read, never the story's.
       // Its words carry no arrow: the toast's one action is Undo, and the receipt holds the link.
       setCoverageNonce((n) => n + 1)
+      setRefreshing(true)
       const closed = result.review.state === 'closed'
       const batchId = result.batch_id
       void refreshAfterSave(loaded, sendBalances).then((fresh) => {
@@ -2230,7 +2244,7 @@ function MonthlyUpdateWizard() {
                   // month has ended completes it instead.
                   <button
                     className="button"
-                    disabled={saving || loading || review === null}
+                    disabled={saving || loading || review === null || refreshing}
                     onClick={() => void save('confirm-spending')}
                   >
                     Confirm {monthNameOf(month)} spending is complete

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { TimeStatusOut } from '../../types/api'
 import { setServerToday } from '../../utils/productToday'
 import { TIME_OCT_16, TIME_OCT_3, TIME_SEP_23 } from '../../testing/timeStatusFixtures'
+import type { WizardStep } from './dueParts'
 import WhatsDue from './WhatsDue'
 
 afterEach(cleanup)
@@ -12,7 +13,7 @@ beforeEach(() => setServerToday('2026-10-03'))
 function strip(
   time: TimeStatusOut | null,
   onOpen = vi.fn(),
-  current: { month: string; step: string } = { month: '2026-10-01', step: 'review' },
+  current: { month: string; step: WizardStep } = { month: '2026-10-01', step: 'review' },
 ) {
   return render(
     <MemoryRouter>

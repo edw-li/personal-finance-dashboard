@@ -6,6 +6,7 @@ import ToastProvider from '../components/ToastProvider'
 import { ApiError } from '../api/client'
 import * as monthReviewApi from '../api/monthReview'
 import type { MonthReview, MonthSaveResult } from '../api/monthReview'
+import type { CoverageOut } from '../types/api'
 
 vi.mock('../api/monthReview', async importOriginal => ({
   ...await importOriginal<typeof import('../api/monthReview')>(),
@@ -3019,6 +3020,24 @@ describe('confirm a partly entered month (2026-09-23 spec §M1)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm September spending is complete' }))
     await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
     expect(sentBody().reviewed).toEqual({ balances: true, spending: true, take_home: false })
+  })
+
+  it('the Confirm stays disabled from the moment it lands until the refresh says what is due', async () => {
+    partialSeptember()
+    renderWizardAt('/update?month=2026-09-01&step=spending')
+    const confirm = await screen.findByRole('button', { name: 'Confirm September spending is complete' })
+    const refresh = deferred<CoverageOut>()
+    vi.mocked(fetchCoverage).mockImplementation(() => refresh.promise)
+    fireEvent.click(confirm)
+    await screen.findByRole('heading', { name: 'September spending confirmed complete' })
+    // Saved, not yet refreshed: /coverage still reads September partial, so the button still shows —
+    // but a second click must not send a second Confirm.
+    expect((screen.getByRole('button', { name: 'Confirm September spending is complete' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => {
+      refresh.resolve(enteredSeptember)
+    })
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Confirm September spending is complete' })).toBeNull())
+    expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1)
   })
 
   it('offers no Confirm while the spending part is dirty — the save completes it instead', async () => {

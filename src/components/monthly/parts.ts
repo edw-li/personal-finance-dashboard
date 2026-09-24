@@ -36,7 +36,9 @@ export function sortedIds(ids: Iterable<number>): number[] {
   return [...ids].sort((a, b) => a - b)
 }
 
-function amountKey(raw: string | undefined): string {
+/** One figure's key: an amount by the number a save writes ('6000' ≡ '$6,000.00'), any other text
+ *  (a blank included) as itself — so a blank take-home never matches a zero. */
+export function amountKey(raw: string | undefined): string {
   const text = (raw ?? '').trim()
   return isAmount(text) ? `n:${Number(canonicalAmount(text))}` : `t:${text}`
 }

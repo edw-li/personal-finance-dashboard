@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { balancesKey, flowsKey, sortedIds } from './parts'
+import { amountKey, balancesKey, flowsKey, sortedIds } from './parts'
 
 const b = (value: string, notes = '', typed: number[] = []) =>
   balancesKey({ balances: { 1: value, 2: '5.00' }, notes, typedParents: typed })
@@ -12,6 +12,12 @@ describe('part keys (2026-09-23 spec §M1: dirty = differs from the loaded basel
     expect(b('=1000+500')).toBe(b('1500.00'))
     expect(b('1500.01')).not.toBe(b('1500.00'))
     expect(f('250')).toBe(f('250.00'))
+  })
+
+  it('one amount reads as one key however it is written — a blank is not a zero', () => {
+    expect(amountKey('6000')).toBe(amountKey('$6,000.00'))
+    expect(amountKey('6000')).not.toBe(amountKey('6000.01'))
+    expect(amountKey('')).not.toBe(amountKey('0'))
   })
 
   it('keeps text that is not an amount as itself, so it stays dirty', () => {

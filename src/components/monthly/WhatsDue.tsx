@@ -1,12 +1,8 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import type { TimeStatusOut } from '../../types/api'
-import { dueParts, nothingDueSentence, type DuePart } from './dueParts'
+import { dueParts, nothingDueSentence, type DuePart, type WizardStep } from './dueParts'
 
-// The strip at the top of the monthly update (2026-09-23 spec §M2): one chip per due part, each a
-// link to its month and step, amber once overdue — and saying so in words, never by colour alone.
-// A plain click goes through the wizard's own month switch (the draft-safe path the ribbon uses);
-// a modified click keeps the link's own behaviour, so a part still opens in a new tab.
 /** A link to a due part: its month and step as a URL, so a modified click (a new tab) behaves like
  *  any link, while a plain click goes through the wizard's own month switch — the draft-safe path
  *  the ribbon uses. The strip's chips and the receipt's "Next due" share it. */
@@ -40,6 +36,9 @@ export function DuePartLink({
   )
 }
 
+// The strip at the top of the monthly update (2026-09-23 spec §M2): one chip per due part, each a
+// link to its month and step (DuePartLink), amber once overdue — and saying so in words, never by
+// colour alone.
 export default function WhatsDue({
   time,
   onOpen,
@@ -48,7 +47,7 @@ export default function WhatsDue({
   time: TimeStatusOut | null | undefined
   onOpen: (part: DuePart) => void
   /** The month and step on screen: its chip, when one is due, is marked as the current page. */
-  current: { month: string; step: string }
+  current: { month: string; step: WizardStep }
 }) {
   if (!time) return null
   const parts = dueParts(time)
