@@ -407,6 +407,12 @@ async def test_silence_bound_covers_headers_and_reasoning_and_skips_same_rung(
         )
     )
     assert attempts.count("moonshotai/kimi-k3") == 1
+    # ...and not even a retry that never reached the wire: the silent rung's allowance is spent,
+    # so a same-rung retry would usually go silent again before sending anything (the count
+    # above only sees one that did). A retry always announces itself first.
+    assert not any(
+        kind == "status" and payload["text"].startswith("Retrying") for kind, payload in events
+    )
     assert attempts[-1] == "deepseek-ai/deepseek-v4-pro-0813"
     assert any(kind == "token" and payload["text"] == "fallback" for kind, payload in events)
     if reasoning:
