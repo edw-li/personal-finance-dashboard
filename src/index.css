@@ -181,6 +181,18 @@ button {
   outline-offset: -2px;
 }
 
+/* Paper has no scroller (2026-09-24 table-scroll spec §2.5): every capped table box prints whole —
+   TableScroll's and the four older caps, which until now printed only their visible slice. Here,
+   not in tableScroll.css: route chunks load their sheets lazily (Settings and Comp never load that
+   sheet), and a page's own cap sheet can load after it at the same specificity. `:root` lifts the
+   rule to (0,2,0), so it wins over every (0,1,0) cap whatever order the sheets arrive in. */
+@media print {
+  :root :is(.table-scroll, .settings-scroll, .categories-scroll, .vest-scroll, .chart-table-scroll) {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
 /* One switch for the whole grammar. Rules gated by `no-preference` never see these values;
    rules that read a token unconditionally — the nav indicator, the paste flash,
    .loading-dim, the delayed fallbacks — become instant here instead of each carrying a

@@ -5,9 +5,13 @@ import { describe, expect, it } from 'vitest'
 // Comments out, whitespace flattened (surfaceGrammar.test.ts's idiom): a pin survives a re-indent
 // and a comment moving, and fails only when a declaration actually changes. jsdom computes none of
 // these rules, so the text is what can be held to the spec (2026-09-24 table-scroll §2.2, §2.5).
-const CSS = readFileSync(path.join(__dirname, 'tableScroll.css'), 'utf8')
-  .replace(/\/\*[\s\S]*?\*\//g, '')
-  .replace(/\s+/g, ' ')
+const flat = (file: string) =>
+  readFileSync(path.join(__dirname, file), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\s+/g, ' ')
+
+const CSS = flat('tableScroll.css')
+const INDEX = flat('../index.css')
 
 describe('the capped table box (tableScroll.css)', () => {
   it("caps at the vesting schedule's clamp and scrolls both ways", () => {
@@ -46,9 +50,13 @@ describe('the capped table box (tableScroll.css)', () => {
     expect(CSS).toContain('@media (forced-colors: active) { .table-scroll::after { display: none; } }')
   })
 
-  it('releases every capped box on paper, the older four included', () => {
-    expect(CSS).toContain(
-      '@media print { .table-scroll, .settings-scroll, .categories-scroll, .vest-scroll, .chart-table-scroll { max-height: none; overflow: visible; }',
+  // The release lives in the always-loaded index.css (spec §2.5): route chunks load their sheets
+  // lazily, so in this sheet it never reached Settings or Comp, and a cap sheet loaded after this one
+  // at the same specificity won. The fade is TableScroll's own, so its print hide stays here.
+  it('releases every capped box on paper from the always-loaded index.css, and hides the fade', () => {
+    expect(CSS).toContain('@media print { .table-scroll::after { display: none; } }')
+    expect(INDEX).toContain(
+      '@media print { :root :is(.table-scroll, .settings-scroll, .categories-scroll, .vest-scroll, .chart-table-scroll) { max-height: none; overflow: visible; } }',
     )
   })
 })

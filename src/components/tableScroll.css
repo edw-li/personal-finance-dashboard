@@ -94,18 +94,11 @@
   }
 }
 
-/* Paper has no scroller: every capped box prints whole — the four older caps too, which until now
-   printed only their visible slice (spec §2.5). Listed here so their own sheets stay untouched. */
+/* Paper has no "more below": the fade is TableScroll's own and loads with it, so its print hide lives
+   here. The release of the cap itself — this box's and the four older ones' (spec §2.5) — lives in
+   index.css: route chunks load their sheets lazily (Settings and Comp never load this one), and a
+   page's own cap sheet can load after this one at the same specificity and win. */
 @media print {
-  .table-scroll,
-  .settings-scroll,
-  .categories-scroll,
-  .vest-scroll,
-  .chart-table-scroll {
-    max-height: none;
-    overflow: visible;
-  }
-
   .table-scroll::after {
     display: none;
   }

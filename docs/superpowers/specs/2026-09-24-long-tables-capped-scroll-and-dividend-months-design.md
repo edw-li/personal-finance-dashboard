@@ -161,10 +161,14 @@ to a `tableScroll.ts` before `TableScroll.tsx` (`.ts` is tried first).
 
 ### 2.5 Print
 
-`@media print`: `.table-scroll, .settings-scroll, .categories-scroll, .vest-scroll, .chart-table-scroll
-{ max-height: none; overflow: visible; }` and the fade hidden — paper gets every row of an open table.
-(Collapsed dividend months stay collapsed on paper: print what is on screen.) The four existing capped
-selectors are listed here, in the new sheet, so their own files stay untouched.
+`@media print`: `:root :is(.table-scroll, .settings-scroll, .categories-scroll, .vest-scroll,
+.chart-table-scroll) { max-height: none; overflow: visible; }` and the fade hidden — paper gets every row
+of an open table. (Collapsed dividend months stay collapsed on paper: print what is on screen.) The
+release lives in `index.css`, not the new sheet (Task 3 review): route chunks load their sheets lazily —
+Settings and Comp never load `tableScroll.css` — and a page's own cap sheet can load after it at the same
+(0,1,0) specificity and win. `:root` lifts the rule to (0,2,0), so it wins in any load order, and the four
+older caps' own files stay untouched. `tableScroll.css` keeps only the fade's print hide (the fade is
+TableScroll's own and loads with it).
 
 ### 2.6 Interplay (checked against the code)
 
