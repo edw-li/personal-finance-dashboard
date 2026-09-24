@@ -14,6 +14,107 @@
   margin: 0;
 }
 
+/* Fixed columns (2026-09-24 follow-up): the automatic layout sized every column from the rows on
+   screen, so opening or folding a month moved the column headings — by up to 55px at 1440 on production.
+   Each column's share is its widest content (all 378 production entries measured in Edge) plus a
+   manual entry's longer " · entered pay date" and "manual" badge, a five-figure amount and a
+   six-decimal share count; the notes take what is left. min-width is those widths summed (924px, so
+   58rem): narrower than that, the box scrolls sideways as before rather than squeezing a column. */
+.dividend-table {
+  table-layout: fixed;
+  min-width: 58rem;
+}
+
+.dividend-table > thead th:nth-child(1) { width: 9%; }    /* Ticker */
+.dividend-table > thead th:nth-child(2) { width: 12%; }   /* Account */
+.dividend-table > thead th:nth-child(3) { width: 20%; }   /* Recorded date */
+.dividend-table > thead th:nth-child(4) { width: 9%; }    /* Amount, and each month's total */
+.dividend-table > thead th:nth-child(5) { width: 8.5%; }  /* Source */
+.dividend-table > thead th:nth-child(6) { width: 16%; }   /* Per share */
+.dividend-table > thead th:nth-child(8) { width: 15.5%; } /* Edit · Delete */
+
+/* …and the box keeps its scrollbar's lane whether or not the ledger overflows: folded down to its month
+   lines the ledger fits the box, the scrollbar went, the table gained its 15px and every column above
+   rescaled with it. (No effect where scrollbars overlay the content.) */
+.table-scroll.dividend-scroll {
+  scrollbar-gutter: stable;
+}
+
+/* An entry cell's content (DividendsPanel's Cell). A fixed column never widens for its content, so
+   free text past the column's width ends in an ellipsis instead of running under the next one; the
+   actions' block keeps its overflow, which is where the buttons' outside focus rings draw. */
+.dividend-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dividend-entry > td.row-actions > .dividend-cell {
+  overflow: visible;
+}
+
+/* The glide: a toggled month's rows open out of nothing and fold back into it, rather than appearing
+   and vanishing in one frame. A table row cannot be given a height, but the block inside each of its
+   cells can, so the glide runs that block's height (0 ↔ auto, which needs interpolate-size) with the
+   cell's vertical padding and hairline — a folded row is truly flat — and fades the row as a whole
+   (one fade a row, not eight). DividendsPanel marks a month's first rows (GLIDE_ROWS) is-entering from
+   the toggle that opens it until its transitions end, and is-leaving from the toggle that folds it
+   until they end and the rows unmount; the clip holds each row's content to its height meanwhile. A
+   month that renders open without a toggle — the first paint, a refetch, a save, Expand all — does not
+   glide. Tokens only, so reduce zeroes it; a browser that cannot interpolate to auto folds at once. */
+@supports (interpolate-size: allow-keywords) {
+  @media (prefers-reduced-motion: no-preference) {
+    .dividend-table {
+      interpolate-size: allow-keywords;
+    }
+
+    .dividend-entry {
+      transition: opacity var(--t-enter) var(--ease-out);
+    }
+
+    .dividend-entry > td {
+      transition:
+        padding-block var(--t-enter) var(--ease-out),
+        border-bottom-width var(--t-enter) var(--ease-out);
+    }
+
+    .dividend-entry > td > .dividend-cell {
+      transition: height var(--t-enter) var(--ease-out);
+    }
+
+    .dividend-entry:is(.is-entering, .is-leaving) > td > .dividend-cell {
+      overflow: clip;
+    }
+
+    .dividend-entry.is-leaving {
+      opacity: 0;
+    }
+
+    .dividend-entry.is-leaving > td {
+      padding-block: 0;
+      border-bottom-width: 0;
+    }
+
+    .dividend-entry.is-leaving > td > .dividend-cell {
+      height: 0;
+    }
+
+    @starting-style {
+      .dividend-entry.is-entering {
+        opacity: 0;
+      }
+
+      .dividend-entry.is-entering > td {
+        padding-block: 0;
+        border-bottom-width: 0;
+      }
+
+      .dividend-entry.is-entering > td > .dividend-cell {
+        height: 0;
+      }
+    }
+  }
+}
+
 /* A month line: an opaque band — a sticky cell needs a solid fill or the rows would ghost through —
    pinned just under the column header while its month scrolls (TableScroll measures that header into
    --table-head-h). z 1 like the header cells; later in the DOM, so it paints over the rows passing

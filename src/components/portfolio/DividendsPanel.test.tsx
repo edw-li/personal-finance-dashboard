@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DividendOut, SecurityOut } from '../../types/api'
-import DividendsPanel, { REVEAL_WINDOW_MS } from './DividendsPanel'
+import DividendsPanel, { GLIDE_ROWS, REVEAL_WINDOW_MS } from './DividendsPanel'
 import ToastProvider from '../ToastProvider'
 
 vi.mock('../../api/portfolio', () => ({
@@ -560,7 +560,8 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
   it('scrolls inside a capped, named box', () => {
     renderPanel(LEDGER)
     const box = screen.getByRole('region', { name: 'Dividends by month' })
-    expect(box.className).toBe('table-scroll')
+    // dividend-scroll: the box keeps its scrollbar's lane (dividends.css), so a fold never rescales it.
+    expect(box.className).toBe('table-scroll dividend-scroll')
     expect(box.querySelector(':scope > table')).toBe(screen.getByRole('table'))
   })
 
@@ -791,5 +792,62 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     } finally {
       now.mockRestore()
     }
+  })
+})
+
+// jsdom has no Web Animations, so everywhere above the panel folds at once (canGlide). These lend it a
+// getAnimations: one running glide under every element, which the test ends when it chooses.
+function stubGlide() {
+  let finish!: () => void
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const running = { finished, effect: { getComputedTiming: () => ({ endTime: 240 }) } } as unknown as Animation
+  Element.prototype.getAnimations = () => [running]
+  return { end: () => act(async () => finish()) }
+}
+
+describe('DividendsPanel month glide (2026-09-24 follow-up)', () => {
+  afterEach(() => {
+    delete (Element.prototype as Partial<Element>).getAnimations
+  })
+
+  it('folds a month in a glide: its rows stay, marked and out of reach, until the glide ends', async () => {
+    const glide = stubGlide()
+    renderPanel(LEDGER)
+    fireEvent.click(monthButton('Jun 2026, 2 entries'))
+    // The line says folded at once; the rows fold after it.
+    expect(monthButton('Jun 2026, 2 entries').getAttribute('aria-expanded')).toBe('false')
+    const rows = [...document.querySelectorAll('tr[data-dividend-id]')]
+    expect(rows.map((row) => row.className)).toEqual(['dividend-entry is-leaving', 'dividend-entry is-leaving'])
+    expect(rows.every((row) => row.hasAttribute('inert'))).toBe(true)
+    await glide.end()
+    expect(shownIds()).toEqual([])
+  })
+
+  it('opens a month in a glide of its first GLIDE_ROWS rows, the rest following once it ends', async () => {
+    const glide = stubGlide()
+    const march = Array.from({ length: GLIDE_ROWS + 6 }, (_, i) =>
+      dividend({ id: 100 + i, pay_date: '2026-03-10', amount: '1.00' }),
+    )
+    renderPanel([JUNE_A, JUNE_B, ...march])
+    const name = `Mar 2026, ${GLIDE_ROWS + 6} entries`
+    fireEvent.click(monthButton(name))
+    const rows = () => [...monthButton(name).closest('tbody')!.querySelectorAll('tr[data-dividend-id]')]
+    expect(rows()).toHaveLength(GLIDE_ROWS)
+    expect(rows().every((row) => row.classList.contains('is-entering'))).toBe(true)
+    await glide.end()
+    expect(rows()).toHaveLength(GLIDE_ROWS + 6)
+    expect(document.querySelector('tr.is-entering')).toBeNull()
+  })
+
+  it('changes at once for Expand all and Collapse all — the whole ledger never glides', () => {
+    stubGlide()
+    renderPanel(LEDGER)
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }))
+    expect(shownIds()).toEqual([11, 12, 13, 14])
+    expect(document.querySelector('tr.is-entering')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }))
+    expect(shownIds()).toEqual([])
   })
 })
