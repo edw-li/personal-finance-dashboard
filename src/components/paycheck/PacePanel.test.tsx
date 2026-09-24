@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, it } from 'vitest'
 import type { PaceItem } from '../../types/api'
+import { setServerToday } from '../../utils/productToday'
 import PacePanel from './PacePanel'
 
 const OK: PaceItem = {
@@ -336,7 +337,9 @@ it('says "at the cap" when the judged ratio is exactly the cap', () => {
 
 it('says once that nothing counts before the first profile starts (2026-09-23 spec §W1)', () => {
   // A new hire's paydays before their first profile credit nothing, and every walked row was
-  // cut at the same date — so the strip says it once, not once per row.
+  // cut at the same date — so the strip says it once, not once per row. The strip is the
+  // server's year (setup.ts forgets the day after the test).
+  setServerToday('2026-09-24')
   renderPanel([
     { ...OK, so_far: '100.00', starts_on: '2026-09-01' },
     { ...OK, key: 'limit_415c_total', label: '415(c) total additions', starts_on: '2026-09-01' },
@@ -350,6 +353,13 @@ it('says once that nothing counts before the first profile starts (2026-09-23 sp
   cleanup()
   renderPanel([OK])
   expect(screen.queryByText(/Nothing counts before/)).toBeNull()
+})
+
+it('names the year when the first profile starts in another one (spec-review nit)', () => {
+  // A job that starts next January: "before Jan 4" alone would read as this year's.
+  setServerToday('2026-09-24')
+  renderPanel([{ ...OK, starts_on: '2027-01-04' }])
+  expect(screen.getByText(/^Nothing counts before Jan 4, 2027, when the first paycheck profile starts\./)).toBeTruthy()
 })
 
 it('labels both figures on a row that has no cap entered yet', () => {

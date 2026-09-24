@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import { Link } from 'react-router-dom'
 import type { PaceItem } from '../../types/api'
 import { formatCurrency, formatCurrencyCompact, formatDate } from '../../utils/format'
+import { currentYear } from '../../utils/months'
 import { shiftPoint } from '../../utils/percent'
 import InfoHint from '../InfoHint'
 import '../panels.css'
@@ -307,7 +308,10 @@ function PaceRow({ item }: { item: PaceItem }) {
 function startNote(items: PaceItem[]): string | null {
   const startsOn = items.find((item) => item.starts_on != null)?.starts_on ?? null
   if (startsOn === null) return null
-  const day = formatDate(startsOn).replace(/, \d{4}$/, '')
+  // The strip is the server's year, so its own year goes without saying; a start in another
+  // one (a job that begins next January) names it.
+  const full = formatDate(startsOn)
+  const day = startsOn.slice(0, 4) === String(currentYear()) ? full.replace(/, \d{4}$/, '') : full
   return (
     `Nothing counts before ${day}, when the first paycheck profile starts. ` +
     'Each check is priced by the paycheck profile in force on its date. For a raise or a new job, add a profile with its start date.'
