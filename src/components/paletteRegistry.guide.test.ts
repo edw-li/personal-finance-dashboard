@@ -10,7 +10,7 @@ import { buildEntries, groupMatches, matchEntries, type PaletteEntry } from './p
 // the two halves the way the component does — over the FIXTURE, which keeps it independent of
 // the content the lanes are still writing.
 const noop = () => {}
-const statics = buildEntries({ month: '2026-09-01', run: { refreshPrices: noop, askAssistant: noop } })
+const statics = buildEntries({ run: { refreshPrices: noop, askAssistant: noop } })
 const guide: PaletteEntry[] = guideEntries(FIXTURE_GUIDE).map((e) => ({ kind: 'guide' as const, ...e }))
 const entries = [...statics, ...guide]
 
