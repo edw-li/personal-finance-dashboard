@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { FilingStatus, TaxBracketsOut } from '../../types/api'
@@ -426,7 +426,31 @@ describe('BracketsEditor', () => {
 })
 
 describe('BracketsEditor — filing-status tabs', () => {
-  const tab = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+  // A tab by its status label, with or without the "(this year’s status)" mark (§W8).
+  const tab = (name: string) =>
+    screen.getByRole('button', { name: new RegExp(`^${name}( \\(this year’s status\\))?$`) }) as HTMLButtonElement
+
+  it('says what the tabs are for and marks the year’s own status (2026-09-23 spec §W8)', () => {
+    render(
+      <BracketsEditor
+        brackets={statusFixture('married_joint', ['single', 'married_separate'])}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+    // Not "Filing status": this control picks the tables a Save rewrites; the year's status is
+    // the scope row's Change… dialog.
+    const group = screen.getByRole('group', { name: 'Tables for status' })
+    expect(group.closest('.bracket-status-row')?.querySelector('.eyebrow')?.textContent).toBe(
+      'Tables for status',
+    )
+    expect(
+      within(group).getByRole('button', { name: 'Married filing jointly (this year’s status)' }),
+    ).toBeTruthy()
+    // Only the year's own status carries the mark.
+    expect(within(group).getByRole('button', { name: 'Single' })).toBeTruthy()
+    expect(within(group).getByRole('button', { name: 'Married filing separately' })).toBeTruthy()
+  })
 
   it('offers Single alone when nothing else has tables and the year is filed single', () => {
     render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
@@ -853,7 +877,8 @@ describe('BracketsEditor — per-person tables', () => {
     // it wrote and re-seats the payload. Landing that on another status' tables would file
     // one status' rows under another's name, so the tabs wait for the flight.
     expect(tab('Married filing jointly').disabled).toBe(true)
-    expect(tab('Single').disabled).toBe(true)
+    // The year's own status wears its mark (2026-09-23 spec §W8).
+    expect(tab('Single (this year’s status)').disabled).toBe(true)
     expect(vi.mocked(fetchTaxBrackets)).not.toHaveBeenCalled()
   })
 
@@ -902,7 +927,7 @@ describe('BracketsEditor — per-person tables', () => {
     // to read as clean, or the next tab press asks to discard the server's own rows.
     expect(onDirtyChange).toHaveBeenLastCalledWith(false)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Single' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Single (this year’s status)' }))
     // And back: Sam is not on a single return at all, so neither is their table.
     await waitFor(() => expect(screen.queryByText('Disability — Sam')).toBeNull())
     expect(addFor('Disability', 'Alex')).toBeTruthy()
@@ -932,7 +957,7 @@ describe('BracketsEditor — per-person tables', () => {
     expect(disability.textContent).not.toMatch(/Per-worker tax/)
     // The editor's status control says what it is FOR, so it cannot be mistaken for the year's
     // filing status in the scope row (audit S3).
-    const row = screen.getByText('Editing tables for').closest('.bracket-status-row') as HTMLElement
-    expect(row.contains(screen.getByRole('group', { name: 'Bracket filing status' }))).toBe(true)
+    const row = screen.getByText('Tables for status').closest('.bracket-status-row') as HTMLElement
+    expect(row.contains(screen.getByRole('group', { name: 'Tables for status' }))).toBe(true)
   })
 })

@@ -655,15 +655,15 @@ export default function BracketsEditor({
       </p>
       {/* One tab per status this year can be filed as. The same six tables exist behind each
           one — a full replace is per (jurisdiction, status) — so the tab is what decides
-          which of them a Save rewrites. Labelled, because the scope row above carries the
-          YEAR's filing status in the same segmented look (audit S3): that one PATCHes the
-          year; this one only picks the tables this card edits. */}
+          which of them a Save rewrites. "Tables for status", and the year's own status marked
+          (2026-09-23 spec §W8): the YEAR's filing status is the scope row's Change… dialog;
+          this control only picks the tables this card edits. */}
       <div className="bracket-status-row">
-        <span className="eyebrow">Editing tables for</span>
+        <span className="eyebrow">Tables for status</span>
         <div
           className="segmented bracket-status-tabs"
           role="group"
-          aria-label="Bracket filing status"
+          aria-label="Tables for status"
         >
           {tabs.map((status) => (
             <button
@@ -675,10 +675,11 @@ export default function BracketsEditor({
               onClick={() => openStatus(status)}
             >
               {FILING_STATUS_LABELS[status]}
+              {status === yearStatus ? ' (this year’s status)' : ''}
             </button>
           ))}
         </div>
-        <InfoHint text="Which status' tables this card's Saves rewrite. The year's own filing status — the tables the engine walks — is set in the scope row at the top of the page." />
+        <InfoHint text="Which status' tables this card's Saves rewrite. The year's own filing status — the tables the engine walks — is changed with Change… in the scope row at the top of the page." />
       </div>
       <FeedBanner error={tabError} />
       {activeStatus !== 'single' && isEmpty && (

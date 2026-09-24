@@ -7,6 +7,7 @@ import type {
   TaxBracketsOut,
   TaxInputsOut,
   TaxSummariesOut,
+  TaxStatusOptions,
   TaxSummaryOut,
   TaxYearOut,
   TaxYearUpdate,
@@ -30,9 +31,19 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   putTaxInputs: vi.fn(),
   putTaxBrackets: vi.fn(),
   patchTaxYear: vi.fn(),
+  fetchStatusOptions: vi.fn(),
   cloneBrackets: vi.fn(),
   deleteTaxYear: vi.fn(),
 }))
+// The filing-status change is change-logged (2026-09-23 spec §W8): its Undo rides the standard
+// toast and the activity log's undo endpoint.
+const toast = vi.hoisted(() => ({ success: vi.fn(), info: vi.fn(), error: vi.fn() }))
+vi.mock('../components/ToastProvider', () => ({ useToast: () => toast }))
+vi.mock('../api/lifecycle', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/lifecycle')>()),
+  undoBatch: vi.fn(),
+}))
+import { undoBatch } from '../api/lifecycle'
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law), so the wrapper
 // the summary panel mounts is a marker div here. What the charts actually DRAW is pinned
 // against the golden summaries in src/components/taxes/taxChartOptions.test.ts; this file
@@ -120,6 +131,7 @@ import {
   fetchTaxInputs,
   fetchTaxSummary,
   fetchTaxYears,
+  fetchStatusOptions,
   fetchWithholding,
   patchTaxYear,
   putTaxBrackets,
@@ -338,6 +350,35 @@ const DEDUCTION_WARNING =
 // cell's "10" as "10%". Every `.value` pin below is on a box nothing has focused — the
 // echo IS what the user sees — while the wire-body pins stay canonical plain decimals.
 const salary = () => screen.getByLabelText('Annual Salary') as HTMLInputElement
+
+// The server's status rules for a year (2026-09-23 spec §W8): Alex alone on a single or MFS
+// return, Alex and Sam on a joint one; the year has single tables only, so both married
+// statuses would refuse it.
+function statusOptionsFor(year: number, current: TaxYearOut['filing_status']): TaxStatusOptions {
+  const alex = { id: 1, name: 'Alex' }
+  const married = ['federal', 'state', 'medicare', 'social_security', 'disability', 'capital_gains']
+  return {
+    year,
+    current,
+    options: [
+      { status: 'single', label: 'Single', people: [alex], tables_missing: [], computable: true },
+      {
+        status: 'married_joint',
+        label: 'Married filing jointly',
+        people: [alex, { id: 2, name: 'Sam' }],
+        tables_missing: married,
+        computable: false,
+      },
+      {
+        status: 'married_separate',
+        label: 'Married filing separately',
+        people: [alex],
+        tables_missing: married,
+        computable: false,
+      },
+    ],
+  }
+}
 const saveInputs = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
 const deleteYearButton = () => { openYearManagement(); return screen.getByRole('button', { name: /^Delete (year|\d{4})…$/ }) as HTMLButtonElement }
 // The one question the delete door asks — worded for a row of tables nobody can get back.
@@ -416,6 +457,10 @@ beforeEach(() => {
     year: { year, notes: null, input_count: 21, bracket_count: 42, filing_status: body.filing_status },
     batchId: 'batch-status',
   }))
+  vi.mocked(fetchStatusOptions).mockImplementation(async (year: number) =>
+    statusOptionsFor(year, 'single'),
+  )
+  vi.mocked(undoBatch).mockResolvedValue({} as Awaited<ReturnType<typeof undoBatch>>)
   confirmSpy.mockReturnValue(true)
   resetWhatIfApply()
 })
@@ -1654,25 +1699,31 @@ describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
   })
 })
 
-describe('filing status (2026-08-26 design §6)', () => {
-  // Scoped to the SCOPE ROW's control: the brackets editor renders a group with the same
-  // three names ("Bracket filing status"), and only this one changes how the year is filed.
-  const statusButton = (name: string) =>
-    within(screen.getByRole('group', { name: 'Filing status' })).getByRole('button', {
-      name,
-    }) as HTMLButtonElement
+describe('filing status (2026-08-26 design §6; a deliberate, undoable setting since 2026-09-23 spec §W8)', () => {
+  // The scope row's status is TEXT with a Change… door; the dialog is the only way to move it.
+  const statusText = () => document.querySelector('.filing-status-menu')?.textContent
+  const statusDialog = () => screen.getByRole('dialog', { name: /^Filing status for / })
+  const openStatus = () => fireEvent.click(screen.getByRole('button', { name: 'Change…' }))
+  const changeTo = (label: string) =>
+    within(statusDialog()).getByRole('button', { name: `Change to ${label}` }) as HTMLButtonElement
+  // Open, pick, wait for the server's rules to land (the confirm is shut while they load), press.
+  async function chooseStatus(label: string) {
+    openStatus()
+    fireEvent.click(within(statusDialog()).getByRole('radio', { name: new RegExp(`^${label}`) }))
+    await waitFor(() => expect(changeTo(label).disabled).toBe(false))
+    fireEvent.click(changeTo(label))
+  }
 
   const CA_CAVEAT =
     'California is a community-property state; true MFS requires 50/50 community-income ' +
     'splitting (Form 8958), which this calculator does not model.'
 
-  it('renders the selected year status as a segmented control', async () => {
+  it('reads the selected year’s status as text with a Change… door, never a one-click toggle', async () => {
     renderPage('/taxes?section=summary')
     await readyInputs()
 
-    expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
-    expect(statusButton('Married filing jointly').getAttribute('aria-pressed')).toBe('false')
-    expect(statusButton('Married filing separately').getAttribute('aria-pressed')).toBe('false')
+    expect(statusText()).toBe('Filing status: Single · Change…')
+    expect(screen.queryByRole('group', { name: 'Filing status' })).toBeNull()
     // The caveat belongs to MFS alone — a single year must not carry a warning about a
     // filing status it is not filed under.
     expect(screen.queryByText(CA_CAVEAT)).toBeNull()
@@ -1682,7 +1733,28 @@ describe('filing status (2026-08-26 design §6)', () => {
     vi.mocked(fetchTaxYears).mockResolvedValue([])
     renderPage('/taxes?section=summary')
     await screen.findByText(/no tax years yet/i)
-    expect(screen.queryByRole('button', { name: 'Single' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Change…' })).toBeNull()
+  })
+
+  it('names what a status would mean from the server’s rules, and sends nothing until confirmed', async () => {
+    renderPage('/taxes?section=summary')
+    await readyInputs()
+    openStatus()
+    expect(vi.mocked(fetchStatusOptions)).toHaveBeenCalledWith(2024)
+    fireEvent.click(within(statusDialog()).getByRole('radio', { name: /^Married filing separately/ }))
+    await waitFor(() => expect(changeTo('Married filing separately').disabled).toBe(false))
+    expect(
+      Array.from(statusDialog().querySelectorAll('.filing-status-consequences li')).map(
+        (li) => li.textContent,
+      ),
+    ).toEqual([
+      'Alex’s inputs count on the return.',
+      '2024 has no Married-filing-separately tables yet — the estimate, What-if and Will I owe? stay unavailable until you add or clone them in Tax tables.',
+      // No withholding line: the Will I owe? card answers for the current year, not 2024.
+      '2025’s prior-year safe harbor uses this year’s total tax.',
+    ])
+    expect(vi.mocked(patchTaxYear)).not.toHaveBeenCalled()
+    expect(confirmSpy).not.toHaveBeenCalled()
   })
 
   it('PATCHes the new status and reloads the year under it', async () => {
@@ -1690,7 +1762,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     await readyInputs()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1))
 
-    fireEvent.click(statusButton('Married filing jointly'))
+    await chooseStatus('Married filing jointly')
 
     await waitFor(() =>
       expect(vi.mocked(patchTaxYear)).toHaveBeenCalledWith(2024, {
@@ -1708,10 +1780,45 @@ describe('filing status (2026-08-26 design §6)', () => {
     // a married year.
     expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledTimes(2)
     expect(vi.mocked(fetchTaxBrackets)).toHaveBeenLastCalledWith(2024, 'married_joint')
-    // The echo replaced the row, so the control follows without a list reload.
+    // The echo replaced the row, so the text follows without a list reload.
+    await waitFor(() => expect(statusText()).toBe('Filing status: Married filing jointly · Change…'))
+  })
+
+  it('offers the standard Undo, which restores the status and reloads the year under it', async () => {
+    renderPage('/taxes?section=summary')
+    await readyInputs()
+    await chooseStatus('Married filing separately')
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const [message, options] = toast.success.mock.calls[0] as [
+      string,
+      { action: { label: string; onAction: () => void } },
+    ]
+    // The change log's own label (the PATCH records a batch and returns it in X-Change-Batch).
+    expect(message).toBe('Changed 2024 filing status to Married filing separately')
+    expect(options.action.label).toBe('Undo')
     await waitFor(() =>
-      expect(statusButton('Married filing jointly').getAttribute('aria-pressed')).toBe('true'),
+      expect(vi.mocked(fetchTaxBrackets)).toHaveBeenLastCalledWith(2024, 'married_separate'),
     )
+    const listLoads = vi.mocked(fetchTaxYears).mock.calls.length
+
+    options.action.onAction()
+    expect(vi.mocked(undoBatch)).toHaveBeenCalledWith('batch-status')
+    // The list comes back with the year filed single again, and the year reloads under it.
+    await waitFor(() => expect(vi.mocked(fetchTaxYears).mock.calls.length).toBe(listLoads + 1))
+    await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenLastCalledWith(2024, 'single'))
+    await waitFor(() => expect(statusText()).toBe('Filing status: Single · Change…'))
+    expect(toast.success).toHaveBeenLastCalledWith('Undone — 2024 is filed Single again.')
+  })
+
+  it('says a refused Undo in the server’s words', async () => {
+    vi.mocked(undoBatch).mockRejectedValue(new ApiError('this change was already undone', 409))
+    renderPage('/taxes?section=summary')
+    await readyInputs()
+    await chooseStatus('Married filing separately')
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const options = toast.success.mock.calls[0][1] as { action: { onAction: () => void } }
+    options.action.onAction()
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('this change was already undone'))
   })
 
   it('a status flip refetches the all-years trend — the composition follows the new status', async () => {
@@ -1719,7 +1826,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     await readyInputs()
     await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
 
-    fireEvent.click(statusButton('Married filing jointly'))
+    await chooseStatus('Married filing jointly')
 
     // The flip moves the engine's answer for the year (possibly to a refusal), which moves
     // that year's column in the all-years trend too — CompositionPanel must refetch
@@ -1727,11 +1834,17 @@ describe('filing status (2026-08-26 design §6)', () => {
     await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(2))
   })
 
-  it('neither asks nor sends when the pressed status is already the year’s', async () => {
+  it('neither asks nor sends when the year’s own status stays chosen', async () => {
     renderPage('/taxes?section=summary')
     await readyInputs()
 
-    fireEvent.click(statusButton('Single'))
+    openStatus()
+    expect(within(statusDialog()).getByRole('radio', { name: /^Single/ })).toHaveProperty('checked', true)
+    expect(
+      (within(statusDialog()).getByRole('button', { name: 'Change to…' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+    fireEvent.click(within(statusDialog()).getByRole('button', { name: 'Keep Single' }))
+    expect(screen.queryByRole('dialog', { name: /^Filing status for / })).toBeNull()
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(vi.mocked(patchTaxYear)).not.toHaveBeenCalled()
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
@@ -1743,7 +1856,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     await readyInputs()
     fireEvent.change(salary(), { target: { value: '999' } })
 
-    fireEvent.click(statusButton('Married filing jointly'))
+    await chooseStatus('Married filing jointly')
     // The same question the other four reload doors ask — a status flip replaces both
     // editors' payloads, so unsaved work is gone the moment it starts.
     expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
@@ -1758,15 +1871,16 @@ describe('filing status (2026-08-26 design §6)', () => {
     renderPage('/taxes?section=summary')
     await readyInputs()
 
-    fireEvent.click(statusButton('Married filing separately'))
+    await chooseStatus('Married filing separately')
     expect(
       await screen.findByText(
         'filing_status must be one of single, married_joint, married_separate',
       ),
     ).toBeTruthy()
-    // Nothing was reloaded, and the control still reads the row the server has.
+    // Nothing was reloaded, the text still reads the row the server has, and no Undo is offered.
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
-    expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
+    expect(statusText()).toBe('Filing status: Single · Change…')
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it('keeps a status refusal an ALERT beside the year, not the frame stale line', async () => {
@@ -1774,7 +1888,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     renderPage('/taxes?section=inputs')
     await readyInputs()
 
-    fireEvent.click(statusButton('Married filing jointly'))
+    await chooseStatus('Married filing jointly')
 
     // The PATCH changed nothing, so "Showing earlier data" — the year LIST's grammar —
     // would be a lie about it. The year's own bucket keeps the assertive banner.
@@ -1798,7 +1912,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     // The frame's subheader (2026-09-13 polish spec §12): under the title, above the sticky row.
     expect(screen.getByText(CA_CAVEAT).closest('.page-frame-subheader')).toBeTruthy()
 
-    fireEvent.click(statusButton('Married filing jointly'))
+    await chooseStatus('Married filing jointly')
     await waitFor(() => expect(screen.queryByText(CA_CAVEAT)).toBeNull())
   })
 
@@ -1832,7 +1946,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     renderPage('/taxes?section=inputs')
     await readyInputs()
 
-    fireEvent.click(statusButton('Married filing jointly'))
+    await chooseStatus('Married filing jointly')
 
     // The editors are keyed by year AND status, so a flip REMOUNTS them: their value maps are
     // keyed by cell id, and a one-column year's ids are not a two-column year's — left
@@ -1870,8 +1984,8 @@ describe('filing status (2026-08-26 design §6)', () => {
     renderPage('/taxes?section=tables')
     await readyInputs()
 
-    // Scoped: the YEAR card carries a control with the same three names.
-    const tabs = within(screen.getByRole('group', { name: 'Bracket filing status' }))
+    // Scoped: the editor's own status tabs ("Tables for status"), not the year's status.
+    const tabs = within(screen.getByRole('group', { name: 'Tables for status' }))
     fireEvent.click(tabs.getByRole('button', { name: 'Married filing jointly' }))
     await waitFor(() =>
       expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024, 'married_joint'),
@@ -2100,12 +2214,17 @@ describe('TaxesPage — scope row and year menu (2026-09-13 polish spec §11–1
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
     expect(within(chips()).getByRole('button', { name: '2023' }).getAttribute('aria-pressed')).toBe('true')
 
-    // The filing status sits beside it and PATCHes the year like the card's control did — once
-    // the year's load has landed (the control is shut while a year is loading, as before).
-    const status = () => within(scope).getByRole('group', { name: 'Filing status' })
-    const mfj = () => within(status()).getByRole('button', { name: 'Married filing jointly' }) as HTMLButtonElement
-    await waitFor(() => expect(mfj().disabled).toBe(false))
-    fireEvent.click(mfj())
+    // The filing status sits beside it as text with a Change… door (2026-09-23 spec §W8), and
+    // its dialog PATCHes the SELECTED year — once the year's load has landed (the confirm is shut
+    // while a year is loading, as the old control was).
+    expect(within(scope).getByText(/^Filing status:/).closest('.filing-status-menu')).toBeTruthy()
+    fireEvent.click(within(scope).getByRole('button', { name: 'Change…' }))
+    const dialog = screen.getByRole('dialog', { name: 'Filing status for 2023' })
+    fireEvent.click(within(dialog).getByRole('radio', { name: /^Married filing jointly/ }))
+    const confirm = () =>
+      within(dialog).getByRole('button', { name: 'Change to Married filing jointly' }) as HTMLButtonElement
+    await waitFor(() => expect(confirm().disabled).toBe(false))
+    fireEvent.click(confirm())
     await waitFor(() => expect(vi.mocked(patchTaxYear)).toHaveBeenCalledWith(2023, { filing_status: 'married_joint' }))
   })
 
