@@ -543,7 +543,7 @@ export const INCOME_CARDS: GuideCard[] = [
         where: 'Taxes → Summary → Will I owe?',
         steps: [
           'Press **Apply** on the RSU income row of **Your inputs vs your records** — it shows only while the two differ.',
-          'It writes the projected vest income to **W2: Stock/RSUs Sold** for the primary person.',
+          'It writes the projected vest income into that person\'s RSU income input (W2: Stock/RSUs Sold on the Inputs tab) — nothing else changes.',
         ],
         to: '/taxes',
       },
