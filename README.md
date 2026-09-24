@@ -115,8 +115,10 @@ Every figure is dated by what it describes, not by when it was typed. Design rec
   next 1st — "September: Sep 1 → Oct 1".
 - **The monthly update has two parts.** A month's balances are due on its 1st (overdue from the
   7th); the ended month's spending and take-home are due once it ends (overdue from the 16th of the
-  next month); the overdue days move with the reminder day. One reminder lists whatever is pending,
-  and Needs attention, Data status and Data health flag only what is due.
+  next month); the overdue days move with the reminder day. Each month's reminder lists what is
+  pending for it — the parts the month status lists, never a month before the month review was
+  adopted (Up next shows the newest one) — and Needs attention, Data status and Data health flag
+  only what is due.
 - **Partly entered spending.** Spending saved while its month was still running stays *partial*
   until the month is saved again after it ends or confirmed complete; such a month stays out of
   budget suggestions and is drawn as partial on Spending and the Overview.
