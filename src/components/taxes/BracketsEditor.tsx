@@ -479,7 +479,13 @@ export default function BracketsEditor({
   const clearError = (key: string) =>
     setErrors((current) => (current[key] ? { ...current, [key]: '' } : current))
 
+  // Any edit is new work: a note about a DISCARDED draft has said what it had to say
+  // (code-quality nit). A restored draft's note stays — it is still unsaved.
+  const clearDroppedNote = () =>
+    setDraftNote((note) => (note?.kind === 'dropped' ? null : note))
+
   const setRow = (key: string, index: number, field: keyof RowState, value: string) => {
+    clearDroppedNote()
     clearError(key)
     setTables((current) => ({
       ...current,
@@ -488,6 +494,7 @@ export default function BracketsEditor({
   }
 
   const addRow = (key: string) => {
+    clearDroppedNote()
     clearError(key)
     setTables((current) => {
       const rows = current[key] ?? []
@@ -497,6 +504,7 @@ export default function BracketsEditor({
   }
 
   const removeRow = (key: string, index: number) => {
+    clearDroppedNote()
     clearError(key)
     setTables((current) => ({
       ...current,
@@ -508,6 +516,7 @@ export default function BracketsEditor({
   // person's table is nearly always the default with one number moved, so a blank grid would
   // be a transcription job. Client-side only — nothing is written until its own Save.
   const addPersonTable = (name: string, personId: number) => {
+    clearDroppedNote()
     setTables((current) => ({
       ...current,
       [tableKey(name, personId)]: (current[name] ?? []).map((row) => ({ ...row })),

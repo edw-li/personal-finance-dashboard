@@ -289,6 +289,15 @@ describe('InputsForm — unsaved work survives (2026-09-23 spec §W9)', () => {
     expect(sessionStorage.getItem(KEY)).toBeNull()
   })
 
+  it('lets the discarded-draft note go once the user types again (code-quality nit)', () => {
+    seed({ loaded: { ...LOADED, annual_salary: '190000.0000' }, edited: EDITED })
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(screen.getByText(/^Unsaved tax inputs for 2024 were discarded/)).toBeTruthy()
+    fireEvent.change(field('HSA Contributions'), { target: { value: '4200' } })
+    // New typing is new work: the note about the old draft has said what it had to say.
+    expect(screen.queryByText(/were discarded: the saved values changed/)).toBeNull()
+  })
+
   it('drops a draft equal to its own loaded values without a word', () => {
     seed({ loaded: LOADED, edited: LOADED })
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)

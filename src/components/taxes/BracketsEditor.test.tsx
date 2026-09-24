@@ -512,6 +512,14 @@ describe('BracketsEditor — unsaved tables survive (2026-09-23 spec §W9)', () 
     expect(sessionStorage.getItem(SINGLE)).toBeNull()
   })
 
+  it('lets the discarded-draft note go once the user edits a table (code-quality nit)', () => {
+    seed(SINGLE, { loaded: { ...LOADED, state: [{ rate: '9', threshold: '0.00' }] }, edited: EDITED })
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(screen.getByText(/^Unsaved tax tables for 2024 \(Single\) were discarded/)).toBeTruthy()
+    fireEvent.change(rate('Federal', 1), { target: { value: '11' } })
+    expect(screen.queryByText(/were discarded: the saved values changed/)).toBeNull()
+  })
+
   it('restores another status’ draft when its tab is opened', async () => {
     // The MFJ tab's server tables are six empty ones (the file's fetch mock), and this draft
     // was typed over exactly those.

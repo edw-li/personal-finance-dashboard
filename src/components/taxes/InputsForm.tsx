@@ -394,6 +394,14 @@ export default function InputsForm({
     else writeTaxDraft(draftKey, { loaded: baseline, edited: values })
   }, [changedCount, values, baseline, draftKey])
 
+  // A USER edit — a keystroke, an Apply chip, a paste: new work, so a note about a draft that
+  // was discarded has said what it had to say (code-quality nit). The form's own writes (a save
+  // echo, a discard, a re-judged payload) call setValues directly.
+  const edit = (change: (current: Record<string, string>) => Record<string, string>) => {
+    setDropped(false)
+    setValues(change)
+  }
+
   // The restore banner's exit: the saved values back in every box, the draft forgotten. A
   // preview still in flight for the restored boxes is retired; the totals are asked about the
   // saved boxes the way any edit asks.
@@ -611,7 +619,7 @@ export default function InputsForm({
       }
       overflow = plan.skipped
     }
-    if (Object.keys(fills).length > 0) setValues((current) => ({ ...current, ...fills }))
+    if (Object.keys(fills).length > 0) edit((current) => ({ ...current, ...fills }))
     setFlashIds(flashed)
     const parts = [`Pasted ${Object.keys(fills).length} of ${reachable} values`]
     if (unmatched.length > 0) {
@@ -793,7 +801,7 @@ export default function InputsForm({
                           kind={UNIT_KINDS[cell.unit]}
                           value={value}
                           onValueChange={(next) =>
-                            setValues((current) => ({ ...current, [cell.id]: next }))
+                            edit((current) => ({ ...current, [cell.id]: next }))
                           }
                         />
                       )
@@ -820,7 +828,7 @@ export default function InputsForm({
                             aria-label={`Apply suggestion for ${row.label}`}
                             title={`Apply ${suggestion}`}
                             onClick={() =>
-                              setValues((current) => ({
+                              edit((current) => ({
                                 ...current,
                                 [suggestionCell.id]: applies ?? '',
                               }))
