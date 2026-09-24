@@ -3,8 +3,8 @@ import { useEffect, type RefObject } from 'react'
 /**
  * The heights of a capped table's pinned rows (2026-09-24 table-scroll spec §2.4), written on the
  * box as `--table-head-h` and `--table-foot-h` (px; `0px` for a table with no thead or tfoot).
- * TableScroll's scroll padding reads them — a Tab, a keyboard reorder or a scrollIntoView lands a
- * row clear of the pinned rows — and so do the dividend month lines, which pin just under the
+ * TableScroll's row scroll margin reads them — a Tab, a keyboard reorder or a scrollIntoView lands
+ * a row clear of the pinned rows — and so do the dividend month lines, which pin just under the
  * column header. Re-measured by a ResizeObserver on the TABLE: a header that wraps, a density
  * switch or a tfoot that arrives with the data all change the table's size, while the capped box's
  * own size does not. Read off getBoundingClientRect rather than offsetHeight: a 30.4px header

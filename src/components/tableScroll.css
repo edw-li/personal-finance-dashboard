@@ -3,14 +3,30 @@
    max-height only bites when the table outgrows it. The cap is the vesting schedule's
    (CompPage.css, 2026-09-13 polish §7): one scroll usually suffices on a tall screen, and a short
    one still gets a box rather than a card that swallows the page. Scroll chaining is the browser's
-   default: at the box's end the wheel carries on down the page, so nothing traps it.
-   --table-head-h / --table-foot-h are the pinned rows' measured heights (tableScrollDom.ts): the
-   padding keeps a Tab, a keyboard reorder or a reveal clear of them, with room for an outside ring. */
+   default: at the box's end the wheel carries on down the page, so nothing traps it. */
 .table-scroll {
   max-height: clamp(420px, 60vh, 720px);
   overflow: auto;
-  scroll-padding-top: calc(var(--table-head-h, 0px) + 4px);
-  scroll-padding-bottom: calc(var(--table-foot-h, 0px) + 4px);
+}
+
+/* The pinned rows' measured heights (--table-head-h / --table-foot-h, tableScrollDom.ts) as a scroll
+   margin on everything that scrolls UNDER them: a Tab, a keyboard reorder or a scrollIntoView lands a
+   body control clear of the header and the totals row, with 4px to spare for an outside ring. Never a
+   scroll-padding on the box (Task 3 review): that counts the pinned rows' OWN controls — Holdings'
+   sort buttons, the matrix's card buttons — as out of view, so focusing one scrolled the box half its
+   height (240px per Tab across a sort header, measured in Edge). */
+.table-scroll > table > tbody * {
+  scroll-margin-top: calc(var(--table-head-h, 0px) + 4px);
+  scroll-margin-bottom: calc(var(--table-foot-h, 0px) + 4px);
+}
+
+/* The box's own focus ring over its edge mask: a mask clips everything outside the border box, the
+   outline included, so the ring vanished whenever a sideways edge was masked (panels.css) — a tab
+   stop with no visible focus (WCAG 2.4.7). The fade is only a hint, worth less than the ring while
+   the box has focus. !important: panels.css's two-token mask rule is (0,4,0) and may load after this
+   sheet. */
+.table-scroll:focus-visible {
+  mask-image: none !important;
 }
 
 /* The reorder tables' border model (reorder.css), for every capped table: a collapsed border belongs

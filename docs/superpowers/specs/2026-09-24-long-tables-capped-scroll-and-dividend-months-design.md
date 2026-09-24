@@ -130,13 +130,24 @@ New `src/components/TableScroll.tsx` (default export) with its own sheet `src/co
   `display: none` under `forced-colors: active`. The top edge needs no cue: the pinned header is the edge.
   The existing horizontal masks (`panels.css`) keep working on the same element — the fade is a child, so
   it does not compete with the box's `mask-image`.
-- **Scroll padding:** `scroll-padding-top: calc(var(--table-head-h, 0px) + 4px);
-  scroll-padding-bottom: calc(var(--table-foot-h, 0px) + 4px)` — a Tab, a keyboard reorder or a
-  `scrollIntoView` lands a row clear of the pinned rows, with room for an outside focus ring.
+- **Scroll margin on what scrolls under the pinned rows:** `.table-scroll > table > tbody * {
+  scroll-margin-top: calc(var(--table-head-h, 0px) + 4px); scroll-margin-bottom: calc(var(--table-foot-h,
+  0px) + 4px); }` — a Tab, a keyboard reorder or a `scrollIntoView` lands a body control clear of the
+  pinned rows, with room for an outside focus ring. Not a `scroll-padding` on the box (Task 3 review): that
+  counts the pinned rows' own controls — Holdings' sort buttons, the matrix's card buttons (re-focused after
+  the card detail closes) — as out of view, so focusing one scrolled the box half its height (240 px per Tab
+  across a sort header, a mouse click 1000 → 760; measured in Edge). With the margin the header Tab-walk
+  moves 0 px, and a body control lands ~4 px below the header or above the totals row.
 - **Inset focus ring:** `index.css`'s one inset-ring rule gains `.table-scroll` in its container list
   (`:is(.attention-strip, .settings-scroll, .categories-scroll, .table-scroll) :is(a, button,
   .button):focus-visible { outline-offset: -2px }`), for the same reason it lists the others: a ring drawn
   outside a control is cut where the control sits flush with the box's edge. `focusCss.test.ts` names it.
+- **The box's own ring over its edge mask:** `.table-scroll:focus-visible { mask-image: none !important; }`
+  — a `mask-image` clips everything outside the border box, the outline included, so the box's ring
+  vanished whenever a sideways edge mask was active (Task 3 review; WCAG 2.4.7 for a new tab stop). The
+  hint is worth less than the ring while the box has focus; the mask returns once focus moves into the
+  table or away, and a mouse focus (no `:focus-visible`) keeps it. `!important`: `panels.css`'s two-token
+  mask rule is (0,4,0) and may load after the new sheet.
 
 ### 2.3 `useScrollEdges` — vertical edges, opt-in
 
@@ -154,20 +165,26 @@ change once it is capped, so observing the box alone would miss them).
 Measures the box's `table > thead` and `table > tfoot` heights and writes them as `--table-head-h` /
 `--table-foot-h` (px, `0px` when absent) on the box's inline style; re-measured by a ResizeObserver on the
 table (a header that wraps, a density switch, a `tfoot` that appears once data lands). Guarded for jsdom /
-no-ResizeObserver (then measured once on mount). Consumers: the scroll padding (§2.2) and the dividend
+no-ResizeObserver (then measured once on mount). Consumers: the scroll margin (§2.2) and the dividend
 month rows' sticky offset (§4.3). Lives in `src/components/tableScrollDom.ts` with the `revealInBox` helper
 (§4.5) — not `tableScroll.ts`: on this case-insensitive Windows box `import './TableScroll'` would resolve
 to a `tableScroll.ts` before `TableScroll.tsx` (`.ts` is tried first).
 
 ### 2.5 Print
 
-`@media print`: `:root :is(.table-scroll, .settings-scroll, .categories-scroll, .vest-scroll,
-.chart-table-scroll) { max-height: none; overflow: visible; }` and the fade hidden — paper gets every row
-of an open table. (Collapsed dividend months stay collapsed on paper: print what is on screen.) The
-release lives in `index.css`, not the new sheet (Task 3 review): route chunks load their sheets lazily —
-Settings and Comp never load `tableScroll.css` — and a page's own cap sheet can load after it at the same
+`@media print` (in `index.css`): `:root :is(.table-scroll, .settings-scroll, .categories-scroll,
+.vest-scroll, .chart-table-scroll) { max-height: none; overflow: visible; mask-image: none !important; }`
+and, for the same five, `… :is(th, td) { position: static !important; }`, with the fade hidden — paper gets
+every row of an open table. (Collapsed dividend months stay collapsed on paper: print what is on screen.)
+The release lives in `index.css`, not the new sheet (Task 3 review): route chunks load their sheets lazily
+— Settings and Comp never load `tableScroll.css` — and a page's own cap sheet can load after it at the same
 (0,1,0) specificity and win. `:root` lifts the rule to (0,2,0), so it wins in any load order, and the four
-older caps' own files stay untouched. `tableScroll.css` keeps only the fade's print hide (the fade is
+older caps' own files stay untouched. Static cells and no mask (Task 3 review, an Edge PDF): released, a
+box no longer scrolls, so its sticky cells pinned to the PAGE — Net worth's totals row printed over other
+tables' rows, Transactions' pinned actions over a data column — and a box printing with a sideways token
+kept its edge mask; the browser repeats a table's header and totals rows on every printed page by itself.
+`!important`, print only: the pinned action header is `.port-table:has(td.row-actions) th:last-child` at
+(0,3,2), the two-token mask rule (0,4,0). `tableScroll.css` keeps only the fade's print hide (the fade is
 TableScroll's own and loads with it).
 
 ### 2.6 Interplay (checked against the code)

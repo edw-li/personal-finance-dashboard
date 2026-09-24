@@ -34,11 +34,12 @@ export default function TableScroll({
   // The box always renders, so the handle is simply the element.
   useImperativeHandle(ref, () => own.current as HTMLDivElement, [])
   return (
-    // tabIndex 0: a read-only table holds nothing focusable, so without it a keyboard could not
-    // scroll the box at all; index.css's :where(…, [tabindex]):focus-visible ring draws its focus.
+    // tabIndex 0: the box is a named stop the arrow keys and PageDown scroll (the classification
+    // selects capture the arrow keys; Tab through a row's buttons scrolls a row at a time), and a
+    // read-only table would otherwise be unreachable. index.css's [tabindex] ring draws its focus.
     <div
       ref={own}
-      className={className === undefined ? 'table-scroll' : `table-scroll ${className}`}
+      className={className ? `table-scroll ${className}` : 'table-scroll'}
       role="region"
       aria-label={label}
       tabIndex={0}

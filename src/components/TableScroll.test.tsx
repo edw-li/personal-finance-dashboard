@@ -21,13 +21,19 @@ describe('TableScroll', () => {
     expect(box.querySelector(':scope > table')).toBe(screen.getByRole('table'))
   })
 
-  it('carries only its own class when given none', () => {
+  it('carries only its own class when given none, or an empty one', () => {
     render(
-      <TableScroll label="Accounts table">
-        <table><tbody><tr><td>x</td></tr></tbody></table>
-      </TableScroll>,
+      <>
+        <TableScroll label="Accounts table">
+          <table><tbody><tr><td>x</td></tr></tbody></table>
+        </TableScroll>
+        <TableScroll label="Rewards matrix" className="">
+          <table><tbody><tr><td>y</td></tr></tbody></table>
+        </TableScroll>
+      </>,
     )
     expect(screen.getByRole('region', { name: 'Accounts table' }).className).toBe('table-scroll')
+    expect(screen.getByRole('region', { name: 'Rewards matrix' }).className).toBe('table-scroll')
   })
 
   it('hands its box to a ref, with the pinned-row heights written on it', () => {
