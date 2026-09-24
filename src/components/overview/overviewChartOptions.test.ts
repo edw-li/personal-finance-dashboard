@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { CATEGORY_HUES, ENTITY } from '../../charts/entities'
 import { GRID_VARIANTS, partialItemStyle } from '../../charts/grammar'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { CoverageOut, TaxSummaryOut } from '../../types/api'
+import { flowsPart, timeStatus } from '../../testing/timeFixtures'
+import { setServerToday } from '../../utils/productToday'
 import {
   netWorthTrendCsv,
   netWorthTrendOption,
@@ -177,6 +179,62 @@ describe('netWorthTrendOption', () => {
   it('returns null under two months — one point is not a trend', () => {
     expect(netWorthTrendOption({ months: [], net_worth: [] })).toBeNull()
     expect(netWorthTrendOption({ months: ['2026-01-01'], net_worth: ['1000.00'] })).toBeNull()
+  })
+})
+
+// 2026-09-23 spec §T1: Oct 1 balances typed on Sep 22 are provisional — the trend draws that point
+// with the partial look and its tooltip head says why, so a 21-day change never reads as a month.
+describe('netWorthTrendOption: a provisional point (2026-09-23 spec §T1)', () => {
+  beforeEach(() => setServerToday('2026-09-23'))
+  const copy = {
+    months: ['2026-08-01', '2026-09-01', '2026-10-01'],
+    net_worth: ['700000.00', '806667.88', '933250.90'],
+    as_of: ['2026-08-01', '2026-09-01', '2026-09-22'],
+    recorded_on: ['2026-08-01', '2026-09-01', '2026-09-22'],
+    provisional: [false, false, true],
+  }
+  const headAt = (option: EChartsOption | null, label: string, dataIndex: number) =>
+    tooltipRows(
+      tooltipOf(option).formatter([
+        { seriesName: 'Net worth', seriesType: 'line', axisValueLabel: label, dataIndex, value: 1, color: PALETTE[0] },
+      ]),
+    ).head
+
+  it('draws the early snapshot with the partial look and says why in the tooltip head', () => {
+    const option = netWorthTrendOption(copy)
+    expect(seriesOf(option)[0].data).toEqual([
+      700000,
+      806667.88,
+      { value: 933250.9, symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(PALETTE[0], false) },
+    ])
+    expect(headAt(option, 'Oct 2026', 2)).toBe('Oct 2026 — Oct 1 balances recorded early, on Sep 22 — provisional')
+    expect(headAt(option, 'Sep 2026', 1)).toBe('Sep 2026')
+  })
+
+  // Code review I1: a line series culls per-point symbols once its category axis thins its labels
+  // (echarts' showAllSymbol 'auto' — from about 51 points on the 1280 Overview card). The one
+  // symbol this line draws must never be culled, however long the history.
+  it('never culls the provisional point on a long history', () => {
+    const months = Array.from({ length: 120 }, (_, i) => `${2017 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}-01`)
+    const long = {
+      months,
+      net_worth: months.map((_, i) => (1000 + i).toFixed(2)),
+      recorded_on: months.map((month, i) => (i === months.length - 1 ? '2026-11-22' : month)),
+      provisional: months.map((_, i) => i === months.length - 1),
+    }
+    const [line] = seriesOf(netWorthTrendOption(long)) as { showAllSymbol?: boolean }[]
+    expect(line.showAllSymbol).toBe(true)
+    // A book with no provisional point draws no symbol at all: nothing to keep.
+    const [plain] = seriesOf(netWorthTrendOption({ months, net_worth: long.net_worth })) as { showAllSymbol?: boolean }[]
+    expect(plain.showAllSymbol).toBeUndefined()
+  })
+
+  it('draws every point plainly once the balances are final, and without the lists', () => {
+    const final = { ...copy, as_of: copy.months, recorded_on: copy.months, provisional: [false, false, false] }
+    expect(seriesOf(netWorthTrendOption(final))[0].data).toEqual([700000, 806667.88, 933250.9])
+    expect(seriesOf(netWorthTrendOption({ months: copy.months, net_worth: copy.net_worth }))[0].data).toEqual([
+      700000, 806667.88, 933250.9,
+    ])
   })
 })
 
@@ -568,5 +626,73 @@ describe('recentSpendOption: the month in progress (2026-09-23 spec §C5)', () =
     })
     expect(axisDataOf(option)[2]).toEqual({ value: 'Sep 2026', textStyle: { color: OTHER_SERIES_COLOR } })
     expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026*')
+  })
+})
+
+
+// 2026-09-23 spec §T12 (review I2): September's rent was saved during September, so from Oct 1 it
+// is PARTLY ENTERED until it is saved again after it ends or confirmed — drawn with the in-progress
+// look after it has ended, the due date in its tooltip head; a missing month stays hollow and an
+// entered one solid.
+describe('recentSpendOption: a partly entered month (2026-09-23 spec §T12)', () => {
+  beforeEach(() => setServerToday('2026-10-03'))
+  const feed = { months: monthsFrom('2026-07-01', 3), totals: ['4000.00', '4200.00', '2072.23'] }
+  const today = '2026-10-03'
+  const partly = [flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16' })]
+  const labelOf = (option: EChartsOption | null) =>
+    (option as unknown as { xAxis: { axisLabel: { formatter: (value: string, index: number) => string } } }).xAxis
+      .axisLabel.formatter
+  const headOf = (option: EChartsOption | null, label: string, dataIndex: number, value: number) =>
+    tooltipRows(
+      tooltipOf(option).formatter([
+        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: label, dataIndex, value, color: MUTED },
+      ]),
+    ).head
+
+  it('keeps the partial look on September after it ended, with its due date in the head', () => {
+    const option = recentSpendOption(feed, 12, undefined, { todayIso: today, flowsDue: partly })
+    expect(seriesOf(option)[0].data?.[2]).toEqual({ value: 2072.23, itemStyle: partialItemStyle(MUTED, false) })
+    expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today, flowsDue: partly, patterns: true }))[0].data?.[2]).toEqual({
+      value: 2072.23,
+      itemStyle: partialItemStyle(MUTED, true),
+    })
+    expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026*')
+    expect(headOf(option, 'Sep 2026', 2, 2072.23)).toBe('Sep 2026 — spending partly entered (due by Oct 15)')
+    expect(headOf(option, 'Aug 2026', 1, 4200)).toBe('Aug 2026')
+  })
+
+  it('draws the month solid once its spending is entered — nothing listed, nothing drawn', () => {
+    const option = recentSpendOption(feed, 12, undefined, { todayIso: today, flowsDue: [] })
+    expect(seriesOf(option)[0].data).toEqual([4000, 4200, 2072.23])
+    expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026')
+  })
+
+  it('keeps a month whose spending is missing hollow — the server says so, on any backend', () => {
+    const matrix = {
+      months: feed.months,
+      totals: ['4000.00', '4200.00', '0.00'],
+      net_pay: [null, null, '5000.00'],
+      review_state: ['unreviewed_history', 'unreviewed_history', 'in_progress'] as const,
+    }
+    const coverage = coverageOut({
+      time: timeStatus(today, { flows_due: [flowsPart('2026-09-01', { take_home_entered: true })] }),
+    })
+    const blank = notEnteredMonths({ ...matrix, review_state: [...matrix.review_state] }, coverage)
+    expect(blank.has('2026-09-01')).toBe(true)
+    const option = recentSpendOption({ months: feed.months, totals: matrix.totals }, 12, blank, { todayIso: today, flowsDue: coverage.time?.flows_due })
+    expect(seriesOf(option)[0].data?.[2]).toEqual({
+      value: 0,
+      itemStyle: { color: 'transparent', borderColor: MUTED, borderWidth: 1.5 },
+    })
+  })
+
+  it('names it in the table twin', () => {
+    const table = recentSpendCsv(feed, 12, { todayIso: today, flowsDue: partly })
+    expect(table.headers.at(-1)).toBe('Period')
+    expect(table.rows.map((row) => row.at(-1))).toEqual([
+      'Whole month',
+      'Whole month',
+      'Spending partly entered (due by Oct 15)',
+    ])
   })
 })

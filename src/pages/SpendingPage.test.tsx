@@ -7,6 +7,8 @@ import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
 import { addMonths, currentMonthIso } from '../utils/months'
+import { setServerToday } from '../utils/productToday'
+import { flowsPart, timeStatus } from '../testing/timeFixtures'
 import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
 vi.mock('../api/monthReview', async importOriginal => ({ ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn() }))
 
@@ -875,6 +877,96 @@ describe('SpendingPage — the ribbon\u2019s edit link', () => {
   })
 })
 
+// 2026-09-23 spec §T8: with nothing picked the page shows its last complete month, so Edit opens
+// THAT month and "Back to last complete month" appears only away from it; on the Budgets view the
+// default is the month the Budget card resolved.
+describe('SpendingPage — the ribbon names the page\u2019s default month (2026-09-23 spec §T8)', () => {
+  it('edits the last complete month when nothing is picked, and offers the way back to it', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: '2026-06-01' }))
+    renderPage('/spending')
+    const edit = await screen.findByRole('link', { name: 'Edit Jun 2026 in the wizard' })
+    expect(edit.getAttribute('href')).toBe('/update?month=2026-06-01&step=spending')
+    expect(screen.queryByRole('button', { name: 'Back to last complete month' })).toBeNull()
+    cleanup()
+    renderPage('/spending?month=2026-07')
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to last complete month' }))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
+  })
+
+  // Code review minor 2: a book with no complete month yet (default_month null) has no month to go
+  // back to — the way back from a pick is "Back to latest", the page as it opens.
+  it('offers "Back to latest" from a pick when there is no last complete month yet', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: null }))
+    renderPage('/spending?month=2026-07')
+    const back = await screen.findByRole('button', { name: 'Back to latest' })
+    expect(screen.queryByRole('button', { name: 'Back to last complete month' })).toBeNull()
+    fireEvent.click(back)
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
+  })
+
+  it('on the Budgets view, compares with the month the Budget card resolved', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        default_month: '2026-06-01',
+        series: [
+          { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, '2100.00'] },
+          { category_id: 2, values: ['600.00', '580.00'], budgets: [null, '550.00'] },
+          { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
+        ],
+        total_budget: [null, '2650.00'],
+      }),
+    )
+    renderPage('/spending?section=budgets')
+    // The card opens where the budgets are — July — and Edit follows the card, not June.
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026/ })).toBeTruthy()
+    const edit = await screen.findByRole('link', { name: 'Edit Jul 2026 in the wizard' })
+    expect(edit.getAttribute('href')).toBe('/update?month=2026-07-01&step=spending')
+  })
+
+  // Spec review I1: the card reported the month ON SCREEN, so with any month picked the default
+  // equalled the pick and "Back to latest" never appeared. The default is where the card opens.
+  it('on the Budgets view with a month picked, offers the way back to the card’s own month', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        default_month: '2026-06-01',
+        series: [
+          { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, '2100.00'] },
+          { category_id: 2, values: ['600.00', '580.00'], budgets: [null, '550.00'] },
+          { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
+        ],
+        total_budget: [null, '2650.00'],
+      }),
+    )
+    renderPage('/spending?section=budgets&month=2026-06')
+    // The pick wins on screen, and Edit opens it…
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jun 2026/ })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Edit Jun 2026 in the wizard' })).toBeTruthy()
+    // …while the way back goes to where the card opens with nothing picked: July.
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to latest' }))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+    // Picking the card's own month leaves nowhere to go back to.
+    cleanup()
+    renderPage('/spending?section=budgets&month=2026-07')
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026/ })).toBeTruthy()
+    await screen.findByRole('link', { name: 'Edit Jul 2026 in the wizard' })
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+  })
+
+  // Spec re-check R1: in a book with NO budget in any month the card opens on the page's resting
+  // month (the last complete one) — the pick must never stand in for it, or Back never appears.
+  it('on the Budgets view of a book with no budgets, a picked month still offers the way back', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: '2026-07-01' }))
+    renderPage('/spending?section=budgets&month=2026-06')
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jun 2026/ })).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to latest' }))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+  })
+})
+
 describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
   // Three kinds on one page: rent is living, the April tax bill is not spend at all, and a
   // brokerage transfer is money that stayed the household's.
@@ -1026,5 +1118,50 @@ describe('SpendingPage — the Budgets view opens where the budgets are', () => 
       expect(screen.getByTestId('location').textContent).toContain('month=2026-07'),
     )
     expect(await screen.findByRole('heading', { name: /Budgets — Jul 2026/ })).toBeTruthy()
+  })
+})
+
+// 2026-09-23 spec §T12: on Aug 3 July has ended with its spending saved during it — partly
+// entered. The page draws it so from the coverage its scope row already fetched (no second
+// /coverage request), and says which kind of partial the axis mark is.
+describe('SpendingPage — a partly entered month (2026-09-23 spec §T12)', () => {
+  beforeEach(() => {
+    setServerToday('2026-08-03')
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-06-01', '2026-07-01', '2026-08-01'],
+      spending: ['2026-06-01', '2026-07-01'],
+      net_pay: ['2026-06-01', '2026-07-01'],
+      time: timeStatus('2026-08-03', { flows_due: [flowsPart('2026-07-01', { spending: 'partial', take_home_entered: true })] }),
+    })
+  })
+
+  it('footnotes the month under the bars from the scope row’s one coverage fetch', async () => {
+    renderPage()
+    expect(await screen.findByText('* Spending partly entered')).toBeTruthy()
+    expect(screen.queryByText('* Month in progress')).toBeNull()
+    expect(vi.mocked(fetchCoverage)).toHaveBeenCalledTimes(1)
+  })
+
+  it('footnotes it under the heatmap too', async () => {
+    renderPage('/spending?section=history')
+    expect(await screen.findByText('* Spending partly entered')).toBeTruthy()
+  })
+
+  it('reads it as partly entered on the Budgets view, never as a complete month under budget', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        series: [
+          { category_id: 1, values: ['2000.00', '2000.00'], budgets: ['2100.00', '2100.00'] },
+          { category_id: 2, values: ['600.00', '580.00'], budgets: ['550.00', '550.00'] },
+          { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
+        ],
+        total_budget: ['2650.00', '2650.00'],
+      }),
+    )
+    renderPage('/spending?section=budgets')
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026 Partly entered/ })).toBeTruthy()
+    expect(
+      await screen.findByText(/over so far in Jul 2026 — its spending is partly entered \(due by Aug 15\)$/),
+    ).toBeTruthy()
   })
 })

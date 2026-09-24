@@ -2,7 +2,8 @@
 answering a HealthCheckOut with its severity and, when there is something to do, a fix —
 a link into the app or an action the Data-health card runs (`delete_spending_month` per
 month in `months`, `snapshot_now`). The instant `now` is injected so the AGE rules are
-clock-testable; the calendar-day rules read the product clock (services/clock.py).
+clock-testable; the calendar-day rules stand on the product day of the month status that
+`load_coverage` computes (services/month_status.py, 2026-09-23 spec §T5).
 Thresholds are twins of src/utils/staleness.ts; test_health_checks pins them."""
 
 import asyncio
@@ -16,13 +17,13 @@ from app.models import (
     AppSetting,
     LatestPrice,
     MonthlySpending,
-    NetWorthSnapshot,
     Security,
 )
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
-from app.services import clock
 from app.services.coverage import Coverage, load_coverage
+from app.services.month_review import day_label, month_shift
+from app.services.month_status import MonthStatus, overdue_through
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
 
 STALE_QUOTE_DAYS = 4  # staleness.ts STALE_AFTER_DAYS
@@ -116,18 +117,21 @@ def check_zero_filled_spending(coverage: Coverage) -> HealthCheckOut:
 
 
 def check_spending_gap(coverage: Coverage) -> HealthCheckOut:
-    """Months inside the BALANCES window with no spending rows and no take-home.
+    """Months inside coverage's window with no spending rows and no take-home.
 
-    Distinct from `balances_without_spending`, which reads the trailing twelve COMPLETE
-    months and needs a snapshot in the month itself: this one covers the whole window the
-    balances span, which is what the footer and the attention list quote.
+    The window runs from the first snapshot's month through the newest month whose flows are
+    OVERDUE (2026-09-23 spec §K3) — past the last snapshot when the balances are behind too — so
+    the sentence claims only what holds for every month in it: ended, overdue, nothing entered
+    (never "balances cover this month", which a month without its 1st balances would contradict).
+    Distinct from `balances_without_spending`, which reads the trailing twelve ended months and
+    needs a snapshot in the month itself.
     """
     return _month_gap(
         "spending_gap",
         "Spending months never entered",
         coverage.missing,
         "spending",
-        "balances cover this month but no spending or take-home was ever entered",
+        "ended and overdue, with no spending or take-home ever entered",
     )
 
 
@@ -144,24 +148,35 @@ def check_net_pay_without_spending(coverage: Coverage) -> HealthCheckOut:
 
 
 async def check_coverage_gaps(
-    db: AsyncSession, *, today: date
+    db: AsyncSession, *, status: MonthStatus
 ) -> tuple[HealthCheckOut, HealthCheckOut]:
-    """Balances without spending, and the inverse, over the last twelve COMPLETE months."""
-    current = today.replace(day=1)
+    """Balances without spending, and the inverse, over the last twelve ENDED months — each half
+    only once the part it misses is overdue (2026-09-23 spec §T5). An ended month's spending and
+    take-home are due once it is over and overdue from the next month's reminder date + 15 days
+    (default: the 16th), so until then the just-ended month is a to-do on Needs attention, not a
+    gap here. Its BALANCES were due on its own 1st and are overdue by its last day at the latest
+    (month_status.balances_overdue_from), so the inverse half keeps every ended month.
+
+    `status` is load_coverage's month status: one product day and one reminder day with the
+    rule /coverage answers. The window is a CALENDAR question, so it stands on that product day,
+    never on the UTC instant the age checks use — or the last evening of a month would close
+    that month's window early in Pacific eyes (audit item 31)."""
+    current = status.current_month
     floor = _months_back(current, COVERAGE_WINDOW_MONTHS)
+    flows_through = overdue_through(status.today, status.reminder_day)
 
     def in_window(month: date) -> bool:
         return floor <= month < current
 
-    balances = {
-        m for m in (await db.execute(select(NetWorthSnapshot.month))).scalars() if in_window(m)
-    }
+    # The snapshot months the status already holds (review minor 9); the spending query stays —
+    # "no spending row" counts a month saved as all $0.00, which the status's months do not.
+    balances = {state.month for state in status.snapshots if in_window(state.month)}
     spending = {
         m
         for m in (await db.execute(select(MonthlySpending.month).distinct())).scalars()
         if in_window(m)
     }
-    without_spending = sorted(balances - spending)
+    without_spending = sorted(month for month in balances - spending if month <= flows_through)
     without_balances = sorted(spending - balances)
 
     return (
@@ -218,16 +233,16 @@ async def check_stale_quotes(db: AsyncSession, *, now: datetime) -> HealthCheckO
     )
 
 
-async def check_identical_snapshot(db: AsyncSession) -> HealthCheckOut:
-    snapshots = list(
-        (
-            await db.execute(
-                select(NetWorthSnapshot).order_by(NetWorthSnapshot.month.desc()).limit(2)
-            )
-        ).scalars()
-    )
-    if len(snapshots) < 2:
+async def check_identical_snapshot(db: AsyncSession, *, status: MonthStatus) -> HealthCheckOut:
+    """The latest two FINAL snapshots carry exactly the same balances (2026-09-23 spec §T5).
+    An early snapshot — next month's balances typed before its 1st, usually by copying this
+    month's — is provisional until saved again on or after its date, so comparing it would
+    flag the very copy the routine makes. The states are the month status's (snapshot_state's
+    rule), so no second query decides what "final" means."""
+    final = [state for state in status.snapshots if not state.provisional]
+    if len(final) < 2:
         return _ok("identical_snapshot", "Latest balances differ from the month before")
+    snapshots = [final[-1], final[-2]]
     rows = (
         await db.execute(
             select(
@@ -253,6 +268,50 @@ async def check_identical_snapshot(db: AsyncSession) -> HealthCheckOut:
             kind="link",
             to=f"/update?month={snapshots[0].month.isoformat()}",
             label=f"Review {_label(snapshots[0].month)}",
+        ),
+    )
+
+
+def _joined(months: list[date]) -> str:
+    """'Dec 2026' / 'Dec 2026 and Jan 2027' / 'Dec 2026, Jan 2027 and Feb 2027'."""
+    labels = [_label(month) for month in months]
+    return labels[0] if len(labels) == 1 else f"{', '.join(labels[:-1])} and {labels[-1]}"
+
+
+def check_future_snapshot(status: MonthStatus) -> HealthCheckOut:
+    """Balances filed more than a month ahead (2026-09-23 spec §T5, §0.4(b)). The current
+    snapshot is the latest one up to NEXT month — the routine records next month's balances
+    early, never further — so these are never used as your balances: not on the Overview, not
+    by Projection, not by card utilization. Only an API client or a workbook import can store
+    one, and no other surface would say where it went. The fix opens that month's Balances
+    step: its saves stay shut that far ahead (§M3), but the part's actions keep "Delete Dec 1
+    balances" (§M6) — the copy names that button, in the wizard's words."""
+    bound = month_shift(status.current_month, 1)
+    ahead = [state.month for state in status.snapshots if state.month > bound]
+    if not ahead:
+        return _ok("future_snapshot", "No balances filed ahead of their month")
+    first = ahead[0]
+    # The wizard's own name for each part: "Dec 1 balances" (", 2027" outside today's year) —
+    # each month's delete named, one link (the first's).
+    names = [f"{day_label(month, status.today)} balances" for month in ahead]
+    deletes = [f"Delete {name}" for name in names]
+    buttons = deletes[0] if len(deletes) == 1 else f"{', '.join(deletes[:-1])} and {deletes[-1]}"
+    where = "that month's" if len(ahead) == 1 else "each month's"
+    return HealthCheckOut(
+        id="future_snapshot",
+        severity="warn",
+        title="Balances filed ahead of their month",
+        detail=(
+            f"Balances filed for {_joined(ahead)}, more than a month ahead — they are not used "
+            f"as your current balances. Delete them on {where} Balances step — its actions (⋯), "
+            f"then {buttons} — or file them under the right month."
+        ),
+        count=len(ahead),
+        months=ahead,
+        fix=HealthFixOut(
+            kind="link",
+            to=f"/update?month={first.isoformat()}&step=balances",
+            label=f"Open {names[0]}",
         ),
     )
 
@@ -353,13 +412,11 @@ def check_snapshot(*, now: datetime, snapshot_enabled: bool) -> HealthCheckOut:
 async def run_checks(
     db: AsyncSession, *, now: datetime, environment: str, snapshot_enabled: bool
 ) -> list[HealthCheckOut]:
-    # ONE coverage read for the three rules that share its definition.
+    # ONE coverage read for every rule that shares its definition — and its month status, the
+    # product day the calendar rules stand on (2026-09-23 spec §T5). `now` is UTC ON PURPOSE
+    # (check_stale_quotes' note) and stays that way for the AGE comparisons.
     coverage = await load_coverage(db)
-    # `now` is UTC ON PURPOSE (check_stale_quotes' note) and stays that way for the
-    # AGE comparisons. The coverage window is a CALENDAR question — which months are
-    # complete — so it reads the product clock instead, or the last evening of a month
-    # would close that month's window early in Pacific eyes (audit item 31).
-    without_spending, without_balances = await check_coverage_gaps(db, today=clock.product_today())
+    without_spending, without_balances = await check_coverage_gaps(db, status=coverage.status)
     return [
         check_zero_filled_spending(coverage),
         check_spending_gap(coverage),
@@ -371,7 +428,9 @@ async def run_checks(
         # twice. The nine derived totals are computed now (taxes spec §1.3), so there is no
         # stored total left to go stale and nothing for the card to repair.
         await check_stale_quotes(db, now=now),
-        await check_identical_snapshot(db),
+        await check_identical_snapshot(db, status=coverage.status),
         await check_backup(db, now=now, environment=environment),
         await asyncio.to_thread(check_snapshot, now=now, snapshot_enabled=snapshot_enabled),
+        # The tenth, APPENDED so the nine keep their order and ids (2026-09-23 spec §T5).
+        check_future_snapshot(coverage.status),
     ]

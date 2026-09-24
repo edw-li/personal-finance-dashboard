@@ -34,6 +34,7 @@ import { formatCompactCents, proratedLivingCents } from '../components/calendar/
 import { upNextWindow } from '../components/overview/upNext'
 import { formatDate, formatMonth } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
+import { dayName } from '../utils/timeWords'
 import OverviewPage from './OverviewPage'
 
 // Six modules, eleven clients, one snapshot: the page's whole contract is that these
@@ -149,6 +150,7 @@ vi.mock('../components/EChart', async () => {
   }
 })
 import { fetchCalendar } from '../api/calendar'
+import { balancesPart, flowsPart, timeStatus } from '../testing/timeFixtures'
 import { CATEGORY_HUES } from '../charts/entities'
 import { POSITIVE } from '../charts/theme'
 import { fetchCoverage } from '../api/coverage'
@@ -224,6 +226,8 @@ const LAGGING = coverageOut({
   latest: { balances: SEP, spending: YEAR_MONTHS[6], net_pay: YEAR_MONTHS[6] },
 })
 
+// The summary as the server sends it since 2026-09-24 (2026-09-23 spec §K2): Aug 1 balances,
+// recorded on their 1st, compared with Jul 1's.
 function summaryOut(over: Partial<NetWorthSummary> = {}): NetWorthSummary {
   return {
     month: '2026-08-01',
@@ -232,9 +236,19 @@ function summaryOut(over: Partial<NetWorthSummary> = {}): NetWorthSummary {
     mom_pct: '0.008',
     groups: [],
     owner_totals: [],
+    as_of: '2026-08-01',
+    recorded_on: '2026-08-01',
+    provisional: false,
+    previous: { month: '2026-07-01', as_of: '2026-07-01', recorded_on: '2026-07-01', provisional: false },
+    days_since_previous: 31,
     ...over,
   }
 }
+
+// The hero's label for that summary (2026-09-23 spec §T1). Through dayName so the year rule
+// ("Aug 1, 2026" once the server's year has moved on) holds on any real date; the exact words
+// are pinned on a fixed day in 'OverviewPage — the net-worth tile by date'.
+const HERO = `Net worth — as of ${dayName('2026-08-01')}`
 
 // The last three months ENDING ON THE REAL CURRENT MONTH: the attention strip reads this
 // list against the wall clock, and a hard-coded trio would start flagging "update not
@@ -687,13 +701,16 @@ describe('OverviewPage tiles', () => {
     const payload = serve()
     seedOverview(snapshotOf(payload))
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
-    const hero = tileFor('Net worth — Aug 2026')
+    const hero = tileFor(HERO)
     expect(valueOf(hero)).toBe('$1,234,567.00')
     // formatCurrency does not sign a positive (Intl currency has no plus); the ▲ glyph and
     // the tone class carry direction, and formatPct signs the percent.
-    expect(deltaOf(hero)?.textContent).toBe('▲ $10,000.00 (+0.8%) MoM')
+    // What the change spans, in the user's own words — never "MoM" (2026-09-23 spec §T1).
+    expect(deltaOf(hero)?.textContent).toBe(
+      `▲ $10,000.00 (+0.8%) · July: ${dayName('2026-07-01')} → ${dayName('2026-08-01')}`,
+    )
     expect(deltaOf(hero)?.className).toContain('stat-delta-positive')
     expect(hero.className).toContain('stat-tile-hero')
 
@@ -732,13 +749,13 @@ describe('OverviewPage tiles', () => {
     const payload = serve({ summary: summaryOut({ mom_delta: '100.00', mom_pct: null }) })
     seedOverview(snapshotOf(payload))
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
-    const hero = tileFor('Net worth — Aug 2026')
+    const hero = tileFor(HERO)
     expect(valueOf(hero)).toBe('$1,234,567.00')
     expect(deltaOf(hero)).toBeNull()
     // Not the amount alone, either — the whole delta node is gone.
-    expect(screen.queryByText(/MoM/)).toBeNull()
+    expect(screen.queryByText(/\$100\.00/)).toBeNull()
   })
 
   // Audit item 15: "today" is a claim about the quote, not about the tile.
@@ -746,7 +763,7 @@ describe('OverviewPage tiles', () => {
     const fresh = todayIso()
     serve({ holdings: holdingsOut({ as_of: fresh, latest_quote_at: fresh }) })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500.00 (-0.3%) today')
   })
 
@@ -755,7 +772,7 @@ describe('OverviewPage tiles', () => {
     // latest_quote_at is the newest, and the day change belongs to that one.
     serve({ holdings: holdingsOut({ as_of: daysAgo(30), latest_quote_at: daysAgo(3) }) })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe(
       `▼ -$2,500.00 (-0.3%) on ${formatDate(daysAgo(3))}`,
     )
@@ -764,7 +781,7 @@ describe('OverviewPage tiles', () => {
   it('names no day at all when there is no quote to date the change from', async () => {
     serve({ holdings: holdingsOut({ as_of: null, latest_quote_at: null }) })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     // Not "today": with nothing quoted there is no day to name, so the word is omitted
     // rather than guessed (review round).
     expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500.00 (-0.3%)')
@@ -774,7 +791,7 @@ describe('OverviewPage tiles', () => {
     const totals = { ...holdingsOut().totals, day_change_amount: '-5.00', day_change_pct: null }
     serve({ holdings: holdingsOut({ totals }) })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     const portfolio = tileFor('Portfolio')
     expect(valueOf(portfolio)).toBe('$812,345.67')
@@ -820,7 +837,7 @@ describe('OverviewPage tiles', () => {
       comparison_average: [...Array<null>(11).fill(null), '5000.00'],
     }) })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     const tile = tileFor('Living spending')
     expect(valueOf(tile)).toBe('—')
@@ -873,7 +890,7 @@ describe('OverviewPage tiles', () => {
   it('leaves the tax tile blank when no year has been touched', async () => {
     serve({ taxes: { years: [] } })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     const tile = tileFor('Estimated tax')
     expect(valueOf(tile)).toBe('—')
@@ -922,7 +939,7 @@ describe('OverviewPage snapshot fan-out', () => {
     // silent swap would still render three charts and pass every other test in this file.
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     expect(fetchTimeseries).toHaveBeenCalledWith('monthly', null)
   })
@@ -932,7 +949,7 @@ describe('OverviewPage snapshot fan-out', () => {
     // topping up a tile, which is what keeps the tiles and the charts on the same instant.
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(fetchSummary).toHaveBeenCalledTimes(2))
@@ -957,7 +974,7 @@ describe('OverviewPage charts', () => {
     serve({ holdings: holdingsOut({ as_of: daysAgo(30), latest_quote_at: quoted }) })
     renderPage()
 
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     const charts = screen.getAllByTestId('echart')
     expect(charts).toHaveLength(4)
     // Spark first (net-worth months), performance second (weekly dates + the live
@@ -997,16 +1014,21 @@ describe('OverviewPage data status card', () => {
     expect(screen.queryByText(/^Living spending: /)).toBeNull()
   })
 
-  it('names the months the window is still waiting for and ambers the feeds that lag', async () => {
-    serve({ coverage: LAGGING })
+  it('dates the balances, names what is still to come and ambers only an overdue feed', async () => {
+    // The server's day and answer for that day (2026-09-23 spec §T4): Sep 1 balances final,
+    // August's flows overdue — the fixtures' own year, so the words hold on any real date.
+    const today = `${CURRENT_YEAR}-09-20`
+    setServerToday(today)
+    serve({ coverage: { ...LAGGING, time: timeStatus(today, { flows_due: [flowsPart(AUG, { overdue: true })] }) } })
     renderPage()
 
     await waitFor(() =>
-      expect(statusValue('Spending through').textContent).toBe(`${formatMonth(YEAR_MONTHS[6])} (Aug missing, Sep empty)`),
+      expect(statusValue('Spending through').textContent).toBe(`${formatMonth(YEAR_MONTHS[6])} · Aug overdue`),
     )
     expect(statusValue('Spending through').className).toContain('stale')
-    expect(statusValue('Balances through').textContent).toBe(formatMonth(SEP))
-    expect(statusValue('Balances through').className).not.toContain('stale')
+    expect(statusValue('Balances as of').textContent).toBe('Sep 1')
+    expect(statusValue('Balances as of').className).not.toContain('stale')
+    expect(statusValue('Net pay through').textContent).toBe(`${formatMonth(YEAR_MONTHS[6])} · Aug overdue`)
     expect(statusValue('Net pay through').className).toContain('stale')
   })
 
@@ -1023,7 +1045,11 @@ describe('OverviewPage data status card', () => {
 
 describe('OverviewPage year to date', () => {
   it('leads with the total rate, names every window, and reads living spend', async () => {
+    // The server's day and a Jan 1 snapshot in the fixtures' own year: the net-worth words
+    // hold on any real date (2026-09-23 spec §T2).
+    setServerToday(`${CURRENT_YEAR}-09-20`)
     serve({
+      ts: timeseriesOut({ months: [`${CURRENT_YEAR}-01-01`, AUG, SEP] }),
       yearly: {
         years: [
           {
@@ -1067,9 +1093,10 @@ describe('OverviewPage year to date', () => {
     // The headline rate is the TOTAL one; cash rides beside it.
     expect(screen.getByText('68.6% total')).toBeTruthy()
     expect(screen.getByText(/\$70,000\.00 · cash 64\.4% \(\$58,000\.00\)/)).toBeTruthy()
-    // Every figure names its window (spec §3).
+    // Every figure names its window (spec §3) — net worth from the Jan 1 balances to the
+    // current ones, both ends named (2026-09-23 spec §T2).
     expect(screen.getAllByText('Jan–Jul')).toHaveLength(3)
-    expect(screen.getByText(/since .* \(through Sep\)/)).toBeTruthy()
+    expect(screen.getByText('since Jan 1 (to Sep 1)')).toBeTruthy()
     // The dividend sum is this year's payments only.
     expect(screen.getByText('$120.50')).toBeTruthy()
     expect(screen.queryByText('$999.00')).toBeNull()
@@ -1126,20 +1153,24 @@ describe('OverviewPage year to date', () => {
       dividends: [],
     })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
   })
 
   it('reads "Dividends" with the ex-date note as a sub-label, and keeps the net-worth amount whole', async () => {
-    serve({ yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] } })
+    setServerToday(`${CURRENT_YEAR}-09-20`)
+    serve({
+      ts: timeseriesOut({ months: [`${CURRENT_YEAR}-01-01`, AUG, SEP] }),
+      yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] },
+    })
     renderPage()
     await screen.findByText(`Year to date — ${CURRENT_YEAR}`)
     const dividends = screen.getByText('Dividends').closest('dt') as HTMLElement
     expect(dividends.querySelector('.ytd-sub')?.textContent).toContain('ex-date for automatic records')
     const netWorth = screen.getByText('Net worth', { selector: 'dt' }).closest('.ytd-fact') as HTMLElement
     expect(netWorth.querySelector('dd .ytd-value')?.textContent).toContain('$34,567.00')
-    expect(netWorth.querySelector('dd .ytd-sub')?.textContent).toMatch(/^since .*\(through .*\)$/)
+    expect(netWorth.querySelector('dd .ytd-sub')?.textContent).toBe('since Jan 1 (to Sep 1)')
   })
 
   it('reserves the year-to-date slot with a ghost while its feeds are pending', async () => {
@@ -1147,12 +1178,103 @@ describe('OverviewPage year to date', () => {
     const dividends = deferred<DividendOut[]>()
     vi.mocked(fetchDividends).mockImplementation(() => dividends.promise)
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     expect(document.querySelector('.overview-deeper .span-12 .loading-fallback')).not.toBeNull()
     expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
     await act(async () => { dividends.resolve(payload.dividends) })
     expect(await screen.findByRole('heading', { name: /Year to date/ })).toBeTruthy()
     expect(document.querySelector('.overview-deeper .loading-fallback')).toBeNull()
+  })
+})
+
+// 2026-09-23 spec §T1 on a fixed product day: the real-data copy on Sep 23 — Oct 1 balances typed
+// early on Sep 22 — and the same balances confirmed on Oct 1.
+describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', () => {
+  const EARLY = summaryOut({
+    month: '2026-10-01',
+    net_worth: '933250.90',
+    mom_delta: '126583.02',
+    mom_pct: '0.156920',
+    as_of: '2026-09-22',
+    recorded_on: '2026-09-22',
+    provisional: true,
+    previous: { month: '2026-09-01', as_of: '2026-09-01', recorded_on: '2026-09-01', provisional: false },
+    days_since_previous: 21,
+  })
+
+  it('reads "as of Sep 22 · Provisional · since Sep 1 · 21 days" — never MoM', async () => {
+    setServerToday('2026-09-23')
+    seedOverview(snapshotOf(serve({ summary: EARLY })))
+    renderPage()
+    await screen.findByText('Net worth — as of Sep 22')
+    const hero = tileFor('Net worth — as of Sep 22')
+    expect(hero.textContent).toContain('Provisional')
+    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583.02 (+15.7%) since Sep 1 · 21 days')
+    expect(screen.queryByText(/MoM/)).toBeNull()
+  })
+
+  it('names the month the change covers between two final 1sts, and its story while it is due', async () => {
+    setServerToday('2026-10-03')
+    const final = summaryOut({ ...EARLY, as_of: '2026-10-01', recorded_on: '2026-10-01', provisional: false, days_since_previous: 30 })
+    const coverage = coverageOut({
+      time: timeStatus('2026-10-03', { flows_due: [flowsPart('2026-09-01', { spending: 'partial' })] }),
+    })
+    seedOverview(snapshotOf(serve({ summary: final, coverage })))
+    renderPage()
+    await screen.findByText('Net worth — as of Oct 1')
+    const hero = tileFor('Net worth — as of Oct 1')
+    expect(hero.textContent).not.toContain('Provisional')
+    await waitFor(() =>
+      expect(deltaOf(hero)?.textContent).toBe(
+        '▲ $126,583.02 (+15.7%) · September: Sep 1 → Oct 1 · spending not complete yet',
+      ),
+    )
+  })
+
+  // Spec review M8: the T1 gap case on the page itself — Oct 1 against Aug 1, September's
+  // balances never recorded: the change says what it is since and how long, not whose story it is.
+  it('names a gap in months: "since Aug 1 · 2 months"', async () => {
+    setServerToday('2026-10-03')
+    const gap = summaryOut({
+      ...EARLY,
+      as_of: '2026-10-01',
+      recorded_on: '2026-10-01',
+      provisional: false,
+      previous: { month: '2026-08-01', as_of: '2026-08-01', recorded_on: '2026-08-01', provisional: false },
+      days_since_previous: 61,
+    })
+    seedOverview(snapshotOf(serve({ summary: gap })))
+    renderPage()
+    await screen.findByText('Net worth — as of Oct 1')
+    const hero = tileFor('Net worth — as of Oct 1')
+    expect(hero.textContent).not.toContain('Provisional')
+    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583.02 (+15.7%) since Aug 1 · 2 months')
+  })
+
+  it('carries the as-of date, the provisional completeness and the reason on its receipt', async () => {
+    setServerToday('2026-09-23')
+    seedOverview(snapshotOf(serve({ summary: EARLY })))
+    renderPage()
+    await screen.findByText('Net worth — as of Sep 22')
+    fireEvent.click(screen.getByRole('button', { name: /^About this number: Net worth/ }))
+    const receipt = await screen.findByText(/in your latest balances\. Recorded Sep 22\. Balances recorded before their date stay provisional until saved again on or after it\./)
+    expect(receipt).toBeTruthy()
+    expect(screen.getAllByText('Provisional — recorded before its date').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('2026-09-22').length).toBeGreaterThan(0)
+  })
+
+  it('reads a snapshot with no recorded date as final, and an owner scope the same way', async () => {
+    setServerToday('2026-09-23')
+    const undated = summaryOut({ recorded_on: null })
+    seedOverview(snapshotOf(serve({ summary: undated })))
+    renderPage()
+    await screen.findByText('Net worth — as of Aug 1')
+    expect(tileFor('Net worth — as of Aug 1').textContent).not.toContain('Provisional')
+    cleanup()
+    seedOverview(snapshotOf(serve({ summary: EARLY })), 1)
+    renderPage('/?owner=1')
+    await screen.findByText('Net worth — as of Sep 22')
+    expect(deltaOf(tileFor('Net worth — as of Sep 22'))?.textContent).toBe('▲ $126,583.02 (+15.7%) since Sep 1 · 21 days')
   })
 })
 
@@ -1162,7 +1284,7 @@ describe('OverviewPage attention strip', () => {
     // filled current tax year. No "all clear" badge either — silence IS the all-clear.
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     expect(screen.queryByRole('navigation', { name: 'Needs attention' })).toBeNull()
   })
@@ -1170,11 +1292,12 @@ describe('OverviewPage attention strip', () => {
   it('keeps actionable data checks separate from the dated calendar agenda', async () => {
     const current = currentMonthIso()
     serve({
-      // Coverage stops TWO months back: previous and current both missing, which is the
-      // one monthly case that fires on any day of the month — pinnable on a real clock.
-      // (The day-7 nudge and the rest of the calendar logic are pinned in
-      // attention.test.ts, where today is injected.)
-      ts: timeseriesOut({ months: [addMonths(current, -4), addMonths(current, -3)] }),
+      // The server says this month's balances are missing and late (2026-09-23 spec §T3) — its
+      // answer is data, so the line is pinnable on a real clock; the rules behind it are
+      // pinned in attention.test.ts, where the day is injected.
+      coverage: coverageOut({
+        time: timeStatus(todayIso(), { balances: balancesPart(current, null, true) }),
+      }),
       lots: lotsOut([lotOut(5)]),
       taxYears: [
         { year: CURRENT_YEAR, notes: null, input_count: 0, bracket_count: 42, filing_status: 'single' },
@@ -1184,10 +1307,10 @@ describe('OverviewPage attention strip', () => {
     renderPage()
 
     const strip = await screen.findByRole('navigation', { name: 'Needs attention' })
-    const update = screen.getByRole('link', {
-      name: /Monthly updates for .* haven't been entered/,
-    })
-    expect(update.getAttribute('href')).toBe('/update')
+    const update = screen.getByRole('link', { name: /balances are overdue — due / })
+    expect(update.getAttribute('href')).toBe(`/update?month=${current}&step=balances`)
+    // Late is a warning: the amber accent, not the to-do's neutral one.
+    expect(update.className).not.toContain('is-todo')
     expect(screen.queryByRole('link', { name: /An ESPP lot qualifies in 5 days/ })).toBeNull()
     expect(screen.getByRole('heading', { name: /Up next/ })).toBeTruthy()
     expect(
@@ -1203,17 +1326,20 @@ describe('OverviewPage attention strip', () => {
     expect(strip.querySelectorAll('a')).toHaveLength(3)
   })
 
-  it('turns the coverage gaps into wizard links for those months', async () => {
-    serve({ coverage: LAGGING })
+  it('turns what is due into wizard links for those months, a to-do until it is late', async () => {
+    serve({
+      coverage: {
+        ...LAGGING,
+        time: timeStatus(todayIso(), { flows_due: [flowsPart(AUG, { spending: 'partial' })] }),
+      },
+    })
     renderPage()
 
     await screen.findByRole('navigation', { name: 'Needs attention' })
     // The strip appends its own arrow glyph, so the accessible name is matched, not equalled.
-    expect(
-      screen
-        .getByRole('link', { name: new RegExp(`^${formatMonth(AUG)} spending was never entered`) })
-        .getAttribute('href'),
-    ).toBe(`/update?month=${AUG}&step=spending`)
+    const flows = screen.getByRole('link', { name: /^Finish August spending and enter take-home/ })
+    expect(flows.getAttribute('href')).toBe(`/update?month=${AUG}&step=spending`)
+    expect(flows.className).toContain('is-todo')
     expect(
       screen
         .getByRole('link', { name: new RegExp(`^${formatMonth(SEP)} was saved with no spending`) })
@@ -1371,6 +1497,10 @@ describe('OverviewPage Start here (2026-09-14 guide spec §7.1)', () => {
       '/guide',
       '/guide?section=routines#routine-monthly',
     ])
+    // The rhythm after setup is the two-part monthly update (2026-09-23 spec §T11).
+    expect(card.textContent).toContain(
+      'After that: one monthly update each month — balances on the 1st; last month’s spending once it has posted.',
+    )
   })
 
   it('is absent once a month exists', async () => {
@@ -1404,7 +1534,7 @@ describe('OverviewPage failures', () => {
     serve()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
 
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     expect(screen.queryByRole('alert')).toBeNull()
     // One snapshot means one round trip per client, twice over: the failed mount and Retry.
     for (const client of [
@@ -1422,7 +1552,7 @@ describe('OverviewPage failures', () => {
     const payload = serve()
     seedOverview(snapshotOf(payload))
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     failAll('overview unavailable')
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
@@ -1431,7 +1561,7 @@ describe('OverviewPage failures', () => {
     expect(screen.getAllByRole('alert').every(banner => banner.textContent?.includes('Showing earlier data for this section.'))).toBe(true)
     // The previous snapshot survives the failure — a dashboard that blanks itself on a
     // dropped connection is worse than one that admits the numbers are a minute old.
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(valueOf(tileFor(HERO))).toBe('$1,234,567.00')
     // failAll fails the money-flow fetch too, and that card dents ITSELF: on ChartCard's
     // grammar a failure with data already on screen keeps the sankey up and adds the
     // card-local advisory + Retry (the frame's "ready + error" rule), so all four charts
@@ -1448,7 +1578,7 @@ describe('OverviewPage failures', () => {
     const payload = serve()
     seedOverview(snapshotOf(payload))
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     const slow = deferred<NetWorthSummary>()
     vi.mocked(fetchSummary).mockReturnValueOnce(slow.promise)
@@ -1456,7 +1586,7 @@ describe('OverviewPage failures', () => {
 
     serve({ summary: summaryOut({ net_worth: '2000000.00' }) })
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
-    await waitFor(() => expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$2,000,000.00'))
+    await waitFor(() => expect(valueOf(tileFor(HERO))).toBe('$2,000,000.00'))
 
     slow.resolve(summaryOut({ net_worth: '999.00' }))
     await act(async () => {
@@ -1464,7 +1594,7 @@ describe('OverviewPage failures', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     // The overtaken snapshot is dropped whole — seqRef, not per-field merging.
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$2,000,000.00')
+    expect(valueOf(tileFor(HERO))).toBe('$2,000,000.00')
   })
 })
 
@@ -1625,7 +1755,7 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
   it('spending bars carry the clicked month into the /spending drill deep link', async () => {
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     fireEvent.click(screen.getAllByTestId('echart')[2]) // bars: first of the 12-month slice
     expect(screen.getByTestId('location').textContent).toBe('/?owner=all')
     expect(screen.getByText('Pinned: Aug 2025')).toBeTruthy()
@@ -1642,7 +1772,7 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
       }),
     })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     fireEvent.click(screen.getAllByTestId('echart')[2])
     expect(screen.getByText('Pinned: Aug 2025')).toBeTruthy()
     fireEvent.click(within(screen.getByRole('article', { name: 'Aug 2025 selected values' })).getByRole('link', { name: 'Open spending' }))
@@ -1652,7 +1782,7 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
   it('uses explicit navigation links after inspecting a chart', async () => {
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     fireEvent.click(screen.getAllByTestId('echart')[1])
     expect(screen.getByTestId('location').textContent).toBe('/?owner=all')
     fireEvent.click(screen.getByRole('link', { name: 'Open portfolio →' }))
@@ -1660,7 +1790,7 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
     cleanup()
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     fireEvent.click(screen.getAllByTestId('echart')[0])
     expect(screen.getByTestId('location').textContent).toBe('/?owner=all')
     fireEvent.click(screen.getByRole('link', { name: 'Open net worth records' }))
@@ -1708,7 +1838,7 @@ it('does not repopulate isolated financial caches when requests resolve after lo
   vi.mocked(fetchCalendar).mockReturnValue(calendar.promise)
   vi.mocked(fetchMoneyFlow).mockReturnValue(flow.promise)
   const view = renderPage()
-  await screen.findByText('Net worth — Aug 2026')
+  await screen.findByText(HERO)
   // Auth logout clears snapshots before ProtectedRoute unmounts the signed-in shell.
   clearSnapshots()
   view.unmount()
@@ -1737,7 +1867,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
     // The hero tile's number is up on the very first paint, with no page skeleton. (The
     // money-flow card carries its OWN status line while its isolated fetch is in flight —
     // that track has no seed here, and it is a card-level state, not the page's.)
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(valueOf(tileFor(HERO))).toBe('$1,234,567.00')
     expect(container.querySelector('.page-skeleton')).toBeNull()
     // Revalidating under the house dim, and the requests really went out.
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
@@ -1765,9 +1895,9 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
     seedOverview(snapshotOf(payload))
     serve({ summary: summaryOut({ net_worth: '2000000.00' }) })
     const { container } = renderPage()
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(valueOf(tileFor(HERO))).toBe('$1,234,567.00')
     await waitFor(() =>
-      expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$2,000,000.00'),
+      expect(valueOf(tileFor(HERO))).toBe('$2,000,000.00'),
     )
     await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
     expect(
@@ -1813,7 +1943,7 @@ describe('OverviewPage — skeleton first paint (2026-08-27 spec §3)', () => {
     // A cache HIT never regresses to a ghost: the real numbers stay up and the reload
     // shows as the house dim (spec §3 — skeletons are cache-miss only).
     expect(container.querySelector('.page-skeleton')).toBeNull()
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(valueOf(tileFor(HERO))).toBe('$1,234,567.00')
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
   })
 })
@@ -1836,8 +1966,8 @@ describe('OverviewPage — hero count-up (2026-08-27 spec §8)', () => {
 
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$0.00')
+    await screen.findByText(HERO)
+    expect(valueOf(tileFor(HERO))).toBe('$0.00')
     // The non-hero tiles never settle — they are up whole on the same paint.
     expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
   })
@@ -1847,7 +1977,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
   it('renders through PageFrame: one h1, actions on the right, no bespoke header', async () => {
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     expect(document.querySelector('.page-frame-header h1')?.textContent).toBe('Overview')
     expect(document.querySelectorAll('h1')).toHaveLength(1)
@@ -1861,7 +1991,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
   it('a reload failure keeps the wealth data and names its own stale group with Retry', async () => {
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
 
     vi.mocked(fetchSummary).mockRejectedValueOnce(new ApiError('offline', 503))
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
@@ -1963,8 +2093,8 @@ describe('OverviewPage — shell frame and owner scope', () => {
     })
     renderPage('/?owner=2')
 
-    await screen.findByText('Net worth — Aug 2026')
-    const hero = tileFor('Net worth — Aug 2026')
+    await screen.findByText(HERO)
+    const hero = tileFor(HERO)
     expect(valueOf(hero)).toBe('—')
     // The person by name, from the household the scope row already fetched.
     expect(deltaOf(hero)?.textContent).toBe('No accounts for Grace yet')
@@ -1987,8 +2117,8 @@ describe('OverviewPage — shell frame and owner scope', () => {
     const payload = serve({ ts: timeseriesOut({ accounts: [] }) })
     seedOverview(snapshotOf(payload))
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    await screen.findByText(HERO)
+    expect(valueOf(tileFor(HERO))).toBe('$1,234,567.00')
     expect(screen.queryByText(/No accounts for/)).toBeNull()
   })
 
@@ -2003,12 +2133,12 @@ describe('OverviewPage — shell frame and owner scope', () => {
     const perfChart = () => screen.getByLabelText(/Line chart of portfolio value against cost basis/)
 
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     expect(categoriesOf(perfChart())).toContain(livePoint)
 
     cleanup()
     renderPage('/?owner=2')
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     // Same holdings payload, same history: only the scope changed, and the ping is gone.
     expect(categoriesOf(perfChart())).not.toContain(livePoint)
   })
@@ -2020,7 +2150,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     // week's balance): 96,000.00 → 114,421.07 against 96,000.00 → 99,001.13 — $15,419.94 ahead.
     serve({ history: historyOut({ market_value: ['96000.00', '97500.00', '114421.07'] }) })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     const card = screen
       .getByLabelText(/Line chart of portfolio value against cost basis/)
       .closest('section') as HTMLElement
@@ -2036,7 +2166,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     serve()
     vi.mocked(fetchHistory).mockImplementation(() => new Promise<never>(() => {}))
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     // No chart yet — the card is its skeleton, found by its title.
     const card = screen.getByText('Portfolio performance').closest('section') as HTMLElement
     expect(card.querySelector('.chart-lede')?.textContent).toBe('\u00a0')
@@ -2048,7 +2178,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     const flat = dates.map(() => '1.00')
     serve({ history: historyOut({ dates, market_value: flat, cost_basis: flat, sp500: flat, benchmark: flat }) })
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     const perf = () => screen.getByLabelText(/Line chart of portfolio value against cost basis/)
     await waitFor(() => expect(perf().getAttribute('data-xlabels')).toBe('12')) // quarter starts
     fireEvent.contextMenu(perf())
@@ -2075,7 +2205,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
   it('draws the portfolio against the same deposits in VOO only — no starting-balance line', async () => {
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     const perf = screen.getByLabelText(/Line chart of portfolio value against cost basis/)
     expect(perf.getAttribute('data-series')).toBe('Portfolio value|Cost basis|Same deposits in VOO|Live')
   })
@@ -2083,7 +2213,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
   it('says so on the two cards an owner scope cannot reach, and nothing when it is All', async () => {
     serve()
     renderPage('/?owner=2')
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     // The hint's button is named by its first four words now (motion spec §8), and this
     // caveat is APPENDED to a sentence — so the only place it can be read is the bubble.
     expect(hintText(/^About Living spending for the/)).toContain(
@@ -2095,7 +2225,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
 
     cleanup()
     renderPage('/?owner=all')
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     expect(hintText(/^About Living spending for the/)).not.toContain('spending has no owner')
     expect(hintText(/^About Portfolio value vs cost/)).not.toContain('weekly checkpoints')
   })
@@ -2112,8 +2242,8 @@ describe('OverviewPage independent groups and preferences', () => {
     // The hero is mid-settle on this fresh paint (spec §8's count-up, which §9's ghost finally
     // lets reach the tile), so its exact string is not pinnable here — what this test is about
     // is that the wealth group is UP: a real tile, no ghost, no dash.
-    expect(tileFor('Net worth — Aug 2026').querySelector('.skeleton')).toBeNull()
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).not.toBe('—')
+    expect(tileFor(HERO).querySelector('.skeleton')).toBeNull()
+    expect(valueOf(tileFor(HERO))).not.toBe('—')
     expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
     expect(valueOf(tileFor(`Estimated tax — ${CURRENT_YEAR} (est.)`))).toBe('$123,456.78')
     expect(valueOf(tileFor('Living spending'))).toBe('—')
@@ -2140,7 +2270,7 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(banner.textContent).toContain('spending and review')
     expect(banner.textContent).toContain('Showing earlier data for this section.')
     expect(valueOf(tileFor('Living spending'))).toBe('$6,000.00')
-    await waitFor(() => expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$2,000,000.00'))
+    await waitFor(() => expect(valueOf(tileFor(HERO))).toBe('$2,000,000.00'))
     expect(screen.getByLabelText(/Line chart of net worth at every monthly snapshot/)).toBeTruthy()
     expect(screen.getByLabelText(/Bar chart of living spending/)).toBeTruthy()
   })
@@ -2150,7 +2280,7 @@ describe('OverviewPage independent groups and preferences', () => {
     const grace = deferred<HoldingsResponse>()
     vi.mocked(fetchHoldings).mockImplementation(owner => owner === 2 ? grace.promise : Promise.resolve(owner === 1 ? holdingsOut({ totals: { ...payload.holdings.totals, market_value: '101.00' } }) : payload.holdings))
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     fireEvent.click(screen.getByLabelText('Line chart of net worth at every monthly snapshot'))
     expect(screen.getByText(`Pinned: ${formatMonth(NW_MONTHS[0])}`)).toBeTruthy()
     fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
@@ -2188,7 +2318,7 @@ describe('OverviewPage independent groups and preferences', () => {
     onTestFinished(() => scroll.mockRestore())
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     fireEvent.click(screen.getByText('Customize'))
     // Space · ↓ · Space on Net worth's grip (2026-09-23 drag spec §6): Portfolio now leads.
     const grip = screen.getByRole('button', { name: 'Reorder Net worth' })
@@ -2221,7 +2351,7 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(document.querySelector('.kpi-row > :last-child')?.textContent).toContain('Living spending')
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
     expect(getLocal('overview_layout')).toEqual(DEFAULT_OVERVIEW_LAYOUT)
-    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Net worth — Aug 2026')
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe(HERO)
     expect(await screen.findByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeTruthy()
   })
 
@@ -2229,7 +2359,7 @@ describe('OverviewPage independent groups and preferences', () => {
     localStorage.setItem(STORAGE_KEYS.overview_layout, JSON.stringify({ tiles: [], cards: ['not-a-card'] }))
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     expect(document.querySelectorAll('.kpi-row .stat-tile')).toHaveLength(4)
     fireEvent.click(screen.getByText('Customize'))
     for (const name of ['Portfolio', 'Living spending', 'Estimated tax']) fireEvent.click(screen.getByRole('checkbox', { name }))
@@ -2243,7 +2373,7 @@ describe('OverviewPage independent groups and preferences', () => {
   it('the Customize popover opens as a dialog, closes on Escape / outside pointer / Done, and names the spending card as titled', async () => {
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     const trigger = screen.getByRole('button', { name: 'Customize' })
     expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
     expect(trigger.getAttribute('aria-expanded')).toBe('false')
@@ -2273,14 +2403,14 @@ describe('OverviewPage independent groups and preferences', () => {
     onTestFinished(() => scroll.mockRestore())
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     const trigger = screen.getByRole('button', { name: 'Customize' })
     fireEvent.click(trigger)
     const grip = screen.getByRole('button', { name: 'Reorder Portfolio' })
     grip.focus()
     for (const key of [' ', 'ArrowUp', 'Escape']) fireEvent.keyDown(grip, { key })
     expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
-    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Net worth — Aug 2026')
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe(HERO)
     expect(getLocal('overview_layout')).toBeUndefined()
     fireEvent.keyDown(grip, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
@@ -2300,7 +2430,7 @@ describe('OverviewPage independent groups and preferences', () => {
     vi.mocked(patchPrefs).mockResolvedValue({ prefs: {} })
     serve()
     renderPage()
-    await screen.findByText('Net worth — Aug 2026')
+    await screen.findByText(HERO)
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
     const tiles = screen.getByRole('group', { name: 'Summary tiles' })
     const live = () => tiles.querySelector('[aria-live="assertive"]')?.textContent
@@ -2317,7 +2447,7 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
     expect([...document.querySelectorAll('.kpi-row .stat-label')].map((label) => label.textContent)).toEqual([
       `Estimated tax — ${CURRENT_YEAR} (est.)`,
-      'Net worth — Aug 2026',
+      HERO,
       'Portfolio',
     ])
     expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
@@ -2388,6 +2518,27 @@ describe('OverviewPage chart cards (charts C2)', () => {
     const card = (await screen.findByRole('heading', { name: /Recent spending/ })).closest('.card') as HTMLElement
     await waitFor(() => expect(within(card).getByLabelText(/Bar chart of living spending/)).toBeTruthy())
     expect(within(card).queryByText('* Month in progress')).toBeNull()
+  })
+
+  // 2026-09-23 spec §T12: an ENDED month whose spending is only partly entered keeps the mark,
+  // and the words say which kind — the server's day and flows, in the fixtures' own year.
+  it('footnotes a partly entered month after it has ended, and names it in the data table', async () => {
+    const last = SPEND_MONTHS.at(-1) as string
+    const after = addMonths(last, 1)
+    setServerToday(`${after.slice(0, 7)}-03`)
+    serve({
+      coverage: coverageOut({
+        time: timeStatus(`${after.slice(0, 7)}-03`, { flows_due: [flowsPart(last, { spending: 'partial' })] }),
+      }),
+    })
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: /Recent spending/ })).closest('.card') as HTMLElement
+    await waitFor(() => expect(within(card).getByText('* Spending partly entered')).toBeTruthy())
+    expect(within(card).queryByText('* Month in progress')).toBeNull()
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    const table = within(card).getByRole('table')
+    const row = within(table).getAllByRole('row').at(-1) as HTMLElement
+    expect(within(row).getByText(/^Spending partly entered \(due by /)).toBeTruthy()
   })
 })
 

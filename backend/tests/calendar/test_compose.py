@@ -10,6 +10,7 @@ from app.services.calendar.generators.custom import CustomRow
 from app.services.calendar.generators.payroll import PaydaySource
 from app.services.calendar.model import Window
 from app.services.calendar.overrides import Override
+from tests.calendar.test_generators import COPY, ritual_status
 
 TODAY = date(2026, 8, 24)
 
@@ -40,7 +41,8 @@ def test_compose_runs_every_family_folds_overlays_and_sorts():
                 3, date(2026, 9, 15), "Zoo membership", None, amount=Decimal("120"), direction="out"
             )
         ],
-        entered_months={date(2026, 7, 1), date(2026, 8, 1), date(2026, 9, 1)},
+        # No month status (2026-09-23 spec §T6): the reminder asks an empty book for its first
+        # balances on Sep 1 and Oct 1 — neither lands in this two-day window.
     )
     events = compose(
         Window(date(2026, 9, 15), date(2026, 9, 16)),
@@ -68,5 +70,29 @@ def test_compose_runs_every_family_folds_overlays_and_sorts():
 
 def test_compose_with_empty_sources_yields_only_the_always_on_families():
     events = compose(Window(date(2026, 9, 1), date(2026, 9, 30)), today=TODAY, sources=Sources())
-    # Tax Q3 + the ritual reminders for August (Sep 1) — nothing else exists.
+    # Tax Q3 + the monthly reminder on Sep 1, asking an empty book for its first balances
+    # (2026-09-23 spec §T6) — nothing else exists.
     assert sorted({e.type for e in events}) == ["tax_deadline", "update_due"]
+    reminder = next(e for e in events if e.type == "update_due")
+    assert (reminder.label, reminder.key) == (
+        "Monthly update — Sep 1 balances",
+        "ritual:2026-08:2026-09-01",
+    )
+
+
+def test_same_day_reminders_read_oldest_month_first():
+    """A backlog re-dated to one day (lane T code review, minor 1): the monthly reminders sort by
+    the month they ask about, oldest first — Oct, Nov, Dec, Jan — not alphabetically by label
+    ("Jan 1…" before "November…" before "Oct 1…")."""
+    today = date(2027, 1, 5)
+    events = compose(
+        Window(today, today),
+        today=today,
+        sources=Sources(month_status=ritual_status(today, **COPY)),
+    )
+    assert [e.key for e in events if e.type == "update_due"] == [
+        "ritual:2026-09:2026-10-01",
+        "ritual:2026-10:2026-11-01",
+        "ritual:2026-11:2026-12-01",
+        "ritual:2026-12:2027-01-01",
+    ]

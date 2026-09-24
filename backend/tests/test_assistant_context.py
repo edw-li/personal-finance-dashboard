@@ -223,6 +223,66 @@ async def test_the_net_worth_section_carries_the_summary_date_fields(db, monkeyp
     assert (summary["previous"]["month"], summary["days_since_previous"]) == ("2026-09-01", 21)
 
 
+async def _seed_the_copys_shape(db, *, far: date | None = None):
+    """Sep 1 recorded on its 1st, Oct 1 recorded early on Sep 22 (the real-data copy), and
+    optionally balances filed further ahead — which are never the current snapshot (K2)."""
+    account = Account(name="Checking", slug="checking", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    rows = [
+        (date(2026, 9, 1), date(2026, 9, 1), "10.00"),
+        (date(2026, 10, 1), date(2026, 9, 22), "20.00"),
+    ]
+    if far is not None:
+        rows.append((far, None, "99.00"))
+    for month, recorded_on, balance in rows:
+        snap = NetWorthSnapshot(month=month, recorded_on=recorded_on)
+        db.add(snap)
+        await db.flush()
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal(balance)))
+    await db.commit()
+
+
+async def test_the_household_section_carries_the_as_of_fields(db, monkeypatch):
+    """T10 (2026-09-23 spec): the household section builds its own dict, so the summary's
+    as-of, provisional flag and comparison ride in it too — a change "since Sep 1 · 21 days"
+    must never read as a month's."""
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+    await _seed_the_copys_shape(db)
+    household = (await build_context(db, route="/", search={}, view={}))["household"]
+    net_worth = household["net_worth"]
+    assert (net_worth["month"], net_worth["as_of"], net_worth["provisional"]) == (
+        "2026-10-01",
+        "2026-09-22",
+        True,
+    )
+    # The summary's fields as they are (spec review M3): the day the balances were typed too.
+    assert net_worth["recorded_on"] == "2026-09-22"
+    assert (net_worth["total"], net_worth["mom_delta"]) == ("20.00", "10.00")
+    assert net_worth["previous"] == {
+        "month": "2026-09-01",
+        "as_of": "2026-09-01",
+        "recorded_on": "2026-09-01",
+        "provisional": False,
+    }
+    assert net_worth["days_since_previous"] == 21
+
+
+async def test_the_net_worth_section_stands_on_the_current_snapshot(db, monkeypatch):
+    """Controller note on T10: balances filed two months ahead are never the current snapshot
+    (K2), so the section's viewed month, its account balances and its summary all stand on
+    Oct 1 — the section used to fall back to the timeseries' LAST month, Dec here."""
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+    await _seed_the_copys_shape(db, far=date(2026, 12, 1))
+    section = (await build_context(db, route="/net-worth", search={}, view={}))["net_worth"]
+    assert section["viewed_month"] == "2026-10-01"
+    assert section["summary"]["month"] == "2026-10-01"
+    assert section["accounts"][0]["latest_balance"] == "20.00"
+    # …and the household summary agrees.
+    household = (await build_context(db, route="/", search={}, view={}))["household"]
+    assert household["net_worth"]["month"] == "2026-10-01"
+
+
 async def test_a_failing_section_degrades_without_taking_the_context_down(db, monkeypatch):
     import app.services.assistant_context as ctx
 

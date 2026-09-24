@@ -5,18 +5,28 @@ import { formatMonth } from '../../utils/format'
 import { addMonths, lastNMonths } from '../../utils/months'
 import { REVIEW_LABELS } from '../../api/monthReview'
 import type { ReviewState } from '../../api/monthReview'
+import type { TimeStatusOut } from '../../types/api'
+import { chipState } from './ribbonStates'
 import './shell.css'
 
 // The app's signature device, second edition (2026-09-03 shell spec §7): a twelve-month
 // window ending at the anchor that pages back to the earliest covered month, year labels where
 // the year turns, a ring on the CURRENT month — which is not always the anchor, since the
 // wizard anchors at max(next entry month, current month) — and TWO-TONE chips: left half
-// balances, right half spending, so "entered" finally means which feed. Click semantics belong
-// to the caller: view pages select a month, the wizard edits one; the Edit link is the other verb.
+// balances, right half spending, so "entered" finally means which feed. Since 2026-09-24 (spec
+// §T8) each half also says HOW it stands — provisional balances and partly entered spending are
+// hatched, a month whose flows are due wears a dot (ribbonStates.ts). Click semantics belong to the
+// caller: view pages select a month, the wizard edits one; the Edit link is the other verb.
 export interface RibbonCoverage {
   balances: ReadonlySet<string>
   spending: ReadonlySet<string>
   reviews?: Record<string, ReviewState>
+  /** coverage.net_pay — the take-home half of a month's flows (spec §T8). */
+  netPay?: ReadonlySet<string>
+  /** coverage.time — what each part's state is and what is due; absent on an older backend. */
+  time?: TimeStatusOut | null
+  /** The book's first balances month, computed once per coverage answer (review minor 4). */
+  firstBalances?: string | null
 }
 
 export const RIBBON_PAGE = 12
@@ -44,6 +54,7 @@ export default function MonthRibbon({
   onSelect,
   figures,
   editHref,
+  defaultMonth,
 }: {
   /** The ribbon's right edge (first-of-month ISO) — the latest month it will show. */
   anchor: string
@@ -63,6 +74,8 @@ export default function MonthRibbon({
   figures?: Record<string, string>
   /** View pages: where "Edit <month>" goes. */
   editHref?: (monthIso: string) => string
+  /** View pages: the month the page shows with nothing selected — what Edit opens then. */
+  defaultMonth?: string
 }) {
   // ‹ › paging is real state, not a memory keyed by anchor+selection: such a key can be
   // re-matched later (Back re-selecting an old month) and revive a window the selected chip is
@@ -85,9 +98,10 @@ export default function MonthRibbon({
   const canGoEarlier = earliest !== null && months[0] > earliest
   const canGoLater = page > 0
   const todayMonth = today ?? anchor
-  // Viewing the latest month still deserves the affordance — the current month is exactly what
-  // the wizard is for — so an unselected view page edits the anchor.
-  const editTarget = selected ?? anchor
+  // Edit opens the month ON SCREEN (2026-09-23 spec §T8): the selection, else the month the page
+  // shows by default (Spending's last complete month, Net worth's current snapshot), else the
+  // anchor — never simply today's month.
+  const editTarget = selected ?? defaultMonth ?? anchor
 
   return (
     <div className="ribbon" role="group" aria-label="Month coverage">
@@ -103,26 +117,19 @@ export default function MonthRibbon({
         <ChevronLeft size={14} aria-hidden="true" />
       </button>
       {months.map((month, index) => {
-        const hasBalances = coverage?.balances.has(month) ?? false
-        const hasSpending = coverage?.spending.has(month) ?? false
+        const chip = coverage === null ? null : chipState(month, coverage)
         const yearTurns = index === 0 || month.slice(0, 4) !== months[index - 1].slice(0, 4)
-        const state =
-          coverage === null
-            ? 'coverage unknown'
-            : hasBalances && hasSpending
-              ? 'balances and spending entered'
-              : hasBalances
-                ? 'balances entered, spending missing'
-                : hasSpending
-                  ? 'spending entered, balances missing'
-                  : 'nothing entered'
         const figure = figures?.[month]
         const reviewState = coverage?.reviews?.[month]
-        const label = `${formatMonth(month)} — ${figure ? `${figure} — ` : ''}${reviewState ? `${REVIEW_LABELS[reviewState]} · ` : ''}${state}`
+        const label = `${formatMonth(month)} — ${figure ? `${figure} — ` : ''}${reviewState ? `${REVIEW_LABELS[reviewState]} · ` : ''}${chip?.words ?? 'coverage unknown'}`
         const classes = [
           'month-chip2',
-          hasBalances ? 'has-balances' : '',
-          hasSpending ? 'has-spending' : '',
+          chip !== null && chip.balances !== 'empty' ? 'has-balances' : '',
+          chip?.balances === 'partial' ? 'balances-provisional' : '',
+          chip?.flows === 'full' ? 'has-spending' : '',
+          chip?.flows === 'partial' ? 'spending-partial' : '',
+          chip?.due === 'due' ? 'is-due' : '',
+          chip?.due === 'overdue' ? 'is-overdue' : '',
           month === todayMonth ? 'is-today' : '',
           month === selected ? 'selected' : '',
           reviewState ? `review-${reviewState}` : '',

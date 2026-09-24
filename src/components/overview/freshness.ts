@@ -1,22 +1,29 @@
-// The freshness sentence the Overview footer prints (2026-09-04 honest-numbers spec §3) —
-// pure, no React, no fetching (attention.ts's posture). One clause per hand-entered feed,
-// each standing on the month it actually has, and the spending clause naming what the
-// window is still waiting for. Balances are the ritual's anchor (spec §3), so "late" is
-// measured against them and nothing else.
-import type { CoverageOut } from '../../types/api'
+// The freshness sentence the Overview's Data status card and Settings › System print
+// (2026-09-04 honest-numbers spec §3; 2026-09-23 spec §T4) — pure, no React, no fetching
+// (attention.ts's posture). One clause per hand-entered feed. Balances are named by the day they
+// describe ("as of Sep 22 — provisional, for Oct 1"); spending and take-home by the newest ENDED
+// month that is complete, then what is still to come: the month in progress, a month partly
+// entered or not entered and whether it is due or overdue. A feed wears amber only when one of
+// its parts is overdue (`GET /coverage` `time`, services/month_status.py) — never merely for
+// trailing the balances, which in the monthly routine it always does: balances are due on the
+// 1st, the month just ended's flows once its charges have posted.
+import type { CoverageOut, FlowsPartOut, TimeStatusOut } from '../../types/api'
+import { formatAsOf } from '../../utils/asOf'
 import { formatMonth } from '../../utils/format'
+import { dayName } from '../../utils/timeWords'
 
 export type FreshnessKey = 'balances' | 'spending' | 'net_pay'
 
 export interface FreshnessClause {
   key: FreshnessKey
-  /** The row's <dt>: "Balances through" while the feed has months, the bare feed name once it never started. */
+  /** The row's <dt>: "Balances as of" / "Spending through" while the feed has months, the bare
+   *  feed name once it never started. */
   label: string
-  /** The row's <dd>: the month (plus the spending gaps), or "no months". */
+  /** The row's <dd>: the date or month, then what is still to come — or "no months". */
   detail: string
-  /** `${label} ${detail}` as one sentence — what the old footer printed. */
+  /** `${label} ${detail}` as one sentence (Settings › System prints this). */
   text: string
-  /** Amber: this feed is at least one whole month behind the balances. */
+  /** Amber: one of this feed's parts is overdue (2026-09-23 spec §T4). */
   lagging: boolean
 }
 
@@ -86,27 +93,108 @@ export function spendingGaps(coverage: CoverageOut): string {
   return more > 0 ? `${named.join(', ')}, +${more} more` : named.join(', ')
 }
 
-/** The three clauses, in reading order. The page prints them with dot separators and wears
- *  the amber class on the ones that lag. */
-export function freshnessClauses(coverage: CoverageOut): FreshnessClause[] {
-  const balances = latestOf(coverage, 'balances')
-  const anchor = balances === null ? null : monthIndex(balances)
-  // A feed with no months at all has never started, which its own clause says out loud;
-  // amber is for a feed that fell BEHIND a running ritual, never for a fresh database.
-  const lags = (month: string | null): boolean =>
-    anchor !== null && month !== null && anchor - monthIndex(month) >= 1
-  const spending = latestOf(coverage, 'spending')
-  const netPay = latestOf(coverage, 'net_pay')
-  const gaps = spendingGaps(coverage)
-  const clause = (key: FreshnessKey, name: string, latest: string | null, tail: string, lagging: boolean): FreshnessClause => {
-    if (latest === null) return { key, label: name, detail: 'no months', text: `${name} — no months`, lagging: false }
-    const detail = `${formatMonth(latest)}${tail}`
-    return { key, label: `${name} through`, detail, text: `${name} through ${detail}`, lagging }
+/** A clause from its parts: "<name> through <month>" or "<name> — no months", then the tail. */
+function clause(key: FreshnessKey, name: string, latest: string | null, tail: string, lagging: boolean): FreshnessClause {
+  if (latest === null) {
+    const detail = `no months${tail}`
+    return { key, label: name, detail, text: `${name} — ${detail}`, lagging }
   }
+  const detail = `${formatMonth(latest)}${tail}`
+  return { key, label: `${name} through`, detail, text: `${name} through ${detail}`, lagging }
+}
+
+/** Without a time status — an empty book, or a backend older than it — the clauses name the
+ *  months each feed has and never wear amber: "a month behind the balances" is the routine, not
+ *  a lapse (2026-09-23 spec §T4). */
+function presenceClauses(coverage: CoverageOut): FreshnessClause[] {
+  const gaps = spendingGaps(coverage)
   return [
-    // The anchor cannot lag itself.
-    clause('balances', 'Balances', balances, '', false),
-    clause('spending', 'Spending', spending, gaps === '' ? '' : ` (${gaps})`, lags(spending)),
-    clause('net_pay', 'Net pay', netPay, '', lags(netPay)),
+    clause('balances', 'Balances', latestOf(coverage, 'balances'), '', false),
+    clause('spending', 'Spending', latestOf(coverage, 'spending'), gaps === '' ? '' : ` (${gaps})`, false),
+    clause('net_pay', 'Net pay', latestOf(coverage, 'net_pay'), '', false),
   ]
+}
+
+/** "Balances as of Sep 22 — provisional, for Oct 1" (+ " · Oct 1 due|overdue" while the current
+ *  month has none, + " · overdue — confirm or update them" once provisional balances are past
+ *  their day, + " · Oct 1 still provisional" for an earlier snapshot never confirmed); amber only
+ *  when the balances are overdue or an earlier snapshot stayed provisional — and never without
+ *  words that say so (code review I2). */
+function balancesClause(time: TimeStatusOut): FreshnessClause {
+  const current = time.current_snapshot
+  const tails: string[] = []
+  if (time.balances.status === 'missing') {
+    tails.push(` · ${dayName(time.balances.due_on)} ${time.balances.overdue ? 'overdue' : 'due'}`)
+  } else if (time.balances.status === 'provisional' && time.balances.overdue) {
+    // The month's own balances, typed early and never saved again on or after its 1st: named by
+    // their day only when the line above them describes other balances (a later early snapshot).
+    const which = current?.month === time.balances.month ? '' : ` ${dayName(time.balances.month)}`
+    tails.push(` ·${which} overdue — confirm or update them`)
+  }
+  const stayed = time.provisional_past[0]
+  if (stayed !== undefined && stayed.month !== current?.month) {
+    tails.push(` · ${dayName(stayed.month)} still provisional`)
+  }
+  const lagging = time.balances.overdue || time.provisional_past.length > 0
+  if (current === null) {
+    const detail = `no months${tails.join('')}`
+    return { key: 'balances', label: 'Balances', detail, text: `Balances — ${detail}`, lagging }
+  }
+  const detail =
+    formatAsOf(current) +
+    (current.provisional ? ` — provisional, for ${dayName(current.month)}` : '') +
+    tails.join('')
+  return { key: 'balances', label: 'Balances as of', detail, text: `Balances as of ${detail}`, lagging }
+}
+
+/** Spending or take-home ("Net pay"): through the newest ended month that is complete, then
+ *  " · Sep in progress" (the running month has entries), the newest month still to come —
+ *  " · Sep partly entered — due" / " · Sep due" / "— overdue" — and any older ones after the
+ *  latest in brackets. Amber when one of those is overdue. An older hole before the latest
+ *  complete month is the attention strip's and the Health card's job, not this line's. */
+function flowsClause(coverage: CoverageOut, time: TimeStatusOut, key: 'spending' | 'net_pay'): FreshnessClause {
+  const current = time.current_month
+  const flows = new Map(time.flows_due.map((part) => [part.month, part]))
+  const lacks = (part: FlowsPartOut | undefined) =>
+    part !== undefined && (key === 'spending' ? part.spending !== 'entered' : !part.take_home_entered)
+  const feed = key === 'spending' ? coverage.spending : coverage.net_pay
+  const complete = [...feed].sort().filter((month) => month < current && !lacks(flows.get(month)))
+  const latest = complete.at(-1) ?? null
+  const reference = (latest ?? latestOf(coverage, 'balances'))?.slice(0, 4) ?? null
+  const tails: string[] = []
+  if (feed.includes(current)) tails.push(` · ${gapName(current, reference)} in progress`)
+  const pending = time.flows_due.filter((part) => lacks(part) && (latest === null || part.month > latest)) // newest first
+  const [newest, ...older] = pending
+  if (newest !== undefined) {
+    const when = newest.overdue ? 'overdue' : 'due'
+    tails.push(
+      key === 'spending' && newest.spending === 'partial'
+        ? ` · ${gapName(newest.month, reference)} partly entered — ${when}`
+        : ` · ${gapName(newest.month, reference)} ${when}`,
+    )
+  }
+  if (older.length > 0) {
+    const empty = new Set(coverage.spending_empty ?? [])
+    const words = [...older].reverse().map((part) => {
+      const word =
+        key === 'spending' && part.spending === 'partial'
+          ? 'partly entered'
+          : key === 'spending' && empty.has(part.month)
+            ? 'empty'
+            : 'missing'
+      return `${gapName(part.month, reference)} ${word}`
+    })
+    const named = words.slice(0, GAP_NAMES)
+    const more = words.length - named.length
+    tails.push(` (${named.join(', ')}${more > 0 ? `, +${more} more` : ''})`)
+  }
+  return clause(key, key === 'spending' ? 'Spending' : 'Net pay', latest, tails.join(''), pending.some((part) => part.overdue))
+}
+
+/** The three clauses, in reading order. The page prints them as dt/dd rows (Settings › System
+ *  as sentences) and wears the amber class on the ones that are overdue. */
+export function freshnessClauses(coverage: CoverageOut): FreshnessClause[] {
+  const time = coverage.time
+  if (time == null) return presenceClauses(coverage)
+  return [balancesClause(time), flowsClause(coverage, time, 'spending'), flowsClause(coverage, time, 'net_pay')]
 }

@@ -43,6 +43,10 @@ export default function EventDetails({
   const [noteBox, setNoteBox] = useState(event.note ?? '')
   const generated = event.id === null
   const overlay = overlayOf(event)
+  // Items that carry no money at all — the monthly reminder's pending parts (2026-09-23 spec §T6)
+  // — list without an amount column: a column of dashes says nothing. A dash still marks ONE
+  // unknown figure among known ones.
+  const priced = event.items.some((item) => item.amount !== null)
   const figureValid = figureBox.trim() === '' || isAmount(figureBox, { expressions: false })
 
   const saveFigure = () => {
@@ -85,7 +89,7 @@ export default function EventDetails({
             // drop one of the rows.
             <li key={`${index}-${item.label}-${item.person_id ?? ''}`}>
               {item.label}
-              <span className="num">{item.amount === null ? '—' : formatCurrency(item.amount)}</span>
+              {priced && <span className="num">{item.amount === null ? '—' : formatCurrency(item.amount)}</span>}
               {item.detail !== null && ` · ${item.detail}`}
             </li>
           ))}

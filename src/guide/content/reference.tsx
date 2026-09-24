@@ -372,6 +372,23 @@ export const REFERENCE_CARDS: GuideCard[] = [
           One month&apos;s balances, one row per account, written by the monthly update. Also the export
           ZIP of everything, written nightly — the Backups card means this one.
         </dd>
+        <dt>Balances as of</dt>
+        <dd>The day your balances describe — the 1st of the month.</dd>
+        <dt>Provisional balances</dt>
+        <dd>Recorded before their date; final once saved again on or after it.</dd>
+        <dt>A month’s story</dt>
+        <dd>Its spending and take-home, and the net-worth change from its 1st to the next 1st.</dd>
+        <dt>Due · overdue</dt>
+        <dd>
+          The monthly update’s two parts: balances are due on the 1st and overdue from the 7th; a month’s
+          spending and take-home are due once it ends and overdue from the 16th of the next month. The
+          overdue days move with the reminder day in Settings → Integrations → Calendar feed.
+        </dd>
+        <dt>Partly entered spending</dt>
+        <dd>
+          Spending saved while the month was still running — it counts once you save the month again after
+          it ends or confirm it is complete.
+        </dd>
         <dt>Derived parent · component account</dt>
         <dd>A parent whose balance is the sum of its components: you type the components, the parent is read-only.</dd>
         <dt>Retired</dt>

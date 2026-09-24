@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { SnapshotStateOut } from '../types/api'
-import { asOfPhrase, changePhrase, formatAsOf, storyNote } from './asOf'
+import { LONG_MONTHS, asOfPhrase, changePhrase, dayLabel, dayPhrase, formatAsOf, isMonthStory, provisionalNote, storyNote } from './asOf'
 import { setServerToday } from './productToday'
 
 const final = (month: string): SnapshotStateOut => ({ month, as_of: month, recorded_on: month, provisional: false })
@@ -57,6 +57,36 @@ describe('changePhrase', () => {
   })
 })
 
+// One spelling for every surface (review minors 6, 7): the lists and the day label are exported, and
+// the structure behind the words is asked for directly — never parsed back out of a phrase.
+describe('the shared spellings and structure', () => {
+  it('names the months once, in calendar order', () => {
+    expect(LONG_MONTHS).toHaveLength(12)
+    expect([LONG_MONTHS[0], LONG_MONTHS[8], LONG_MONTHS[11]]).toEqual(['January', 'September', 'December'])
+  })
+
+  it('spells a day with the server’s year rule', () => {
+    expect(dayLabel('2026-10-01')).toBe('Oct 1')
+    expect(dayLabel('2025-10-01')).toBe('Oct 1, 2025')
+  })
+
+  it('says a day and its standing without the "as of" — the phrase asOfPhrase is built from', () => {
+    expect(dayPhrase(early('2026-10-01', '2026-09-22'))).toBe('Sep 22 · provisional')
+    expect(dayPhrase(final('2026-10-01'))).toBe('Oct 1')
+    expect(dayPhrase(unknown('2026-10-01'))).toBe('date unknown · provisional')
+    expect(asOfPhrase(early('2026-10-01', '2026-09-22'))).toBe(`as of ${dayPhrase(early('2026-10-01', '2026-09-22'))}`)
+  })
+
+  it('knows when a change is one month’s story — both final, consecutive, by month', () => {
+    expect(isMonthStory(final('2026-09-01'), final('2026-10-01'))).toBe(true)
+    expect(isMonthStory(final('2026-09-01'), early('2026-10-01', '2026-09-22'))).toBe(false)
+    expect(isMonthStory(early('2026-10-01', '2026-09-22'), final('2026-11-01'))).toBe(false)
+    expect(isMonthStory(final('2026-08-01'), final('2026-10-01'))).toBe(false)
+    expect(isMonthStory(final('2026-06-01'), final('2026-09-01'), { period: 'quarter' })).toBe(false)
+    expect(isMonthStory(null, final('2026-10-01'))).toBe(false)
+  })
+})
+
 describe('storyNote', () => {
   it('only while the month is listed in flows_due, and only about its spending', () => {
     expect(storyNote({ spending: 'missing' })).toBe(' · spending not entered yet')
@@ -64,6 +94,23 @@ describe('storyNote', () => {
     expect(storyNote({ spending: 'entered' })).toBe('')
     expect(storyNote(undefined)).toBe('')
     expect(storyNote(null)).toBe('')
+  })
+})
+
+// Why a point is provisional, in one sentence every chart shares (2026-09-23 spec §T1, §T7, §R8):
+// the Overview trend, the Net worth charts and the Projection's hollow dot.
+describe('provisionalNote', () => {
+  it('names the balances and the day they were typed', () => {
+    expect(provisionalNote('2026-10-01', '2026-09-22')).toBe('Oct 1 balances recorded early, on Sep 22 — provisional')
+  })
+
+  it('says why when there is no early date (a month still ahead)', () => {
+    expect(provisionalNote('2026-12-01', null)).toBe('Dec 1 balances — provisional until Dec 1')
+    expect(provisionalNote('2026-12-01', undefined)).toBe('Dec 1 balances — provisional until Dec 1')
+  })
+
+  it('carries the year outside the server’s year', () => {
+    expect(provisionalNote('2027-01-01', '2026-12-28')).toBe('Jan 1, 2027 balances recorded early, on Dec 28 — provisional')
   })
 })
 

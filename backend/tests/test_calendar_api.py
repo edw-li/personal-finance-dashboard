@@ -16,6 +16,8 @@ from app.models import (
     EsppLot,
     EsppOffering,
     LatestPrice,
+    MonthlyCashflow,
+    MonthlySpending,
     NetWorthSnapshot,
     PaycheckProfile,
     Person,
@@ -23,6 +25,7 @@ from app.models import (
     RsuGrant,
     Security,
     SecurityDividendEvent,
+    SpendingCategory,
     TaxBracket,
     TaxInput,
     TaxYear,
@@ -222,7 +225,7 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
         )
     )
     # Semi-monthly profile (model default pay_periods_per_year=24) -> paydays; a June
-    # snapshot exists but July 2026 does not -> update_due.
+    # snapshot and nothing after it -> the monthly reminder lists what is pending.
     db.add(
         PaycheckProfile(
             person_id=(await seed_primary(db)).id,
@@ -283,13 +286,30 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     assert [(e["date"], e["detail"]) for e in by_type["tax_deadline"]] == [
         ("2026-09-15", "Q3 estimated payment")
     ]
-    # August's reminder (enter July) was due Aug 1 — overdue, re-dated to today with its
-    # key unchanged; September's (enter August) is scheduled.
+    # The Aug 1 reminder (Aug 1 balances, July's spending & take-home) was due Aug 1 — pending,
+    # re-dated to today with its key unchanged; Sep 1's is scheduled (2026-09-23 spec §T6). July's
+    # own reminder (only June's balances are on file) lies before the window but is re-dated to a
+    # today inside it, so it is drawn too — the window follows the event's date (review minor 1).
+    # It asks only for June's spending & take-home, which the month status lists as due: Jul 1's
+    # missing balances are a gap in the history, not a to-do — K asks only for this month's
+    # (controller decision (a)).
+    # Same-day reminders read oldest month first (code review, minor 1).
     assert [(e["date"], e["label"], e["key"], e["href"]) for e in by_type["update_due"]] == [
-        ("2026-08-24", "Monthly update — enter July 2026", "ritual:2026-07:2026-08-01", "/update"),
+        (
+            "2026-08-24",
+            "Monthly update — June spending & take-home",
+            "ritual:2026-06:2026-07-01",
+            "/update",
+        ),
+        (
+            "2026-08-24",
+            "Monthly update — Aug 1 balances · July spending & take-home",
+            "ritual:2026-07:2026-08-01",
+            "/update",
+        ),
         (
             "2026-09-01",
-            "Monthly update — enter August 2026",
+            "Monthly update — Sep 1 balances · August spending & take-home",
             "ritual:2026-08:2026-09-01",
             "/update",
         ),
@@ -299,8 +319,16 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     assert [(e["date"], e["detail"]) for e in by_type["espp_purchase"]] == [
         ("2026-08-31", "Mar–Aug 2026")
     ]
-    # The payload is sorted by (date, type, label) end to end.
-    assert events == sorted(events, key=lambda e: (e["date"], e["type"], e["label"]))
+    # The payload is sorted by (date, type, label) end to end — the monthly reminders by the
+    # month they ask about (entity_ref), oldest first.
+    assert events == sorted(
+        events,
+        key=lambda e: (
+            e["date"],
+            e["type"],
+            e["entity_ref"] if e["type"] == "update_due" else e["label"],
+        ),
+    )
 
 
 async def test_calendar_omits_paydays_for_other_cadences(auth_client, db, monkeypatch):
@@ -319,16 +347,81 @@ async def test_calendar_omits_paydays_for_other_cadences(auth_client, db, monkey
     assert [e for e in resp.json()["events"] if e["type"] == "payday"] == []
 
 
-async def test_calendar_update_due_only_scheduled_when_previous_month_entered(
-    auth_client, db, monkeypatch
-):
+async def test_calendar_reminder_honours_the_saved_reminder_day(auth_client, db, monkeypatch):
+    """The reminder day comes from the month status the router already loads (review minor 9):
+    day 5 puts the Sep reminder on Sep 5 under its day-5 key, and the source line says so."""
+    freeze_today(monkeypatch)  # Aug 24
+    db.add(AppSetting(key="calendar_update_due_day", value={"value": 5}))
+    db.add(NetWorthSnapshot(month=date(2026, 8, 1), recorded_on=date(2026, 8, 1)))
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    assert [(e["date"], e["key"]) for e in body["events"] if e["type"] == "update_due"] == [
+        ("2026-09-05", "ritual:2026-08:2026-09-05")
+    ]
+    ritual = next(s for s in body["sources"] if s["source"] == "ritual")
+    assert ritual["note"] == "reminder on day 5 of each month"
+
+
+async def test_calendar_reminder_lists_the_pending_parts(auth_client, db, monkeypatch):
+    """T6 (2026-09-23 spec): one reminder per month on the reminder day, listing that day's
+    balances and the previous month's spending & take-home while they are pending — read from
+    the month status /coverage computes. A July snapshot on its 1st and nothing else: the Aug 1
+    reminder is overdue on both parts (balances from the 7th, flows from the 16th)."""
+    freeze_today(monkeypatch)  # Aug 24
+    db.add(NetWorthSnapshot(month=date(2026, 7, 1), recorded_on=date(2026, 7, 1)))
+    await db.commit()
+    resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")
+    events = [e for e in resp.json()["events"] if e["type"] == "update_due"]
+    assert [(e["date"], e["label"], e["key"], e["detail"]) for e in events] == [
+        (
+            "2026-08-24",
+            "Monthly update — Aug 1 balances · July spending & take-home",
+            "ritual:2026-07:2026-08-01",
+            "Overdue — Aug 1 balances were due Aug 1; July spending & take-home was due by Aug 15",
+        ),
+        (
+            "2026-09-01",
+            "Monthly update — Sep 1 balances · August spending & take-home",
+            "ritual:2026-08:2026-09-01",
+            None,
+        ),
+    ]
+    assert events[0]["items"] == [
+        {
+            "label": "Aug 1 balances",
+            "amount": None,
+            "person_id": None,
+            "detail": "not recorded yet",
+        },
+        {
+            "label": "July spending & take-home",
+            "amount": None,
+            "person_id": None,
+            "detail": "not entered",
+        },
+    ]
+
+
+async def test_calendar_reminder_is_silent_once_both_parts_are_in(auth_client, db, monkeypatch):
+    """Aug 1 balances recorded on the 1st and July entered in full: nothing is pending for
+    the Aug 1 reminder, so it does not exist — only September's is scheduled."""
     freeze_today(monkeypatch)
-    db.add(NetWorthSnapshot(month=date(2026, 7, 1)))
+    category = SpendingCategory(name="Food", slug="food", sort_order=1)
+    db.add(category)
+    await db.flush()
+    db.add_all(
+        [
+            NetWorthSnapshot(month=date(2026, 7, 1), recorded_on=date(2026, 7, 1)),
+            NetWorthSnapshot(month=date(2026, 8, 1), recorded_on=date(2026, 8, 1)),
+            MonthlySpending(month=date(2026, 7, 1), category_id=category.id, amount=Decimal("5")),
+            MonthlyCashflow(month=date(2026, 7, 1), net_pay=Decimal("100")),
+        ]
+    )
     await db.commit()
     resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")
     assert [
         (e["date"], e["label"]) for e in resp.json()["events"] if e["type"] == "update_due"
-    ] == [("2026-09-01", "Monthly update — enter August 2026")]
+    ] == [("2026-09-01", "Monthly update — Sep 1 balances · August spending & take-home")]
 
 
 async def test_custom_event_crud_roundtrip(auth_client):

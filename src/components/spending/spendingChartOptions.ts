@@ -30,14 +30,14 @@ import {
   offScaleMarkPoint,
   offScaleMarks,
   partialItemStyle,
-  partialNote,
   pctAxis,
   percentLabel,
   robustMax,
   stagger,
 } from '../../charts/grammar'
 import type { OffScalePoint } from '../../charts/grammar'
-import { markedLabels, partialMonths, periodColumn } from '../../charts/partial'
+import { markedLabels } from '../../charts/partial'
+import { drawnPartial, partlyEnteredMonths, periodColumnFor, periodNote } from '../../charts/partlyEntered'
 import { legendFor } from '../../charts/legend'
 import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
@@ -45,7 +45,7 @@ import { INK, MUTED, PALETTE, SURFACE } from '../../charts/theme'
 import { rangeZoom, resolvedWindow } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
 import { axisTooltip, itemTooltip } from '../../charts/tooltip'
-import type { SpendingMatrix } from '../../types/api'
+import type { FlowsPartOut, SpendingMatrix } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { buildMonthSlices } from './monthSlices'
 
@@ -54,17 +54,18 @@ import { buildMonthSlices } from './monthSlices'
  * the bars draw, plus Other, the server's Total and Net pay — the export echoes the
  * displayed chart, verbatim server strings. Null cells go empty, never '0.00': absent
  * is not zero. With a today, a month in progress adds a trailing Period column that names
- * it (the 2026-09-23 code review, 13: the bars' '*' in words, for the table twin and the CSV).
+ * it (the 2026-09-23 code review, 13: the bars' '*' in words, for the table twin and the CSV) —
+ * and so does a partly entered one (2026-09-23 spec §T12).
  */
 export function spendingCsv(
   matrix: Pick<SpendingMatrix, 'months' | 'series' | 'totals' | 'net_pay' | 'cash_outflow' | 'living_total' | 'tax_total' | 'transfer_total' | 'review_state'>,
   topIds: number[],
   nameById: Map<number, string>,
-  { todayIso = null }: { todayIso?: string | null } = {},
+  { todayIso = null, flowsDue = null }: { todayIso?: string | null; flowsDue?: readonly FlowsPartOut[] | null } = {},
 ): ExportTable {
   const topSet = new Set(topIds)
   const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
-  const period = periodColumn(matrix.months, todayIso)
+  const period = periodColumnFor(matrix.months, todayIso, partlyEnteredMonths(flowsDue))
   return {
     headers: [
       'Month',
@@ -121,6 +122,9 @@ export interface SpendingBarsInput {
   todayIso?: string | null
   /** Appearance › Chart patterns (useChartDecals): the month in progress hatched, not faded. */
   patterns?: boolean
+  /** `GET /coverage` `time.flows_due` (2026-09-23 spec §T12): a month listed with spending
+   *  PARTIAL keeps the in-progress look after it has ended. */
+  flowsDue?: readonly FlowsPartOut[] | null
 }
 
 /**
@@ -131,15 +135,18 @@ export interface SpendingBarsInput {
  * The month in progress (spec §C5) adds only the net-pay marker, right after its line.
  */
 export function spendingBarsOption({
-  matrix, fold, nameById, monthLabels, range, selected, todayIso = null, patterns = false,
+  matrix, fold, nameById, monthLabels, range, selected, todayIso = null, patterns = false, flowsDue = null,
 }: SpendingBarsInput): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const topIds = fold.ids
   const topSet = new Set(topIds)
   const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
   // 2026-09-23 spec §C5: every segment of the month in progress wears the partial look in its
-  // own colour (a gap stays a gap — A6), so the stack reads as a figure still growing.
-  const partial = partialMonths(matrix.months, todayIso)
+  // own colour (a gap stays a gap — A6), so the stack reads as a figure still growing — and so
+  // does every segment of a month whose spending is only partly entered, after it has ended
+  // (§T12: September's rent alone, drawn as a whole month, reads as a very cheap month).
+  const partly = partlyEnteredMonths(flowsDue)
+  const partial = drawnPartial(matrix.months, todayIso, partly)
   const drawn = (values: (number | null)[], color: string) =>
     values.map((v, i) => (v === null || !partial[i] ? v : { value: v, itemStyle: partialItemStyle(color, patterns) }))
   // A6: absent ≠ zero. Nulls flow THROUGH to the series so an unentered month gaps the bar;
@@ -213,6 +220,9 @@ export function spendingBarsOption({
         name: 'Net pay',
         color: INK,
         z: 10,
+        // Its one symbol is the whole series: never culled when the axis thins its labels (echarts'
+        // showAllSymbol 'auto'; code review I1).
+        showAllSymbol: true,
         data: partialPay.map((v) =>
           v === null ? null : { value: v, symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(INK, false) },
         ),
@@ -279,7 +289,7 @@ export function spendingBarsOption({
       references: [SUSTAINABLE_SPEND, 'Total budget'],
       absentText: 'no spending entered',
       pointer: 'shadow',
-      headNote: (i) => (typeof todayIso === 'string' && partial[i] ? partialNote(matrix.months[i], todayIso) : null),
+      headNote: (i) => (partial[i] ? periodNote(matrix.months[i], todayIso, partly) : null),
     }),
     xAxis: monthAxis(monthLabels, { gap: true, marked: markedLabels(monthLabels, partial) }),
     yAxis: moneyAxis({ robust }),

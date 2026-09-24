@@ -1,6 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { cleanup, render } from '@testing-library/react'
+import { createElement } from 'react'
+import { MemoryRouter } from 'react-router-dom'
+import { afterEach, describe, expect, it } from 'vitest'
 import { NAV_ITEMS } from '../components/navItems'
 import { SETTINGS_SECTIONS } from '../components/paletteRegistry'
 import { allIds, chapterOf } from './anchors'
@@ -210,8 +213,55 @@ describe('guide content — completeness, shape and uniqueness (spec §8.3)', ()
   })
 })
 
-// The user's coverage list (spec §5.4). Live since lane V retired the pending list: every
-// content lane has landed, so a missing id is a hole in the guide, not a lane still working.
+// The time model in the reader's words (2026-09-23 spec §T11): the glossary names the balance
+// date and the words the pages now use, and the monthly rhythm is the two-part update.
+describe('guide content — the time model (2026-09-23 spec §T11)', () => {
+  afterEach(cleanup)
+  const bodyText = (id: string): string => {
+    const card = allCards.find(({ card }) => card.id === id)?.card
+    expect(card, id).toBeDefined()
+    return render(createElement(MemoryRouter, null, card?.body)).container.textContent ?? ''
+  }
+
+  it('the glossary defines the balance date, provisional balances, a month’s story, due and overdue, and partly entered spending', () => {
+    const glossary = bodyText('ref-glossary')
+    for (const [term, definition] of [
+      ['Balances as of', 'The day your balances describe — the 1st of the month.'],
+      ['Provisional balances', 'Recorded before their date; final once saved again on or after it.'],
+      ['A month’s story', 'Its spending and take-home, and the net-worth change from its 1st to the next 1st.'],
+      ['Due · overdue', 'balances are due on the 1st and overdue from the 7th'],
+      ['Partly entered spending', 'it counts once you save the month again after it ends or confirm it is complete'],
+    ]) {
+      expect(glossary, term).toContain(term)
+      expect(glossary, term).toContain(definition)
+    }
+    expect(glossary).toContain('overdue from the 16th of the next month')
+  })
+
+  it('the monthly rhythm is balances on the 1st and last month’s spending once it has posted', () => {
+    expect(bodyText('start-next')).toContain('balances on the 1st; last month’s spending once it has posted')
+  })
+})
+
+// After lanes R and W landed: the setup steps name the new Plan until (year) field and the filing
+// status's own door, W8's **Change…** — not a "Filing status" control that no longer exists.
+describe('guide content — the setup steps follow the merged pages', () => {
+  const stepsOf = (id: string) => allTasks.find(({ task }) => task.id === id)?.task.steps.join(' ') ?? ''
+
+  it('names Plan until (year) among the plan assumptions', () => {
+    expect(stepsOf('setup-limits')).toContain('withdrawal rate, Plan until (year), ESPP ticker and discount')
+  })
+
+  it('says Up next keeps one monthly-update row (lane T code review, decision (b))', () => {
+    expect(stepsOf('overview-up-next')).toContain('at most one payday and one monthly update')
+  })
+
+  it('sets a new year’s filing status with Change…', () => {
+    expect(stepsOf('setup-taxes')).toContain('set its filing status with **Change…**')
+    expect(stepsOf('setup-taxes')).not.toContain('**Filing status**')
+  })
+})
+
 describe('guide content — the Projection card claims no direction it cannot know', () => {
   it('names both ways the model’s omissions move the money-lasts share (2026-09-24 review minor 3)', () => {
     const card = allCards.find(({ card }) => card.id === 'page-projection')?.card
@@ -222,6 +272,8 @@ describe('guide content — the Projection card claims no direction it cannot kn
   })
 })
 
+// The user's coverage list (spec §5.4). Live since lane V retired the pending list: every
+// content lane has landed, so a missing id is a hole in the guide, not a lane still working.
 describe('guide content — required coverage (spec §5.4)', () => {
   const REQUIRED = [
     'accounts-add', 'accounts-owner', 'cards-owner', 'paycheck-person', 'update-balances', 'update-spending', 'update-close',

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from urllib.parse import urlsplit
 
 import jwt
@@ -12,14 +13,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import MonthlySpending, NetWorthSnapshot, SpendingCategory
+from app.models import MonthlySpending, SpendingCategory
 from app.schemas.assistant_findings import EvidenceBundle
 from app.schemas.metrics import MetricComponent, MetricEvidence, MetricWindow
 from app.services import clock
 from app.services.assistant_context import _selected_id, _view_month
+from app.services.day_labels import month_name
 from app.services.metrics import load_spending_metrics
-from app.services.month_review import month_shift
+from app.services.month_review import day_label, month_shift
 from app.services.paycheck_calc import half_up2
+from app.services.snapshot_state import SnapshotState, load_snapshot_states
 
 RECEIPT_TTL = timedelta(days=7)
 SOURCE_PATHS = frozenset(
@@ -215,6 +218,89 @@ def captured_month(context: dict) -> date | None:
     )
 
 
+def _month_story(
+    month: date,
+    opening: SnapshotState,
+    closing: SnapshotState | None,
+    net_worth: Decimal | None,
+    change: Decimal | None,
+    today: date,
+) -> list[MetricEvidence]:
+    """M's balances and M's own change (2026-09-23 spec §T10). `net_worth` = the {Sep 1}
+    balances; `net_worth_change` = the next 1st's minus this 1st's, "{September}: balances {Sep
+    1} → {Oct 1}" — provisional while the next 1st's balances were recorded early, unavailable
+    until they exist; its as-of is the next 1st's. The change's definition version moves to v2:
+    until 2026-09-24 the same id meant the change INTO the month."""
+    first, after = day_label(month, today), month_shift(month, 1)
+    next_first = day_label(after, today)
+    name = month_name(month, today.year)
+    recorded = (
+        ""
+        if opening.recorded_on is None
+        else f" (recorded {day_label(opening.recorded_on, today)})"
+    )
+    balances = MetricEvidence(
+        id="net_worth",
+        definition_version="net-worth-v1",
+        label=f"Net worth — {first} balances",
+        value=net_worth,
+        definition=f"Assets minus liabilities in the {first} balances{recorded}, with signed "
+        "liabilities and component rollups.",
+        completeness="unavailable"
+        if net_worth is None
+        else "provisional"
+        if opening.provisional
+        else "complete",
+        window=MetricWindow(
+            from_month=month,
+            to_month=month,
+            included=[month],
+            excluded=[],
+            unreviewed_history_count=0,
+        ),
+        source_link=f"/net-worth?month={month}",
+        source_label="Recorded balance snapshots",
+        as_of=opening.as_of,
+    )
+    if closing is None:
+        definition = f"{next_first} balances not recorded yet."
+        completeness = "unavailable"
+    else:
+        definition = (
+            f"{name}: balances {first} → {next_first}. The change between two recorded balance "
+            "dates; it does not isolate investment return."
+        )
+        if closing.provisional:
+            early = (
+                f", on {day_label(closing.recorded_on, today)}"
+                if closing.recorded_on is not None
+                else ""
+            )
+            definition += (
+                f" The {next_first} balances were recorded early{early}, and are provisional."
+            )
+        completeness = "provisional" if closing.provisional else "complete"
+    story = MetricEvidence(
+        id="net_worth_change",
+        definition_version="net-worth-v2",
+        label=f"{name}'s net-worth change",
+        value=change if closing is not None else None,
+        definition=definition,
+        completeness=completeness,
+        window=MetricWindow(
+            from_month=month,
+            to_month=after,
+            included=[month, after] if closing is not None else [month],
+            excluded=[],
+            unreviewed_history_count=0,
+        ),
+        source_link=f"/net-worth?month={after if closing is not None else month}",
+        source_label="Recorded balance snapshots",
+        as_of=None if closing is None else closing.as_of,
+    )
+    return [balances, story]
+
+
 async def month_review_bundle(
     db: AsyncSession,
     context: dict,
@@ -227,71 +313,24 @@ async def month_review_bundle(
     selected = found.month
     metrics = [*found.metrics, found.comparison, found.rolling]
     if selected is not None:
-        from app.api.net_worth import summary
+        # A month's story (2026-09-23 spec §T10): M's spending sits beside M's OWN net-worth
+        # change — the balances on M's 1st to those on the next 1st — never beside the change
+        # INTO M, which is the previous month's story.
+        today = clock.product_today()
+        states = {state.month: state for state in await load_snapshot_states(db, today)}
+        opening = states.get(selected)
+        if opening is not None:
+            from app.api.net_worth import summary
 
-        try:
             balances = await summary(month=selected, db=db)
-        except HTTPException:
-            balances = None
-        if balances and balances.month == selected:
-            snapshots = list(
-                (
-                    await db.execute(
-                        select(NetWorthSnapshot)
-                        .where(NetWorthSnapshot.month <= selected)
-                        .order_by(NetWorthSnapshot.month.desc())
-                        .limit(2)
-                    )
-                ).scalars()
+            after = month_shift(selected, 1)
+            closing = states.get(after)
+            # The summary of M+1 compares it with the snapshot immediately before it — M,
+            # which exists here — so its delta IS M's change.
+            change = (await summary(month=after, db=db)).mom_delta if closing else None
+            metrics.extend(
+                _month_story(selected, opening, closing, balances.net_worth, change, today)
             )
-            stamp = snapshots[0].recorded_on or selected
-            previous_snapshot = snapshots[1] if len(snapshots) > 1 else None
-            previous_stamp = (
-                previous_snapshot.recorded_on or previous_snapshot.month
-                if previous_snapshot
-                else None
-            )
-            for key, label, value, definition in (
-                (
-                    "net_worth",
-                    "Net worth snapshot",
-                    balances.net_worth,
-                    f"The {selected:%B %Y} balance snapshot (recorded {stamp}), "
-                    "with signed liabilities and component rollups.",
-                ),
-                (
-                    "net_worth_change",
-                    "Change from prior balance snapshot",
-                    balances.mom_delta,
-                    f"Difference between the balance snapshots recorded {stamp} and "
-                    f"{previous_stamp or 'no preceding date'}. Snapshot dates remain "
-                    "separate from the spending period.",
-                ),
-            ):
-                metrics.append(
-                    MetricEvidence(
-                        id=key,
-                        definition_version="net-worth-v1",
-                        label=label,
-                        value=value,
-                        definition=definition,
-                        completeness="complete" if value is not None else "unavailable",
-                        window=MetricWindow(
-                            from_month=previous_snapshot.month
-                            if key == "net_worth_change" and previous_snapshot
-                            else selected,
-                            to_month=selected,
-                            included=[previous_snapshot.month, selected]
-                            if key == "net_worth_change" and previous_snapshot
-                            else [selected],
-                            excluded=[],
-                            unreviewed_history_count=0,
-                        ),
-                        source_link=f"/net-worth?month={selected}",
-                        source_label="Recorded balance snapshots",
-                        as_of=stamp,
-                    )
-                )
         previous = month_shift(selected, -1)
         spending = (
             await db.execute(
@@ -343,17 +382,17 @@ async def month_review_bundle(
             "to start a completed-month review."
         )
     else:
-        title = f"{selected:%B %Y} review"
+        title = f"{month_name(selected)} {selected.year} review"
         state = found.review.state.replace("_", " ") if found.review else "unavailable"
-        text = f"{selected:%B %Y} · {state}. "
+        text = f"{month_name(selected)} {selected.year} · {state}. "
         text += f"Living spending: [[metric:{core['living_spending'].id}]]. "
         text += "Previous 12-month average: "
         text += f"[[metric:{core['living_spending_comparison_average'].id}]]. "
         text += f"Cash saved: [[metric:{core['cash_saved'].id}]]."
         if topic == "spending_changes":
-            title = f"{selected:%B %Y} spending changes"
+            title = f"{month_name(selected)} {selected.year} spending changes"
             changes = [metric for key, metric in core.items() if key.startswith("category_change_")]
-            text = f"{selected:%B %Y} · {state}. "
+            text = f"{month_name(selected)} {selected.year} · {state}. "
             text += f"Living spending: [[metric:{core['living_spending'].id}]]. "
             text += "Previous 12-month average: "
             text += f"[[metric:{core['living_spending_comparison_average'].id}]]. "

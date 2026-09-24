@@ -194,6 +194,19 @@ def test_an_early_snapshot_never_saved_again_is_named_after_its_month_but_legacy
     assert legacy.time().provisional_past == []
 
 
+def test_every_provisional_snapshot_month_is_listed_legacy_and_ahead_included():
+    """T8 (spec review M9): the ribbon's balances half follows snapshot_state's flag for EVERY
+    snapshot — the server's one rule. provisional_past leaves legacy months out (Needs attention
+    does not nag about history); the chip must still read a legacy month recorded early as
+    provisional, and balances filed ahead of their month too."""
+    snapshots = [(SEP, SEP), (OCT, date(2026, 9, 22)), (NOV, NOV), (m(2027, 2), date(2026, 11, 3))]
+    feeds = {"spending": {SEP, OCT}, "take_home": {SEP, OCT}}
+    legacy = book(date(2026, 11, 5), snapshots=snapshots, adopted_on=date(2026, 11, 2), **feeds)
+    time = legacy.time()
+    assert time.provisional_past == []
+    assert time.provisional_months == [OCT, m(2027, 2)]
+
+
 def test_an_empty_book_has_no_time_status():
     assert book(date(2026, 9, 23), empty_book=True).time() is None
 

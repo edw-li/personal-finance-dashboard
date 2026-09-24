@@ -472,6 +472,16 @@ describe('netWorthProjectionOption', () => {
     expect(withAlpha(PALETTE[0], 0)).toMatch(/^#[0-9a-f]{6}00$/i)
   })
 
+  // Code review I1 (the integration owner's check): a LINE series culls per-point symbols once its
+  // category axis thins its labels; the dots are a scatter series, which draws every point — so the
+  // hollow provisional dot survives any history. Pinned, so a change of series type must think.
+  it('keeps the hollow dot on a long history — the dots are a scatter, which never culls', () => {
+    const history = { ...HISTORY, provisional: [false, false, true], recorded_on: [null, '2026-07-01', '2026-07-22'] }
+    const dots = readNw(netWorthProjectionOption(history, FIT, '2026-08-01', 40)).series[0] as { type?: string; large?: boolean }
+    expect(dots.type).toBe('scatter')
+    expect(dots.large).toBeUndefined()
+  })
+
   it('says in the tooltip head why a dot is hollow — T1\'s sentence (2026-09-23 spec §R8)', () => {
     setServerToday('2026-09-23')
     const history = {

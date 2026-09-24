@@ -19,7 +19,6 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Res
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.app_settings import read_update_due_day
 from app.api.deps import get_current_user
 from app.api.espp import _espp_quote
 from app.api.taxes import withholding_estimate
@@ -34,7 +33,6 @@ from app.models import (
     EsppLot,
     EsppOffering,
     EsppPeriod,
-    NetWorthSnapshot,
     PaycheckProfile,
     Person,
     PositionTransaction,
@@ -71,6 +69,7 @@ from app.services.calendar.generators.taxes import TaxFacts
 from app.services.calendar.ics import render
 from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
+from app.services.coverage import load_coverage
 from app.services.espp_calc import OfferingInfo, StoredPeriod
 from app.services.living_estimate import living_estimates
 from app.services.money import MONEY_MAX_ABS_12_2, quantize_money
@@ -514,8 +513,11 @@ async def _load_sources(
     cards, card_health = await _card_facts(db)
     health.append(card_health)
 
-    due_day = await read_update_due_day(db)
-    entered_months = set((await db.execute(select(NetWorthSnapshot.month))).scalars().all())
+    # The monthly update's two parts on the SAME product day this router read once (2026-09-23
+    # spec §T6): the reminder lists what is pending from the month status coverage computes —
+    # K3's rule, never re-derived here — and on the reminder day that status already read.
+    month_status = (await load_coverage(db, today=today)).status
+    due_day = month_status.reminder_day
     health.append(_health("ritual", "ok", f"reminder on day {due_day} of each month"))
 
     custom_rows = await _custom_rows(db, window, names)
@@ -532,7 +534,7 @@ async def _load_sources(
         payday_sources=payday_sources,
         custom_rows=custom_rows,
         due_day=due_day,
-        entered_months=entered_months,
+        month_status=month_status,
         tax_facts=tax_facts,
         cards=cards,
     )
@@ -606,7 +608,8 @@ def _validated_span(start: date, end: date) -> None:
 @router.get("", response_model=CalendarOut)
 async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db)) -> CalendarOut:
     """{events, sources, quote_as_of} for [start, end] INCLUSIVE, sorted by (date, type,
-    label). 422 on a reversed pair or a span past 400 days."""
+    label) — same-day monthly reminders by their month, oldest first. 422 on a reversed pair or a
+    span past 400 days."""
     _validated_span(start, end)
     # The product clock, never the container's UTC day, read ONCE: the reminder date, the
     # fold's "today" and the living estimate's current month must all be the same

@@ -11,6 +11,7 @@ import InfoHint from '../components/InfoHint'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar from '../components/shell/ScopeBar'
+import { useScopeCoverage } from '../components/shell/useScopeCoverage'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import useSpendingEvidence from '../components/metrics/useSpendingEvidence'
@@ -46,7 +47,7 @@ import {
   spendingSankeyOption,
 } from '../components/spending/spendingSankeyOptions'
 import { EMPTY_FOLD, entityCssVar, foldCategories, pickColors, rankCategories } from '../charts/entities'
-import { hasPartialMonth, PARTIAL_FOOTNOTE } from '../charts/partial'
+import { partialFootnote, partlyEnteredMonths } from '../charts/partlyEntered'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
@@ -263,8 +264,17 @@ export default function SpendingPage() {
   // judged against the product's today, hatched or faded by Appearance › Chart patterns.
   const today = todayIso()
   const patterns = useChartDecals()
-  // Their '*' on that month, said in words under each card (the 2026-09-23 code review, 13).
-  const partialShown = matrix !== null && hasPartialMonth(matrix.months, today)
+  // A month whose spending is only partly entered keeps the partial look after it has ended
+  // (2026-09-23 spec §T12) — `time.flows_due` from the coverage the scope row fetches and hands up,
+  // never a second request (useScopeCoverage: an identical answer rebuilds no chart option).
+  const { onCoverage, flowsDue } = useScopeCoverage()
+  // The month the Budget card opens on with nothing picked (its own rule, a pin after a write
+  // included): the scope row's default month on the Budgets view (2026-09-23 spec §T8).
+  // undefined until the card has said (the scope row stands in its newest covered month).
+  const [budgetsMonth, setBudgetsMonth] = useState<string | null | undefined>(undefined)
+  // Their '*' on that month, said in words under each card (the 2026-09-23 code review, 13) —
+  // in progress, partly entered, or both.
+  const footnote = matrix === null ? null : partialFootnote(matrix.months, today, partlyEnteredMonths(flowsDue))
 
   // The all-time ranking decides the fold — every category colour on this page — AND the
   // heatmap row order (biggest at top). ONE ranking, shared with the Overview money flow
@@ -297,9 +307,9 @@ export default function SpendingPage() {
       matrix === null
         ? null
         : spendingBarsOption({
-            matrix, fold, nameById, monthLabels, range, selected: legendSelected, todayIso: today, patterns,
+            matrix, fold, nameById, monthLabels, range, selected: legendSelected, todayIso: today, patterns, flowsDue,
           }),
-    [matrix, fold, nameById, monthLabels, range, legendSelected, today, patterns],
+    [matrix, fold, nameById, monthLabels, range, legendSelected, today, patterns, flowsDue],
   )
 
   const detailIndex = useMemo(
@@ -311,7 +321,10 @@ export default function SpendingPage() {
   // The page's FOCUSED month: the drilled month when the pie is open, the latest month
   // otherwise. The movers, the flow card and the Budget card all read it, so drilling a
   // month on the top chart moves the whole page's "what happened here" together.
-  const focusIndex = matrix ? (activeDetail ? detailIndex : matrix.default_month !== undefined ? matrix.months.indexOf(matrix.default_month ?? '') : matrix.months.length - 1) : -1
+  // The page's month with nothing picked (its last complete month) — the Budget card's last-resort
+  // opening month too, which must never be a pick (2026-09-23 spec §T8; spec re-check R1).
+  const restingIndex = matrix ? (matrix.default_month !== undefined ? matrix.months.indexOf(matrix.default_month ?? '') : matrix.months.length - 1) : -1
+  const focusIndex = matrix ? (activeDetail ? detailIndex : restingIndex) : -1
   const focusMonth = matrix?.months[focusIndex]
   const evidence = useSpendingEvidence(focusMonth, matrix)
   const movers = useMemo(
@@ -387,9 +400,9 @@ export default function SpendingPage() {
       matrix === null
         ? null
         : heatmapOption({
-            matrix, order: heatRows.visible, nameById, monthLabels, mode: heatmapMode, todayIso: today, patterns,
+            matrix, order: heatRows.visible, nameById, monthLabels, mode: heatmapMode, todayIso: today, patterns, flowsDue,
           }),
-    [matrix, heatRows, nameById, monthLabels, heatmapMode, today, patterns],
+    [matrix, heatRows, nameById, monthLabels, heatmapMode, today, patterns, flowsDue],
   )
 
   const savingsOption = useMemo(
@@ -484,10 +497,18 @@ export default function SpendingPage() {
             // The window applies to the time charts on Overview and Trends only (L5): Budgets
             // reads the ribbon's month and History declares "Full recorded history".
             range={views.section === 'overview' || views.section === 'trends'}
+            onCoverage={onCoverage}
             month={{
               mode: 'view',
               figures: ribbonFigures,
               editHref: (month) => `/update?month=${month}&step=spending`,
+              // The month on screen with nothing picked (2026-09-23 spec §T8): the last complete
+              // month, or on Budgets the card's own month — what Edit opens and Back returns to.
+              defaultMonth: views.section === 'budgets' ? budgetsMonth : matrix === null ? undefined : (matrix.default_month ?? null),
+              // Named only when there is one: a book with no complete month yet goes "Back to
+              // latest" — the page as it opens (code review minor 2).
+              backLabel:
+                views.section !== 'budgets' && matrix?.default_month != null ? 'Back to last complete month' : undefined,
             }}
           />
         }
@@ -559,7 +580,7 @@ export default function SpendingPage() {
             option={barsOption}
             empty="No spending recorded yet — enter a month to begin."
             exportName="spending"
-            csv={matrix === null ? undefined : () => spendingCsv(matrix, topIds, nameById, { todayIso: today })}
+            csv={matrix === null ? undefined : () => spendingCsv(matrix, topIds, nameById, { todayIso: today, flowsDue })}
             height={340}
             zoomable
             group="spending"
@@ -593,7 +614,7 @@ export default function SpendingPage() {
             }
             footer={
               <>
-                {partialShown && <p className="drill-hint">{PARTIAL_FOOTNOTE}</p>}
+                {footnote !== null && <p className="drill-hint">{footnote}</p>}
                 {activeDetail && matrix ? (
                   <p className="drill-hint">
                     Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
@@ -703,9 +724,13 @@ export default function SpendingPage() {
             <BudgetPanel
               matrix={matrix}
               monthIndex={activeDetail ? detailIndex : null}
-              defaultIndex={focusIndex}
+              defaultIndex={restingIndex}
               onViewMonth={setDetailMonth}
               onBudgetsChanged={load}
+              // A partly entered or missing month reads as such, never as a complete month under
+              // budget (2026-09-23 spec §T12).
+              flowsDue={flowsDue}
+              onDefaultMonth={setBudgetsMonth}
             />
           )}
         </LocalSectionPanel>
@@ -827,7 +852,7 @@ export default function SpendingPage() {
             option={heatmapOpt}
             empty="No months entered yet."
             exportName="spending-heatmap"
-            csv={matrix === null ? undefined : () => heatmapCsv(matrix, heatmapOrder, nameById, { todayIso: today })}
+            csv={matrix === null ? undefined : () => heatmapCsv(matrix, heatmapOrder, nameById, { todayIso: today, flowsDue })}
             height={Math.max(332, heatRows.visible.length * 24 + 142)}
             selectionAdapter={params => {
               if (!matrix || !Array.isArray(params.value)) return null
@@ -864,9 +889,9 @@ export default function SpendingPage() {
               ) : undefined
             }
             footer={
-              nonLiving.length === 0 && !partialShown ? undefined : (
+              nonLiving.length === 0 && footnote === null ? undefined : (
                 <>
-                  {partialShown && <p className="drill-hint">{PARTIAL_FOOTNOTE}</p>}
+                  {footnote !== null && <p className="drill-hint">{footnote}</p>}
                   {nonLiving.length > 0 && (
                     <p className="drill-hint">
                       Not living spend:{' '}

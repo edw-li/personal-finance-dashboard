@@ -219,7 +219,7 @@ export const START_CARDS: GuideCard[] = [
         where: 'Settings → Planning',
         steps: [
           'Enter **Contribution limits** for this year, then **Save limits**.',
-          'And **Plan assumptions** — withdrawal rate, ESPP ticker and discount.',
+          'And **Plan assumptions** — withdrawal rate, Plan until (year), ESPP ticker and discount.',
         ],
         to: '/settings?section=planning#limits',
       },
@@ -228,7 +228,7 @@ export const START_CARDS: GuideCard[] = [
         title: 'Create the tax year',
         where: 'Taxes',
         steps: [
-          'Press **New tax year…**, then **Filing status**, the tables, the inputs.',
+          'Press **New tax year…**; set its filing status with **Change…**, then the tables and the inputs.',
           'The yearly version is Tax season, once a year, in the Routines chapter.',
         ],
         to: '/taxes',
@@ -304,8 +304,9 @@ export const START_CARDS: GuideCard[] = [
         <div className="guide-fact">
           <h4>Every month</h4>
           <p>
-            The <Link to="/guide?section=routines#routine-monthly">monthly update</Link> in the first days of
-            the month, then a look at <Link to="/">Overview → Needs attention</Link>.
+            The <Link to="/guide?section=routines#routine-monthly">monthly update</Link> — balances on the
+            1st; last month’s spending once it has posted — then a look at{' '}
+            <Link to="/">Overview → Needs attention</Link>.
           </p>
         </div>
         <div className="guide-fact">

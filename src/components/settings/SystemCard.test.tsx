@@ -1,8 +1,10 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
-import type { CoverageOut, LastRefresh, SystemStatus } from '../../types/api'
+import { copyInOctober } from '../../testing/timeFixtures'
+import type { CoverageOut, LastRefresh, SystemStatus, TimeStatusOut } from '../../types/api'
 import { formatDateTime } from '../../utils/format'
+import { setServerToday } from '../../utils/productToday'
 import SystemCard from './SystemCard'
 
 vi.mock('../../api/system', async (importOriginal) => ({
@@ -213,13 +215,35 @@ it('stands each hand-entered feed on its own month, naming what the window still
   expect(screen.getByText('Net pay through Jul 2026')).toBeDefined()
 })
 
-it('ambers exactly the feeds a month or more behind the balances', async () => {
+// 2026-09-23 spec §T4: trailing the balances is the monthly routine, not a lapse — a feed wears
+// the amber only once one of its parts is overdue, and the words say which.
+it('ambers a feed only once one of its parts is overdue — the Overview card’s own clauses', async () => {
+  const copy = (time: TimeStatusOut): CoverageOut => {
+    setServerToday(time.today)
+    return coverageOut({
+      balances: ['2026-08-01', '2026-09-01', '2026-10-01'],
+      spending: ['2026-08-01', '2026-09-01'],
+      net_pay: ['2026-08-01'],
+      spending_empty: [],
+      spending_missing: [],
+      net_pay_missing: [],
+      latest: { balances: '2026-10-01', spending: '2026-09-01', net_pay: '2026-08-01' },
+      time,
+    })
+  }
+  vi.mocked(fetchCoverage).mockResolvedValue(copy(copyInOctober('2026-10-03')))
   render(<SystemCard />)
-  const spending = await screen.findByText('Spending through Jul 2026 (Aug missing, Sep empty)')
-  expect(spending.className).toBe('system-stale')
-  expect(screen.getByText('Net pay through Jul 2026').className).toBe('system-stale')
-  // The anchor cannot lag itself.
-  expect(screen.getByText('Balances through Sep 2026').className).toBe('')
+  const due = await screen.findByText('Spending through Aug 2026 · Sep partly entered — due')
+  expect(due.className).toBe('')
+  expect(screen.getByText('Net pay through Aug 2026 · Sep due').className).toBe('')
+  expect(screen.getByText('Balances as of Sep 22 — provisional, for Oct 1').className).toBe('')
+  cleanup()
+  vi.mocked(fetchCoverage).mockResolvedValue(copy(copyInOctober('2026-10-16')))
+  render(<SystemCard />)
+  const late = await screen.findByText('Spending through Aug 2026 · Sep partly entered — overdue')
+  expect(late.className).toBe('system-stale')
+  expect(screen.getByText('Net pay through Aug 2026 · Sep overdue').className).toBe('system-stale')
+  expect(screen.getByText('Balances as of Sep 22 — provisional, for Oct 1 · overdue — confirm or update them').className).toBe('system-stale')
 })
 
 it('says a feed never started rather than calling a fresh database late', async () => {

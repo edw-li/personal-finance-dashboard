@@ -23,8 +23,10 @@ import type {
   BudgetSeedOut,
   BudgetSuggestion,
   BudgetSuggestionsOut,
+  FlowsPartOut,
   SpendingMatrix,
 } from '../../types/api'
+import { flowsPart } from '../../testing/timeFixtures'
 
 const matrix: SpendingMatrix = {
   months: ['2026-01-01', '2026-02-01'],
@@ -578,6 +580,84 @@ describe('the month the card reads (spec §B5)', () => {
     renderBook(BLANK_BOOK, null, -1)
     expect(screen.getByText('Select an entered month in the ribbon to review its budgets.')).toBeDefined()
     expect(screen.queryByRole('meter')).toBeNull()
+  })
+
+  // 2026-09-23 spec §T12 (controller): from Oct 1 September's spending — its rent, saved on Sep 7
+  // — is PARTLY ENTERED. The card must not read it as a complete month ("0 of 13 over").
+  describe('a month whose spending is not complete (2026-09-23 spec §T12)', () => {
+    const partial = [flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16' })]
+    const renderWith = (
+      flowsDue: FlowsPartOut[],
+      onDefaultMonth?: (month: string | null) => void,
+      monthIndex: number | null = null,
+    ) =>
+      render(
+        <BudgetPanel
+          matrix={SEP_BOOK}
+          monthIndex={monthIndex}
+          defaultIndex={1}
+          onViewMonth={onViewMonth}
+          onBudgetsChanged={onBudgetsChanged}
+          flowsDue={flowsDue}
+          onDefaultMonth={onDefaultMonth}
+        />,
+      )
+
+    it('reads a partly entered month as partly entered, with its due date — never as a complete month', () => {
+      pinToday('2026-10-05')
+      renderWith(partial)
+      expect(within(heading()).getByText('Partly entered')).toBeDefined()
+      expect(screen.getByRole('heading', { level: 2, name: /^Budgets — Sep 2026 Partly entered/ })).toBeDefined()
+      expect(
+        screen.getByText('0 of 2 budgeted categories over so far in Sep 2026 — its spending is partly entered (due by Oct 15)'),
+      ).toBeDefined()
+      expect(screen.queryByText('0 of 2 budgeted categories over in Sep 2026')).toBeNull()
+    })
+
+    it('reads a month with no spending as not entered yet, rather than as zero spent', () => {
+      pinToday('2026-10-05')
+      renderWith([flowsPart('2026-09-01', { take_home_entered: true, overdue_from: '2026-10-16' })])
+      expect(within(heading()).getByText('Not entered yet')).toBeDefined()
+      expect(
+        screen.getByText('Sep 2026 spending is not entered yet (due by Oct 15) — the meters read only what is on file.'),
+      ).toBeDefined()
+    })
+
+    // Once the month is overdue the card says the date has passed, like the ribbon and Needs
+    // attention ("was due Oct 15"), rather than still promising one ahead (spec review M10).
+    it('says "was due" once the month is overdue', () => {
+      pinToday('2026-10-17')
+      renderWith([flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16', overdue: true })])
+      expect(
+        screen.getByText('0 of 2 budgeted categories over so far in Sep 2026 — its spending is partly entered (was due Oct 15)'),
+      ).toBeDefined()
+      cleanup()
+      renderWith([flowsPart('2026-09-01', { overdue_from: '2026-10-16', overdue: true })])
+      expect(
+        screen.getByText('Sep 2026 spending is not entered yet (was due Oct 15) — the meters read only what is on file.'),
+      ).toBeDefined()
+    })
+
+    it('reads an entered month exactly as before', () => {
+      pinToday('2026-10-05')
+      renderWith([])
+      expect(screen.queryByText('Partly entered')).toBeNull()
+      expect(screen.getByText('0 of 2 budgeted categories over in Sep 2026')).toBeDefined()
+    })
+
+    // The scope row's default month is where the card OPENS with nothing picked (T8) — never the
+    // month a ribbon pick put on screen, or "Back to latest" could never appear (spec review I1).
+    it('tells the page the month it opens on with nothing picked — even while a pick is on screen', () => {
+      pinToday('2026-10-05')
+      const onDefaultMonth = vi.fn()
+      renderWith([], onDefaultMonth)
+      expect(onDefaultMonth).toHaveBeenLastCalledWith('2026-09-01')
+      cleanup()
+      const whilePicked = vi.fn()
+      renderWith([], whilePicked, 0)
+      expect(screen.getByRole('heading', { level: 2, name: /^Budgets — Jul 2026/ })).toBeDefined()
+      expect(whilePicked).toHaveBeenLastCalledWith('2026-09-01')
+    })
   })
 })
 

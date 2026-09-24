@@ -377,28 +377,63 @@
 }
 
 /* Two halves: left = balances (accent), right = spending (chart slot 3, aqua). A hollow
-   ring means nothing entered; the ring stays visible under either fill. */
+   ring means nothing entered; the ring stays visible under either fill. Each half is an image
+   layer (2026-09-23 spec §T8): a solid fill once that part is complete — final balances, entered
+   spending with its take-home — and the partial style's hatch while it is not: balances typed
+   before their 1st, or a month in progress, partly entered or missing one of its two flows. */
 .month-chip2-dot {
-  --left: transparent;
-  --right: transparent;
+  --left: none;
+  --right: none;
   width: 10px;
   height: 10px;
   border-radius: 50%;
   border: 1.5px solid var(--muted);
-  background: linear-gradient(90deg, var(--left) 50%, var(--right) 50%);
+  background:
+    var(--left) left / 50% 100% no-repeat,
+    var(--right) right / 50% 100% no-repeat;
 }
 
 .month-chip2.has-balances .month-chip2-dot {
-  --left: var(--accent);
+  --left: linear-gradient(var(--accent), var(--accent));
   border-color: var(--accent);
 }
 
-.month-chip2.has-spending .month-chip2-dot {
-  --right: var(--chart-3);
+.month-chip2.balances-provisional .month-chip2-dot {
+  --left: repeating-linear-gradient(-45deg, var(--accent) 0 1.5px, transparent 1.5px 3px);
 }
 
-.month-chip2.has-spending:not(.has-balances) .month-chip2-dot {
+.month-chip2.has-spending .month-chip2-dot {
+  --right: linear-gradient(var(--chart-3), var(--chart-3));
+}
+
+.month-chip2.spending-partial .month-chip2-dot {
+  --right: repeating-linear-gradient(-45deg, var(--chart-3) 0 1.5px, transparent 1.5px 3px);
+}
+
+.month-chip2:is(.has-spending, .spending-partial):not(.has-balances) .month-chip2-dot {
   border-color: var(--chart-3);
+}
+
+/* A month whose spending and take-home are due wears a small neutral dot; amber once overdue
+   (2026-09-23 spec §T8). The chip's words say the same — the dot is never the only channel. */
+.month-chip2 {
+  position: relative;
+}
+
+.month-chip2.is-due::after,
+.month-chip2.is-overdue::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.month-chip2.is-overdue::after {
+  background: var(--warn);
 }
 
 .month-chip2.is-today .month-chip2-dot {

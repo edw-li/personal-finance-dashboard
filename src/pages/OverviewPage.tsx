@@ -12,13 +12,15 @@ import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { categoryFold } from '../charts/entities'
-import { hasPartialMonth, PARTIAL_FOOTNOTE } from '../charts/partial'
+import { partialFootnote, partlyEnteredMonths } from '../charts/partlyEntered'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems, reviewAttentionItems } from '../components/overview/attention'
 import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
+import { netWorthHeadline, receiptAsOf, recordedSentence } from '../components/networth/headline'
+import { currentSnapshotMonth } from '../components/networth/snapshotStates'
 import { useTaxDrift } from '../components/overview/taxDrift'
 import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
@@ -334,15 +336,27 @@ export default function OverviewPage() {
   // today, hatched or faded by Appearance › Chart patterns.
   const spendToday = todayIso()
   const patterns = useChartDecals()
+  // A month whose spending is only partly entered keeps that look after it has ended (2026-09-23
+  // spec §T12) — `time.flows_due` from the coverage the spending group already fetched.
   const bars = useMemo(
     () =>
       data.matrix
-        ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered, { todayIso: spendToday, patterns })
+        ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered, {
+            todayIso: spendToday,
+            patterns,
+            flowsDue: data.coverage?.time?.flows_due,
+          })
         : null,
     [data, notEntered, spendToday, patterns],
   )
-  // The bars' '*' on the month in progress, said in words under the card (code review 13).
-  const spendPartial = data.matrix ? hasPartialMonth(data.matrix.months.slice(-RECENT_SPEND_MONTHS), spendToday) : false
+  // The bars' '*', said in words under the card (code review 13): which kind of partial it marks.
+  const spendFootnote = data.matrix
+    ? partialFootnote(
+        data.matrix.months.slice(-RECENT_SPEND_MONTHS),
+        spendToday,
+        partlyEnteredMonths(data.coverage?.time?.flows_due),
+      )
+    : null
   // The money flow's category colours are the Spending page's own (2026-09-23 spec §C2): the
   // fold comes from the same all-time ranking over the matrix this page already loads.
   const matrix = data.matrix
@@ -367,6 +381,12 @@ export default function OverviewPage() {
     upNext === null ? null : upNextMoney(upNext.events, upNext.living, todayIso())
 
   const summary = data?.summary
+  // The hero's words by date (2026-09-23 spec §T1) — the story note rides only while the month
+  // the change covers is listed as due in the coverage the spending group already fetched.
+  const headline = summary ? netWorthHeadline(summary, data.coverage?.time?.flows_due) : null
+  // The changes card compares the tile's own snapshot — the summary's month, which IS the server's
+  // current snapshot (no month is asked for here) — else coverage's answer (§0.4(b)).
+  const changesCurrent = summary !== undefined ? summary.month : currentSnapshotMonth(data.coverage)
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
   // `totals.unrealized_gl` lesson).
   const totals = data.holdings?.totals
@@ -391,9 +411,10 @@ export default function OverviewPage() {
   // Plain consts like their siblings (the memo rule below covers CHART options only) —
   // the strip's and the YTD card's rules are cheap math over the snapshot.
   // Review rows lead (they are this household's own ritual), then the feed checks; both are
-  // phrased as actions and rendered by the same strip (2026-09-13 polish spec §14).
+  // phrased as actions and rendered by the same strip (2026-09-13 polish spec §14). A month the
+  // flows line already asks for is left to it (2026-09-23 spec §T3).
   const attention = [
-    ...reviewAttentionItems(data.coverage?.review_months, todayIso()),
+    ...reviewAttentionItems(data.coverage?.review_months, todayIso(), data.coverage?.time?.flows_due),
     ...attentionItems({
       months: data.ts?.months, holdings: data.holdings, lots: data.lots,
       taxYears: data.taxYears, system: data.system, coverage: data.coverage,
@@ -466,7 +487,11 @@ export default function OverviewPage() {
     net_worth: wealth.busy && data.summary === undefined ? <GhostTile delta={false} /> : (
               <StatTile
                 hero
-                label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
+                // Named by the day the balances describe, with what the change spans (2026-09-23
+                // spec §T1): "as of Sep 22" + Provisional + "since Sep 1 · 21 days", or
+                // "· September: Sep 1 → Oct 1" between two final 1sts. Never "MoM".
+                label={headline?.label ?? 'Net worth'}
+                badge={emptyScopeNote === null ? headline?.badge : undefined}
                 value={emptyScopeNote !== null ? '—' : formatCurrency(summary?.net_worth)}
                 // A FRESH-paint flourish only: a cached paint is a number the user has already
                 // seen, and re-counting it would fake newness. Money rides the wire as a decimal
@@ -478,18 +503,14 @@ export default function OverviewPage() {
                     : undefined
                 }
                 // Both halves or neither: a bare amount with no rate reads as a total. The
-                // empty scope takes the slot instead — a $0.00 MoM change is arithmetic
-                // over two numbers that were never there.
-                delta={
-                  emptyScopeNote !== null
-                    ? emptyScopeNote
-                    : summary?.mom_delta != null && summary.mom_pct != null
-                      ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) MoM`
-                      : undefined
-                }
+                // empty scope takes the slot instead — a $0.00 change is arithmetic over two
+                // numbers that were never there.
+                delta={emptyScopeNote !== null ? emptyScopeNote : headline?.delta}
                 tone={emptyScopeNote !== null ? 'neutral' : toneOf(summary?.mom_delta)}
-                hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
-                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: 'Sum of non-component account balances, including signed liabilities, at the recorded monthly snapshot.', scope: owner ?? 'Household', as_of: summary.month, source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: netWorthComponents(summary.groups) }) : undefined}
+                hint="Assets minus liabilities from your latest balances, dated by when they describe, with the change since the balances before them."
+                // The receipt stands on the as-of date, and says why a provisional snapshot is one
+                // (2026-09-23 spec §T1, §0.4(e)).
+                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: `Sum of non-component account balances, including signed liabilities, in your latest balances.${recordedSentence(summary)}`, scope: owner ?? 'Household', as_of: receiptAsOf(summary), ...(summary.provisional ? { completeness: 'provisional' } : {}), source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: netWorthComponents(summary.groups) }) : undefined}
               />
     ),
     portfolio: investments.busy && data.holdings === undefined ? <GhostTile delta={false} /> : (
@@ -541,14 +562,19 @@ export default function OverviewPage() {
               <section className="card ytd-card span-12">
                 <h2 className="eyebrow">
                   Year to date — {ytd.year}
-                  <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change since the last pre-January snapshot, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividend entries (automatic records use ex-date)." />
+                  <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change from your Jan 1 balances to your latest ones, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividend entries (automatic records use ex-date)." />
                 </h2>
                 <dl className="ytd-facts">
                   <div className="ytd-fact">
                     <dt>Net worth</dt>
                     <dd>
-                      {ytd.netWorthDelta === null ? (
+                      {/* From the Jan 1 balances to the current ones (2026-09-23 spec §T2): a
+                          dash before any exist this year, "$0 so far" while they ARE the
+                          current ones, else the change — the words under it name both ends. */}
+                      {ytd.netWorthState === 'none' || ytd.netWorthDelta === null ? (
                         '—'
+                      ) : ytd.netWorthState === 'zero' ? (
+                        <span className="ytd-value">$0 so far</span>
                       ) : (
                         // Glyph + colour + the signed number — three channels, none alone
                         // (StatTile's delta grammar). Up is good here, so glyph and tone agree.
@@ -565,13 +591,7 @@ export default function OverviewPage() {
                           {ytd.netWorthPct !== null && ` (${formatPct(ytd.netWorthPct)})`}
                         </span>
                       )}
-                      {ytd.anchorMonth && (
-                        <span className="ytd-sub">
-                          since {formatMonth(ytd.anchorMonth)}
-                          {ytd.throughMonth !== null &&
-                            ` (through ${formatMonth(ytd.throughMonth).slice(0, 3)})`}
-                        </span>
-                      )}
+                      <span className="ytd-sub">{ytd.netWorthWords}</span>
                     </dd>
                   </div>
                   <div className="ytd-fact">
@@ -694,7 +714,7 @@ export default function OverviewPage() {
                 option={bars}
                 empty="No spending months yet."
                 exportName="recent-spending"
-                csv={data.matrix ? () => recentSpendCsv(data.matrix!, RECENT_SPEND_MONTHS, { todayIso: spendToday }) : undefined}
+                csv={data.matrix ? () => recentSpendCsv(data.matrix!, RECENT_SPEND_MONTHS, { todayIso: spendToday, flowsDue: data.coverage?.time?.flows_due }) : undefined}
                 height={240}
                 busy={spending.busy} error={spending.error}
                 selectionAdapter={params => {
@@ -704,11 +724,11 @@ export default function OverviewPage() {
                   return month ? { kind: 'period', id: `living:${month}`, period: month, label: formatMonth(month), scope: 'Household', values: [{ label: 'Living spending', value: data.matrix.living_total?.[index] ?? null, unit: 'USD' }], source: { href: `/spending?month=${month}`, label: 'Open spending' } } : null
                 }}
                 footer={
-                  spendPartial ? (
-                    // The '*' in words (code review 13, spec §C5): one line with the drill link,
-                    // so the caption row keeps the one line it reserves in every state.
+                  spendFootnote !== null ? (
+                    // The '*' in words (code review 13, spec §C5, §T12): one line with the drill
+                    // link, so the caption row keeps the one line it reserves in every state.
                     <p className="drill-hint chart-footnote-line">
-                      <span>{PARTIAL_FOOTNOTE}</span> ·{' '}
+                      <span>{spendFootnote}</span> ·{' '}
                       <NavLink className="drill-hint" to="/spending">
                         Open spending →
                       </NavLink>
@@ -790,7 +810,7 @@ export default function OverviewPage() {
                   </NavLink>
                 }
               />
-                <OverviewChanges data={data.ts} />
+                <OverviewChanges data={data.ts} current={changesCurrent} />
               </div>
               <aside className="overview-agenda-column">
                 {emptyBook && (
@@ -811,8 +831,8 @@ export default function OverviewPage() {
                       </li>
                     </ol>
                     <p className="drill-hint">
-                      After that: one <Link to="/guide?section=routines#routine-monthly">monthly update</Link> in the
-                      first days of each month.
+                      After that: one <Link to="/guide?section=routines#routine-monthly">monthly update</Link> each
+                      month — balances on the 1st; last month’s spending once it has posted.
                     </p>
                   </section>
                 )}
@@ -883,7 +903,9 @@ export default function OverviewPage() {
             {attention.length > 0 && (
               <nav className="attention-strip" aria-label="Needs attention">
                 {attention.map((item) => (
-                  <NavLink key={item.key} className="attention-item" to={item.to}>
+                  // A part of the monthly update that is due but not late is a to-do: neutral,
+                  // the same link (2026-09-23 spec §T3); everything else keeps the amber accent.
+                  <NavLink key={item.key} className={`attention-item${item.tone === 'todo' ? ' is-todo' : ''}`} to={item.to}>
                     {item.text} →
                   </NavLink>
                 ))}

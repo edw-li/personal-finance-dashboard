@@ -10,6 +10,8 @@ import { clearSnapshots, getSnapshot, setSnapshot } from '../../api/snapshotCach
 import { hintLabel } from '../InfoHint'
 import type { HouseholdOut } from '../../types/api'
 import ScopeBar, { HOUSEHOLD_SIZE_KEY, HOUSEHOLD_SNAPSHOT } from './ScopeBar'
+import { copyOnSep23 } from '../../testing/timeFixtures'
+import { setServerToday } from '../../utils/productToday'
 
 function Url() {
   const l = useLocation()
@@ -350,5 +352,96 @@ describe('ScopeBar — the row reserves its height while the household loads', (
     const { container } = mount({ owner: true })
     expect(container.querySelector('.scope-bar-ghost')).toBeTruthy()
     await waitFor(() => expect(container.querySelector('.scope-bar-ghost')).toBeNull())
+  })
+})
+
+// 2026-09-23 spec §T12: Spending draws partly entered months from `time.flows_due`, and its only
+// coverage read is this row's — the row hands each answer up rather than the page fetching twice.
+describe('ScopeBar — hands the coverage it fetched to the page', () => {
+  it('calls onCoverage with every answer it lands, from its one fetch', async () => {
+    const onCoverage = vi.fn()
+    const { rescope } = mount({ month: { mode: 'view', anchor: '2026-09-01' }, onCoverage })
+    await waitFor(() => expect(onCoverage).toHaveBeenCalledTimes(1))
+    expect(onCoverage.mock.calls[0][0].balances).toEqual(['2026-07-01', '2026-08-01', '2026-09-01'])
+    expect(fetchCoverage).toHaveBeenCalledTimes(1)
+    // A revalidation lands a second answer, and the page hears it.
+    rescope({ month: { mode: 'view', anchor: '2026-09-01' }, onCoverage, revalidate: 1 })
+    await waitFor(() => expect(onCoverage).toHaveBeenCalledTimes(2))
+  })
+
+  it('fetches nothing for it without a month control', async () => {
+    const onCoverage = vi.fn()
+    mount({ range: true, onCoverage })
+    await screen.findByRole('button', { name: '1Y' })
+    expect(fetchCoverage).not.toHaveBeenCalled()
+    expect(onCoverage).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-09-23 spec §T8: the ribbon ends at the current snapshot's month when it is ahead of today
+// (an early next-month snapshot is a chip you can select) — never at balances filed further
+// ahead; "Back to …" compares with the month the PAGE shows by default, and Edit opens the month
+// on screen.
+describe('ScopeBar — the view ribbon’s anchor, default month, Back and Edit (2026-09-23 spec §T8)', () => {
+  const withTime = (balances: string[]) => {
+    setServerToday('2026-09-23')
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances,
+      spending: ['2026-08-01', '2026-09-01'],
+      net_pay: ['2026-08-01'],
+      time: copyOnSep23(),
+    })
+  }
+  const lastChip = () => {
+    const chips = screen.getAllByRole('button', { name: /^[A-Z][a-z]{2} \d{4} — / })
+    return chips[chips.length - 1].getAttribute('aria-label') ?? ''
+  }
+
+  it('ends the ribbon at the current snapshot’s month — an early Oct 1 is a chip to select', async () => {
+    withTime(['2026-08-01', '2026-09-01', '2026-10-01'])
+    mount({ month: { mode: 'view', editHref: (m) => `/update?month=${m}&step=balances` } })
+    await waitFor(() => expect(lastChip()).toMatch(/^Oct 2026 — Oct 1 balances recorded early/))
+    fireEvent.click(screen.getByRole('button', { name: /^Oct 2026/ }))
+    expect(screen.getByTestId('url').textContent).toBe('/net-worth?month=2026-10')
+  })
+
+  it('never stretches to balances filed further ahead', async () => {
+    withTime(['2026-08-01', '2026-09-01', '2026-10-01', '2026-12-01'])
+    mount({ month: { mode: 'view' } })
+    await waitFor(() => expect(lastChip()).toMatch(/^Oct 2026 — /))
+  })
+
+  it('hides "Back to …" on the page’s own default month and names it otherwise', async () => {
+    withTime(['2026-08-01', '2026-09-01', '2026-10-01'])
+    const month = { mode: 'view' as const, defaultMonth: '2026-10-01', backLabel: 'Back to latest balances' }
+    const onDefault = mount({ month }, '/net-worth?month=2026-10')
+    await screen.findByRole('button', { name: /^Oct 2026/ })
+    expect(screen.queryByRole('button', { name: 'Back to latest balances' })).toBeNull()
+    onDefault.unmount()
+    mount({ month }, '/net-worth?month=2026-08')
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to latest balances' }))
+    expect(screen.getByTestId('url').textContent).toBe('/net-worth')
+  })
+
+  // Review minor 12: null is the page saying it HAS no default month (a book with nothing current)
+  // — so any selection offers the way back; only undefined (not said yet) falls back to the
+  // newest covered month.
+  it('reads an explicit null default month as "no default" — Back shows on any selection', async () => {
+    withTime(['2026-08-01', '2026-09-01', '2026-10-01'])
+    const none = mount({ month: { mode: 'view', defaultMonth: null } }, '/net-worth?month=2026-10')
+    await screen.findByRole('button', { name: /^Oct 2026/ })
+    expect(await screen.findByRole('button', { name: 'Back to latest' })).toBeTruthy()
+    none.unmount()
+    mount({ month: { mode: 'view' } }, '/net-worth?month=2026-10')
+    await screen.findByRole('button', { name: /^Oct 2026/ })
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+  })
+
+  it('edits the month on screen: the selection, else the page’s default, at the page’s step', async () => {
+    withTime(['2026-08-01', '2026-09-01', '2026-10-01'])
+    const editHref = (m: string) => `/update?month=${m}&step=spending`
+    mount({ month: { mode: 'view', defaultMonth: '2026-08-01', editHref } })
+    const edit = await screen.findByRole('link', { name: 'Edit Aug 2026 in the wizard' })
+    expect(edit.getAttribute('href')).toBe('/update?month=2026-08-01&step=spending')
   })
 })

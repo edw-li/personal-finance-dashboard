@@ -26,6 +26,9 @@ const LINEUP = [
 ]
 const BALANCES = {
   month: '2026-10-01',
+  // The current snapshot's date and standing (2026-09-23 spec §T9): Oct 1, final.
+  as_of: '2026-10-01',
+  provisional: false,
   // Liabilities are stored negative; utilization reads the magnitude.
   byAccount: new Map([
     [47, -120],
@@ -51,6 +54,7 @@ describe('closingEffect', () => {
     const effect = closingEffect(LINEUP[3], LINEUP, BALANCES)
     const total = 120 + 1793.12 + 2888.4 + 60.48
     expect(effect.utilization?.month).toBe('2026-10-01')
+    expect(effect.utilization).toMatchObject({ as_of: '2026-10-01', provisional: false })
     expect(effect.utilization?.before).toBeCloseTo(total / 115350, 10)
     expect(effect.utilization?.after).toBeCloseTo(total / 107750, 10)
     expect(effect.utilization!.after!).toBeGreaterThan(effect.utilization!.before)
@@ -65,15 +69,24 @@ describe('closingEffect', () => {
   it('leaves utilization out when any limited card’s balance is unknown', () => {
     const unlinked = LINEUP.map((c) => (c.id === 5 ? { ...c, account_id: null } : c))
     expect(closingEffect(unlinked[3], unlinked, BALANCES).utilization).toBeNull()
-    const missing = { month: '2026-10-01', byAccount: new Map([...BALANCES.byAccount].filter(([id]) => id !== 51)) }
+    const missing = { ...BALANCES, byAccount: new Map([...BALANCES.byAccount].filter(([id]) => id !== 51)) }
     expect(closingEffect(LINEUP[3], LINEUP, missing).utilization).toBeNull()
   })
 
   it('has no utilization after closing the only limited card — no line is left to use', () => {
     const lone = [card(1, '5000.00', 47)]
-    const effect = closingEffect(lone[0], lone, { month: '2026-10-01', byAccount: new Map([[47, -500]]) })
+    const effect = closingEffect(lone[0], lone, { ...BALANCES, byAccount: new Map([[47, -500]]) })
     expect(effect.lineAfter).toBe(0)
-    expect(effect.utilization).toEqual({ before: 0.1, after: null, month: '2026-10-01' })
+    expect(effect.utilization).toEqual({ before: 0.1, after: null, month: '2026-10-01', as_of: '2026-10-01', provisional: false })
+  })
+
+  it('carries a provisional snapshot’s date and standing — Oct 1 balances typed on Sep 22', () => {
+    const early = { ...BALANCES, as_of: '2026-09-22', provisional: true }
+    expect(closingEffect(LINEUP[3], LINEUP, early).utilization).toMatchObject({
+      month: '2026-10-01',
+      as_of: '2026-09-22',
+      provisional: true,
+    })
   })
 
   it('ignores a zero limit the way the page’s total line does', () => {

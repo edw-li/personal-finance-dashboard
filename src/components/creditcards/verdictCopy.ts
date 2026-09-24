@@ -1,4 +1,5 @@
-import { formatCurrency, formatDate, formatMonth, formatPct } from '../../utils/format'
+import { asOfPhrase } from '../../utils/asOf'
+import { formatCurrency, formatDate, formatPct } from '../../utils/format'
 import type { ClosingEffect } from './closingEffect'
 import {
   cardTies,
@@ -189,7 +190,9 @@ export function closingSentence(
       ? ''
       : utilization.after === null
         ? `; household utilization ${pct(utilization.before)} now, with no line left after`
-        : `; household utilization ${pct(utilization.before)} → ${pct(utilization.after)} with the same balances (as of ${formatMonth(utilization.month)})`
+        : // Named by the day the balances describe — "(as of Oct 1)", "(as of Sep 22 ·
+          // provisional)" — never by a month key (2026-09-23 spec §T9).
+          `; household utilization ${pct(utilization.before)} → ${pct(utilization.after)} with the same balances (${asOfPhrase(utilization)})`
   // The spec's "credit history AND available credit": the line clause above is the available
   // credit; the history is said whether or not the card's opened date is on record.
   const history =

@@ -17,7 +17,7 @@ const fixtures: CalendarEvent[] = [
   calendarEvent({ date: SEP15, type: 'custom', label: 'Zoo', id: 3 }),
   calendarEvent({ date: SEP15, type: 'espp_qualify', label: 'ESPP lot qualifies — 2024-08-30', short_label: 'ESPP lot qualifies' }),
   calendarEvent({ date: '2026-09-16', type: 'rsu_vest', label: 'RSU vest — 4 grants', short_label: 'RSU vest · 4 grants', amount: '41200.00', direction: 'in', basis: 'estimated' }),
-  calendarEvent({ date: '2026-09-02', type: 'update_due', label: 'Monthly update — enter August 2026', short_label: 'Monthly update', done: true }),
+  calendarEvent({ date: '2026-09-02', type: 'update_due', label: 'Monthly update — Sep 1 balances · August spending & take-home', short_label: 'Monthly update', done: true }),
   // Sep 8 holds EXACTLY three: the cap's boundary, where "+N more" must NOT appear.
   calendarEvent({ date: SEP08, type: 'custom', label: 'Vet', id: 4 }),
   calendarEvent({ date: SEP08, type: 'payday', label: 'Payday', short_label: 'Payday', amount: '6812.44', direction: 'in' }),

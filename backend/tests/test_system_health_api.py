@@ -27,6 +27,8 @@ async def test_health_shape_on_a_bare_database(auth_client):
         "identical_snapshot",
         "backup",
         "snapshot",
+        # Appended 2026-09-24 (2026-09-23 spec §T5): the nine keep their order and ids.
+        "future_snapshot",
     ]
     backup = next(c for c in body["checks"] if c["id"] == "backup")
     assert backup["severity"] == "info" and backup["title"] == "Backups are not configured here"

@@ -20,7 +20,9 @@ import './shell.css'
 
 interface MonthScopeBase {
   /** The ribbon's right edge (a page may anchor ahead of today, e.g. the wizard's next entry
-   *  month); defaults to the current month. */
+   *  month); defaults to the current month — or to the current snapshot's month when that is
+   *  ahead of it (2026-09-23 spec §T8: balances recorded early for next month are a chip you
+   *  can select; anything filed further ahead never stretches the ribbon). */
   anchor?: string
 }
 
@@ -32,8 +34,15 @@ export type MonthScopeProps =
       mode: 'view'
       /** Figures to print in chip labels (Net worth passes that month's total). */
       figures?: Record<string, string>
-      /** Where the ribbon's Edit link goes. */
+      /** Where the ribbon's Edit link goes — with the step the page is about. */
       editHref?: (monthIso: string) => string
+      /** The month the page shows when nothing is selected (2026-09-23 spec §T8): Net worth the
+       *  current snapshot's, Spending the last complete month, Budgets the card's resolved
+       *  month. "Back to …" hides on it, and Edit falls back to it. null = the page has none;
+       *  undefined = not known yet (the newest covered month stands in). */
+      defaultMonth?: string | null
+      /** "Back to latest balances", "Back to last complete month"; "Back to latest" when absent. */
+      backLabel?: string
     })
   | (MonthScopeBase & {
       mode: 'edit'
@@ -61,6 +70,10 @@ export interface ScopeBarProps {
   /** Any value; when it changes the household and coverage fetches re-run. The wizard bumps it
    *  after a save so the just-saved month's chip fills without leaving the page. */
   revalidate?: unknown
+  /** Hands the page every `/coverage` answer this row lands (2026-09-23 spec §T12): Spending draws
+   *  partly entered months from its `time.flows_due`, and this row's fetch is the page's only
+   *  coverage read — one request, not two. Only called while a month control is shown. */
+  onCoverage?: (coverage: CoverageOut) => void
 }
 
 const RANGE_OPTIONS: { value: RangePreset; label: string }[] = [
@@ -108,7 +121,7 @@ function ownerFromValue(value: string): OwnerScope {
   return Number(value)
 }
 
-export default function ScopeBar({ owner, ownerHint, range, month, revalidate }: ScopeBarProps) {
+export default function ScopeBar({ owner, ownerHint, range, month, revalidate, onCoverage }: ScopeBarProps) {
   const navigate = useNavigate()
   const { scope, setScope } = useScope({
     owner: owner !== undefined && owner !== false,
@@ -149,12 +162,19 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
   }, [wantsOwner, revalidate])
 
   const wantsMonth = month !== undefined
+  // The latest listener, read when an answer lands — the fetch must not re-run because a page
+  // handed a new function identity.
+  const onCoverageRef = useRef(onCoverage)
+  useEffect(() => {
+    onCoverageRef.current = onCoverage
+  }, [onCoverage])
   useEffect(() => {
     if (!wantsMonth) return
     fetchCoverage()
       .then((data) => {
         setSnapshot(COVERAGE_SNAPSHOT, data)
         setCoverage(data)
+        onCoverageRef.current?.(data)
       })
       .catch(() => {
         /* keep whatever the snapshot had: the URL still carries the truth and the page's own
@@ -193,6 +213,11 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
       coverage === null
         ? null
         : { balances: new Set(coverage.balances), spending: new Set(coverage.spending),
+            // The take-home half and the server's time status: how each part of a month stands
+            // and which months are due (2026-09-23 spec §T8).
+            netPay: new Set(coverage.net_pay), time: coverage.time ?? null,
+            // Once per answer, not once per chip (review minor 4).
+            firstBalances: coverage.balances.reduce<string | null>((first, month) => (first === null || month < first ? month : first), null),
             reviews: coverage.review_months ? Object.fromEntries(coverage.review_months.map(review => [review.month, review.state])) : undefined },
     [coverage],
   )
@@ -201,8 +226,8 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
     const all = [...coverage.balances, ...coverage.spending, ...coverage.net_pay].sort()
     return all[0] ?? null
   }, [coverage])
-  // "Latest" is the newest month the balances feed has — exactly what a view page shows when no
-  // month is selected.
+  // "Latest" is the newest month the balances feed has — the fallback for a page that does not
+  // name its own default month (2026-09-23 spec §T8's pages all do).
   const latestCovered = useMemo(() => {
     if (coverage === null) return null
     const sorted = [...coverage.balances].sort()
@@ -230,8 +255,17 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
 
   // The anchor is where the ribbon ENDS (a page may anchor ahead of today); `today` is what
   // wears the ring. Only the anchor is injectable, so the ring always tracks the real clock.
+  // By default it reaches the current snapshot's month when that is ahead (K2's rule: at most
+  // next month's), so early next-month balances are selectable (2026-09-23 spec §T7, §T8).
   const today = currentMonthIso()
-  const anchor = month?.anchor ?? today
+  const currentSnapshotMonth = coverage?.time?.current_snapshot?.month ?? null
+  const anchor =
+    month?.anchor ?? (currentSnapshotMonth !== null && currentSnapshotMonth > today ? currentSnapshotMonth : today)
+  // The month a view page shows with nothing selected: "Back to …" is a no-op on it. null is the
+  // page saying it HAS none (every selection then offers the way back); only undefined — not said
+  // yet — falls back to the newest covered month (review minor 12).
+  const homeMonth =
+    month?.mode === 'view' ? (month.defaultMonth !== undefined ? month.defaultMonth : latestCovered) : null
 
   return (
     <div className="scope-bar">
@@ -272,15 +306,16 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
             mode={month.mode}
             figures={month.mode === 'view' ? month.figures : undefined}
             editHref={month.mode === 'view' ? month.editHref : undefined}
+            defaultMonth={month.mode === 'view' ? (month.defaultMonth ?? undefined) : undefined}
             onSelect={(m) => {
               if (month.mode === 'view') setScope({ month: m })
               else if (month.onSelect !== undefined) month.onSelect(m)
               else navigate(`/update?month=${m}`)
             }}
           />
-          {/* Hidden when the selection already IS the latest covered month: there the button is
-              a no-op that churns the URL and implies somewhere else to go. */}
-          {month.mode === 'view' && scope.month !== null && scope.month !== latestCovered && (
+          {/* Hidden when the selection already IS the page's default month: there the button is
+              a no-op that churns the URL and implies somewhere else to go (2026-09-23 spec §T8). */}
+          {month.mode === 'view' && scope.month !== null && scope.month !== homeMonth && (
             <button
               type="button"
               className="chip"
@@ -295,7 +330,7 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
                   ?.focus()
               }}
             >
-              Back to latest
+              {month.backLabel ?? 'Back to latest'}
             </button>
           )}
         </div>

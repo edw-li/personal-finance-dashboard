@@ -1,11 +1,23 @@
-import { describe, expect, it } from 'vitest'
-import type { CoverageOut, DividendOut, SpendingYearly } from '../../types/api'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { earlySnapshot, snapshotStateOut, timeStatus } from '../../testing/timeFixtures'
+import type { CoverageOut, DividendOut, SnapshotStateOut, SpendingYearly } from '../../types/api'
+import { setServerToday } from '../../utils/productToday'
 import { windowWords, ytdStats } from './ytd'
 
 const TODAY = '2026-08-18'
 
-function ts(months: string[], netWorth: number[]) {
-  return { months, net_worth: netWorth.map((n) => n.toFixed(2)) }
+// The words carry the server's year rule ("Dec 28, 2026" outside it): pin the product day.
+beforeEach(() => setServerToday(TODAY))
+
+/** A timeseries: months with their net worth, final and dated by their 1st unless `dated`
+ *  names the snapshots typed early — month → the day they were recorded. */
+function ts(months: string[], netWorth: number[], dated: Record<string, string> = {}) {
+  return {
+    months,
+    net_worth: netWorth.map((n) => n.toFixed(2)),
+    as_of: months.map((month) => dated[month] ?? month),
+    provisional: months.map((month) => month in dated),
+  }
 }
 
 function yearly(years: SpendingYearly['years'] = []): SpendingYearly {
@@ -50,6 +62,12 @@ function coverageOut(over: Partial<CoverageOut> = {}): CoverageOut {
   }
 }
 
+/** The coverage a current backend sends on `today`: its `time` names the current snapshot —
+ *  the server's answer the YTD row measures to (spec review M5: no rule of its own here). */
+function coverageOn(today: string, current: SnapshotStateOut | null): CoverageOut {
+  return coverageOut({ time: timeStatus(today, { current_snapshot: current }) })
+}
+
 function dividend(payDate: string, amount: string, id = 1): DividendOut {
   return {
     id, security_id: 1, account: null, pay_date: payDate, amount,
@@ -57,7 +75,7 @@ function dividend(payDate: string, amount: string, id = 1): DividendOut {
   }
 }
 
-describe('ytdStats — net worth delta', () => {
+describe('ytdStats — net worth from the Jan 1 balances (2026-09-23 spec §T2)', () => {
   it('uses the eligible savings window when entered current-month rows are excluded', () => {
     const stats = ytdStats(ts([], []), yearly([{ ...rollup(2026), months_matched: 1 }]), [], coverageOut({
       spending: ['2026-06-01', '2026-07-01', '2026-08-01'], net_pay: ['2026-06-01', '2026-07-01', '2026-08-01'],
@@ -67,50 +85,135 @@ describe('ytdStats — net worth delta', () => {
     expect(stats.spendWindow).toEqual(stats.savedWindow)
     expect(stats.netPayWindow?.to).toBe('2026-08-01')
   })
-  it('anchors on the last snapshot before January and spans to the latest in-year one', () => {
+
+  it('runs from the Jan 1 balances to the current snapshot — the copy on Sep 23', () => {
+    // finance_realdata_b2: Dec 1 $566,912.72 · Jan 1 $605,273.99 · Sep 1 $806,667.88 · Oct 1
+    // $933,250.90, typed early on Sep 22. December no longer counts as the new year.
+    setServerToday('2026-09-23')
     const stats = ytdStats(
-      ts(['2025-11-01', '2025-12-01', '2026-01-01', '2026-08-01'], [90, 100, 110, 130]),
+      ts(
+        ['2025-12-01', '2026-01-01', '2026-09-01', '2026-10-01'],
+        [566912.72, 605273.99, 806667.88, 933250.9],
+        { '2026-10-01': '2026-09-22' },
+      ),
+      yearly(),
+      [],
+      coverageOn('2026-09-23', earlySnapshot('2026-10-01', '2026-09-22')),
+      '2026-09-23',
+    )
+    expect(stats.year).toBe(2026)
+    expect(stats.netWorthState).toBe('delta')
+    expect(stats.netWorthDelta).toBeCloseTo(327976.91, 2)
+    expect(stats.netWorthPct).toBeCloseTo(0.541869, 5)
+    expect(stats.netWorthWords).toBe('since Jan 1 (to Sep 22 · provisional)')
+  })
+
+  it('names a final current snapshot by its 1st', () => {
+    const stats = ytdStats(
+      ts(['2025-12-01', '2026-01-01', '2026-08-01'], [90, 100, 130]),
       yearly(),
       [],
       coverageOut(),
       TODAY,
     )
-    expect(stats.year).toBe(2026)
     expect(stats.netWorthDelta).toBe(30)
     expect(stats.netWorthPct).toBe(0.3)
-    expect(stats.anchorMonth).toBe('2025-12-01')
+    expect(stats.netWorthWords).toBe('since Jan 1 (to Aug 1)')
   })
 
-  it('spans a December gap honestly — the anchor is whatever came last before the year', () => {
+  it('without Jan 1 balances starts from the year’s first snapshot and says so', () => {
+    const stats = ytdStats(ts(['2025-10-01', '2026-03-01', '2026-08-01'], [80, 100, 125]), yearly(), [], coverageOut(), TODAY)
+    expect(stats.netWorthDelta).toBe(25)
+    expect(stats.netWorthWords).toBe('since Mar 1 — no Jan 1 balances (to Aug 1)')
+  })
+
+  it('with no snapshot in the year says the Jan 1 balances are not recorded yet', () => {
+    const stats = ytdStats(ts(['2025-11-01', '2025-12-01'], [90, 100]), yearly(), [], coverageOut(), TODAY)
+    expect(stats.netWorthState).toBe('none')
+    expect(stats.netWorthDelta).toBeNull()
+    expect(stats.netWorthWords).toBe('Jan 1 balances not recorded yet')
+    expect(ytdStats(ts([], []), yearly(), [], coverageOut(), TODAY).netWorthState).toBe('none')
+  })
+
+  it('counts an early Jan 1 snapshot typed in December toward the OLD year, to its day', () => {
+    setServerToday('2026-12-29')
     const stats = ytdStats(
-      ts(['2025-10-01', '2026-03-01'], [100, 120]),
+      ts(['2026-01-01', '2026-12-01', '2027-01-01'], [100, 140, 150], { '2027-01-01': '2026-12-28' }),
       yearly(),
       [],
-      coverageOut(),
+      coverageOn('2026-12-29', earlySnapshot('2027-01-01', '2026-12-28')),
+      '2026-12-29',
+    )
+    expect(stats.year).toBe(2026)
+    expect(stats.netWorthDelta).toBe(50)
+    expect(stats.netWorthWords).toBe('since Jan 1 (to Dec 28 · provisional)')
+  })
+
+  it('in January: nothing yet before the Jan 1 balances, "$0 so far" once they are the current ones', () => {
+    setServerToday('2027-01-05')
+    const before = ytdStats(ts(['2026-11-01', '2026-12-01'], [140, 150]), yearly(), [], coverageOut(), '2027-01-05')
+    expect(before.netWorthState).toBe('none')
+    expect(before.netWorthWords).toBe('Jan 1 balances not recorded yet')
+    const after = ytdStats(
+      ts(['2026-12-01', '2027-01-01'], [150, 160], { '2027-01-01': '2026-12-28' }),
+      yearly(),
+      [],
+      coverageOn('2027-01-05', earlySnapshot('2027-01-01', '2026-12-28')),
+      '2027-01-05',
+    )
+    expect(after.netWorthState).toBe('zero')
+    expect(after.netWorthDelta).toBe(0)
+    expect(after.netWorthPct).toBeNull()
+    expect(after.netWorthWords).toBe('the change starts from your Jan 1 balances')
+  })
+
+  it('never measures to balances filed further ahead than next month', () => {
+    const stats = ytdStats(
+      ts(['2026-01-01', '2026-08-01', '2026-12-01'], [100, 130, 999]),
+      yearly(),
+      [],
+      coverageOn(TODAY, snapshotStateOut('2026-08-01')),
+      TODAY,
+    )
+    expect(stats.netWorthDelta).toBe(30)
+    expect(stats.netWorthWords).toBe('since Jan 1 (to Aug 1)')
+  })
+
+  // Spec review M5: the current snapshot is the server's answer, never re-derived from the day.
+  it('measures to wherever the server says the current snapshot is', () => {
+    const stats = ytdStats(
+      ts(['2026-01-01', '2026-07-01', '2026-08-01'], [100, 120, 130]),
+      yearly(),
+      [],
+      coverageOn(TODAY, snapshotStateOut('2026-07-01')),
       TODAY,
     )
     expect(stats.netWorthDelta).toBe(20)
-    expect(stats.anchorMonth).toBe('2025-10-01') // named, so "since Oct 2025" reads true
-  })
-
-  it('falls back to the year first month when the series starts mid-year', () => {
-    const stats = ytdStats(ts(['2026-02-01', '2026-08-01'], [100, 125]), yearly(), [], coverageOut(), TODAY)
-    expect(stats.netWorthDelta).toBe(25)
-    expect(stats.anchorMonth).toBe('2026-02-01')
-  })
-
-  it('answers null without two points to span', () => {
-    // One in-year month and nothing before it: a delta would compare it to itself.
-    expect(ytdStats(ts(['2026-08-01'], [100]), yearly(), [], coverageOut(), TODAY).netWorthDelta).toBeNull()
-    // Data that ended LAST year: nothing in-year to measure to.
+    expect(stats.netWorthWords).toBe('since Jan 1 (to Jul 1)')
+    // The server says nothing is current: nothing to measure to.
     expect(
-      ytdStats(ts(['2025-11-01', '2025-12-01'], [90, 100]), yearly(), [], coverageOut(), TODAY).netWorthDelta,
-    ).toBeNull()
-    expect(ytdStats(ts([], []), yearly(), [], coverageOut(), TODAY).netWorthDelta).toBeNull()
+      ytdStats(ts(['2026-01-01', '2026-12-01'], [100, 999]), yearly(), [], coverageOn(TODAY, null), TODAY).netWorthState,
+    ).toBe('none')
+    // No answer at all (an older payload): the latest snapshot, as before the time model.
+    expect(
+      ytdStats(ts(['2026-01-01', '2026-08-01'], [100, 130]), yearly(), [], coverageOut(), TODAY).netWorthWords,
+    ).toBe('since Jan 1 (to Aug 1)')
   })
 
-  it('nulls the percent on a zero anchor rather than dividing by it', () => {
-    const stats = ytdStats(ts(['2025-12-01', '2026-01-01'], [0, 50]), yearly(), [], coverageOut(), TODAY)
+  it('names a Jan 1 base that stayed provisional by its own day', () => {
+    setServerToday('2027-03-05')
+    const stats = ytdStats(
+      ts(['2027-01-01', '2027-03-01'], [100, 110], { '2027-01-01': '2026-12-28' }),
+      yearly(),
+      [],
+      coverageOut(),
+      '2027-03-05',
+    )
+    expect(stats.netWorthWords).toBe('since Dec 28, 2026 (provisional) (to Mar 1)')
+  })
+
+  it('nulls the percent on a zero base rather than dividing by it', () => {
+    const stats = ytdStats(ts(['2026-01-01', '2026-02-01'], [0, 50]), yearly(), [], coverageOut(), TODAY)
     expect(stats.netWorthDelta).toBe(50)
     expect(stats.netWorthPct).toBeNull()
   })
@@ -149,7 +252,7 @@ describe('ytdStats — the server rollup and the dividend log', () => {
 describe('ytdStats — every figure names its window (spec §3)', () => {
   it('names the spend, net-pay and saved windows from coverage, and the delta both ends', () => {
     const stats = ytdStats(
-      ts(['2025-12-01', '2026-09-01'], [100, 130]),
+      ts(['2025-12-01', '2026-01-01', '2026-08-01'], [90, 100, 130]),
       yearly([rollup(2026)]),
       [],
       coverageOut(),
@@ -158,8 +261,9 @@ describe('ytdStats — every figure names its window (spec §3)', () => {
     expect(stats.spendWindow).toEqual({ from: '2026-01-01', to: '2026-07-01', months: 7 })
     expect(stats.netPayWindow).toEqual({ from: '2026-01-01', to: '2026-07-01', months: 7 })
     expect(stats.savedWindow).toEqual({ from: '2026-01-01', to: '2026-07-01', months: 7 })
-    expect(stats.anchorMonth).toBe('2025-12-01')
-    expect(stats.throughMonth).toBe('2026-09-01')
+    // The delta names BOTH its ends (2026-09-23 spec §T2): the Jan 1 balances and the day the
+    // current ones describe.
+    expect(stats.netWorthWords).toBe('since Jan 1 (to Aug 1)')
   })
 
   it('takes months_matched from the server, never from its own intersection', () => {

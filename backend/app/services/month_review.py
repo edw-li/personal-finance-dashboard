@@ -107,7 +107,7 @@ def early_balances_blocker(month: date, recorded_on: date, today: date) -> str:
     " balances were recorded early, on " — it shows the sentence, and offers "Confirm {Oct 1}
     balances", only when the server lists it. Rewording the sentence means changing that match
     too; tests/test_monthly_update_parts.py pins the phrase."""
-    name = f"{month:%B}" if month.year == today.year else f"{month:%B %Y}"
+    name = day_labels.month_name(month, today.year)
     first = day_label(month, today)
     return (
         f"{first} balances were recorded early, on {day_label(recorded_on, today)} — "

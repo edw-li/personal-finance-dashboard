@@ -11,8 +11,20 @@ import type {
   TaxYearOut,
 } from '../../types/api'
 import { attentionItems, reviewAttentionItems } from './attention'
-import type { AttentionInputs } from './attention'
+import type { AttentionInputs, AttentionItem } from './attention'
 import type { ReviewState } from '../../api/monthReview'
+import type { TimeStatusOut } from '../../types/api'
+import {
+  OCT1_EARLY,
+  balancesPart,
+  copyInOctober,
+  copyOnSep23,
+  earlySnapshot,
+  flowsPart,
+  snapshotStateOut,
+  timeStatus,
+} from '../../testing/timeFixtures'
+import { setServerToday } from '../../utils/productToday'
 
 // The clock is INJECTED (todayIso param), so unlike the page tests nothing here depends
 // on the run's real date. Aug 18: past the day-7 nudge, current month '2026-08-01'.
@@ -140,32 +152,142 @@ describe('attentionItems — quiet when nothing needs doing', () => {
   })
 })
 
-describe('attentionItems — the monthly update', () => {
-  it('nudges once the month is a week old and its update is missing', () => {
-    const data = inputs({ months: ['2026-06-01', '2026-07-01'] })
-    const [item] = attentionItems(data, TODAY)
-    expect(item.key).toBe('update-due')
-    expect(item.text).toBe("Aug 2026's monthly update hasn't been entered yet")
-    expect(item.to).toBe('/update')
+describe('attentionItems — the monthly update, two parts (2026-09-23 spec §T3)', () => {
+  // The ritual's lines only: the rest of the baseline is dated Aug 18 and would add a stale-quote
+  // line on these autumn days.
+  const ritual = (time: TimeStatusOut | null): AttentionItem[] => {
+    if (time !== null) setServerToday(time.today)
+    return attentionItems(inputs({ coverage: coverageOut({ time }) }), time?.today ?? TODAY).filter((item) =>
+      item.key.startsWith('update-'),
+    )
+  }
+
+  it('asks for nothing on Sep 23 — Oct 1 recorded early, September still running', () => {
+    expect(ritual(copyOnSep23())).toEqual([])
   })
 
-  it('holds the nudge in the month first days — the ritual has not slipped yet', () => {
-    expect(keys(inputs({ months: ['2026-06-01', '2026-07-01'] }), '2026-08-06')).toEqual([])
+  it('on Oct 3 asks for the two parts, each as a to-do linked to its step', () => {
+    expect(ritual(copyInOctober())).toEqual([
+      {
+        key: 'update-balances',
+        text: 'Update Oct 1 balances — recorded early, on Sep 22',
+        to: '/update?month=2026-10-01&step=balances',
+        tone: 'todo',
+      },
+      {
+        key: 'update-flows',
+        text: 'Finish September spending and enter take-home',
+        to: '/update?month=2026-09-01&step=spending',
+        tone: 'todo',
+      },
+    ])
   })
 
-  it('calls BOTH months out when the previous one is missing too, on any day', () => {
-    const [item] = attentionItems(inputs({ months: ['2026-05-01', '2026-06-01'] }), '2026-08-02')
-    expect(item.key).toBe('update-overdue')
-    expect(item.text).toContain('Jul 2026 and Aug 2026')
+  it('keeps September partial after a take-home save alone (spec §K3)', () => {
+    const [, flows] = ritual(copyInOctober('2026-10-03', { take_home_entered: true }))
+    expect(flows.text).toBe('Finish September spending — entered during September; add what has posted since')
   })
 
-  it('stays silent on a fresh database — the empty states already say "enter a month"', () => {
+  it('asks only for the take-home once spending is saved after the month, and nothing once it is in', () => {
+    const [, flows] = ritual(copyInOctober('2026-10-03', { spending: 'entered', spending_entered: true }))
+    expect(flows.text).toBe('Enter September take-home')
+    const done = { ...copyInOctober(), flows_due: [] }
+    expect(ritual(done).map((item) => item.key)).toEqual(['update-balances'])
+  })
+
+  it('warns once the balances are overdue — the 7th by default', () => {
+    const [balances] = ritual(copyInOctober('2026-10-07'))
+    expect(balances).toMatchObject({ text: 'Oct 1 balances are still provisional (recorded Sep 22)', tone: 'warn' })
+  })
+
+  it('asks to record balances that do not exist yet, and warns once they are late', () => {
+    const missing = timeStatus('2026-10-03', { balances: balancesPart('2026-10-01', null) })
+    expect(ritual(missing)[0]).toMatchObject({
+      key: 'update-balances',
+      text: 'Record Oct 1 balances',
+      to: '/update?month=2026-10-01&step=balances',
+      tone: 'todo',
+    })
+    const late = timeStatus('2026-10-08', { balances: balancesPart('2026-10-01', null, true) })
+    expect(ritual(late)[0]).toMatchObject({ text: 'Oct 1 balances are overdue — due Oct 1', tone: 'warn' })
+  })
+
+  it('warns from the 16th with the due date the partial month missed', () => {
+    const [, flows] = ritual(copyInOctober('2026-10-16'))
+    expect(flows).toMatchObject({
+      text: 'September spending is still partial and its take-home is missing — was due Oct 15',
+      tone: 'warn',
+    })
+    const [, withPay] = ritual(copyInOctober('2026-10-16', { take_home_entered: true }))
+    expect(withPay.text).toBe('September spending is still partial — was due Oct 15')
+  })
+
+  it('names what a month with no spending lacks, due and overdue', () => {
+    const month = (over: Parameters<typeof flowsPart>[1]) =>
+      ritual(timeStatus('2026-10-03', { flows_due: [flowsPart('2026-09-01', over)] }))[0]
+    expect(month({})).toMatchObject({ text: 'Enter September spending & take-home', tone: 'todo' })
+    expect(month({ take_home_entered: true }).text).toBe('Enter September spending')
+    expect(month({ overdue: true })).toMatchObject({ text: 'September spending & take-home are overdue', tone: 'warn' })
+    expect(month({ overdue: true, take_home_entered: true }).text).toBe('September spending is overdue')
+    expect(month({ overdue: true, spending: 'entered', spending_entered: true }).text).toBe(
+      'September take-home is overdue',
+    )
+  })
+
+  it('folds a backlog into one line naming the newest month, warning when an older one is late', () => {
+    const backlog = timeStatus('2027-01-05', {
+      flows_due: [
+        flowsPart('2026-12-01'),
+        flowsPart('2026-11-01', { overdue: true }),
+        flowsPart('2026-10-01', { overdue: true }),
+      ],
+    })
+    const [flows] = ritual(backlog)
+    expect(flows).toMatchObject({
+      text: 'Enter December 2026 spending & take-home (+2 earlier months)',
+      to: '/update?month=2026-12-01&step=spending',
+      tone: 'warn',
+    })
+    const quiet = timeStatus('2026-10-03', { flows_due: [flowsPart('2026-09-01'), flowsPart('2026-08-01')] })
+    expect(ritual(quiet)[0]).toMatchObject({ text: 'Enter September spending & take-home (+1 earlier month)', tone: 'todo' })
+  })
+
+  it('names an earlier snapshot that stayed provisional, newest first', () => {
+    const nov5 = timeStatus('2026-11-05', { provisional_past: [OCT1_EARLY] })
+    expect(ritual(nov5)).toEqual([
+      {
+        key: 'update-provisional',
+        text: 'Oct 1 balances are still provisional (recorded Sep 22) — confirm or update them',
+        to: '/update?month=2026-10-01&step=balances',
+        tone: 'warn',
+      },
+    ])
+    const two = timeStatus('2026-11-05', {
+      provisional_past: [OCT1_EARLY, earlySnapshot('2026-09-01', '2026-08-30')],
+    })
+    expect(ritual(two)[0].text).toBe(
+      'Oct 1 balances are still provisional (recorded Sep 22) — confirm or update them (+1 earlier)',
+    )
+  })
+
+  it('never raises the old premature nudges', () => {
+    // A book whose current month has no snapshot and whose coverage names a missing month, on a
+    // backend with no `time`: nothing — what is due is `time`'s to say.
+    const items = attentionItems(
+      inputs({ months: ['2026-06-01', '2026-07-01'], coverage: coverageOut({ spending_missing: ['2026-07-01'] }) }),
+      TODAY,
+    )
+    expect(items.map((item) => item.key)).toEqual([])
+  })
+
+  it('stays silent on an empty book — the Overview’s Start here card says what to do', () => {
+    expect(ritual(null)).toEqual([])
     expect(keys(inputs({ months: [] }))).toEqual([])
   })
 
-  it('treats a mid-history hole as repair work, not a ritual reminder', () => {
-    // June missing but July and August entered: the ritual is current.
-    expect(keys(inputs({ months: ['2026-05-01', '2026-07-01', '2026-08-01'] }))).toEqual([])
+  it('says nothing while the current balances are final and nothing has ended unentered', () => {
+    const sep = timeStatus('2026-09-02', { current_snapshot: snapshotStateOut('2026-09-01') })
+    expect(ritual(sep)).toEqual([])
   })
 })
 
@@ -322,8 +444,10 @@ describe('attentionItems — the nightly backup (prod only)', () => {
 
 describe('attentionItems — ordering', () => {
   it('lists the ritual first, then prices, then the module reminders', () => {
+    setServerToday(TODAY)
     const noisy = inputs({
-      months: ['2026-06-01', '2026-07-01'],
+      // Aug 18 with no Aug 1 balances: late (the 7th has passed).
+      coverage: coverageOut({ time: timeStatus(TODAY, { balances: balancesPart('2026-08-01', null, true) }) }),
       holdings: holdingsOut({
         as_of: '2026-08-01T00:00:00Z',
         totals: { ...holdingsOut().totals, unpriced_count: 2 },
@@ -337,7 +461,7 @@ describe('attentionItems — ordering', () => {
       }),
     })
     expect(keys(noisy)).toEqual([
-      'update-due',
+      'update-balances',
       'prices-stale',
       'unpriced',
       'holding-warnings',
@@ -350,17 +474,6 @@ describe('attentionItems — ordering', () => {
 })
 
 describe('attentionItems — coverage honesty (honest-numbers spec §3)', () => {
-  it('turns a month the window never got into a wizard job for that month', () => {
-    const [item] = attentionItems(
-      inputs({ coverage: coverageOut({ spending_missing: ['2026-07-01'] }) }),
-      TODAY,
-    )
-    expect(item.key).toBe('spending-missing')
-    expect(item.text).toBe('Jul 2026 spending was never entered')
-    // Straight to the step that fixes it — the wizard reads both params.
-    expect(item.to).toBe('/update?month=2026-07-01&step=spending')
-  })
-
   it('names a month somebody saved with nothing in it', () => {
     const [item] = attentionItems(
       inputs({ coverage: coverageOut({ spending_empty: ['2026-08-01'] }) }),
@@ -371,24 +484,12 @@ describe('attentionItems — coverage honesty (honest-numbers spec §3)', () => 
     expect(item.to).toBe('/update?month=2026-08-01&step=spending')
   })
 
-  it('leads with the newest month of each class and counts the rest — one line per class', () => {
+  it('leads with the newest empty month and counts the rest — one line', () => {
     const items = attentionItems(
-      inputs({
-        coverage: coverageOut({
-          spending_missing: ['2026-04-01', '2026-05-01', '2026-07-01'],
-          spending_empty: ['2026-06-01', '2026-08-01'],
-        }),
-      }),
+      inputs({ coverage: coverageOut({ spending_empty: ['2026-06-01', '2026-08-01'] }) }),
       TODAY,
     )
-    expect(items.map((i) => i.text)).toEqual([
-      'Jul 2026 spending was never entered (+2 earlier months)',
-      'Aug 2026 was saved with no spending (+1 earlier month)',
-    ])
-    expect(items.map((i) => i.to)).toEqual([
-      '/update?month=2026-07-01&step=spending',
-      '/update?month=2026-08-01&step=spending',
-    ])
+    expect(items.map((i) => i.text)).toEqual(['Aug 2026 was saved with no spending (+1 earlier month)'])
   })
 
   it('ignores an empty month past the end of the balances window', () => {
@@ -410,17 +511,20 @@ describe('attentionItems — coverage honesty (honest-numbers spec §3)', () => 
     expect(keys(inputs({ coverage: older }))).toEqual([])
   })
 
-  it('sits with the other data-entry nudges, ahead of the price items', () => {
+  it('sits with the other data-entry lines, ahead of the price items', () => {
+    setServerToday(TODAY)
     const data = inputs({
-      months: ['2026-06-01', '2026-07-01'], // Aug's update is late — the existing nudge
-      coverage: coverageOut({ spending_missing: ['2026-07-01'] }),
+      coverage: coverageOut({
+        spending_empty: ['2026-08-01'],
+        time: timeStatus(TODAY, { flows_due: [flowsPart('2026-07-01', { overdue: true })] }),
+      }),
       holdings: holdingsOut({ as_of: null }),
     })
-    expect(keys(data)).toEqual(['update-due', 'spending-missing', 'prices-never'])
+    expect(keys(data)).toEqual(['update-flows', 'spending-empty', 'prices-never'])
   })
 })
 
-describe('reviewAttentionItems — past months as actions (2026-09-13 polish §14)', () => {
+describe('reviewAttentionItems — past months as actions (2026-09-13 polish §14, 2026-09-23 spec §T3)', () => {
   const review = (month: string, state: ReviewState) => ({ month, state })
 
   it('turns open past months into to-dos, newest first, two at most', () => {
@@ -433,10 +537,19 @@ describe('reviewAttentionItems — past months as actions (2026-09-13 polish §1
     expect(reviewAttentionItems([review('2026-05-01', 'ready_to_review')], TODAY)[0].text).toBe('May 2026 is ready to close')
   })
 
-  it('leaves the current month alone before the nudge day and names it after', () => {
-    expect(reviewAttentionItems([review('2026-08-01', 'in_progress')], '2026-08-05')).toEqual([])
-    expect(reviewAttentionItems([review('2026-08-01', 'in_progress')], TODAY)[0].text).toBe("Finish Aug 2026's update")
+  it('never lists the current month, on any day of it', () => {
+    for (const day of ['2026-08-01', '2026-08-07', '2026-08-18', '2026-08-31']) {
+      expect(reviewAttentionItems([review('2026-08-01', 'in_progress')], day)).toEqual([])
+    }
     expect(reviewAttentionItems([review('2026-09-01', 'in_progress')], TODAY)).toEqual([])
+  })
+
+  it('leaves a month to the flows line while it is listed there — ready to close once it is not', () => {
+    const september = [review('2026-09-01', 'ready_to_review')]
+    expect(
+      reviewAttentionItems(september, '2026-10-03', [flowsPart('2026-09-01', { spending: 'partial' })]),
+    ).toEqual([])
+    expect(reviewAttentionItems(september, '2026-10-03', [])[0].text).toBe('Sep 2026 is ready to close')
   })
 
   it('never lists closed, unreviewed-history or not-started months, and tolerates no coverage', () => {

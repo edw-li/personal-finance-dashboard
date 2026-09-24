@@ -3,7 +3,7 @@
 // in NetWorthPage (it reads page state); only the parts worth unit-testing live here.
 import type { EChartsOption } from '../../charts/echarts'
 import { personSlot, slotColor } from '../../charts/entities'
-import { BAR_MARKS, LINE, STACK_WASH, capLabel, cents, grid, moneyAxis, monthAxis, pctAxis } from '../../charts/grammar'
+import { BAR_MARKS, LINE, STACK_WASH, capLabel, cents, grid, moneyAxis, monthAxis, partialItemStyle, pctAxis } from '../../charts/grammar'
 import { FOCUS, legendFor } from '../../charts/legend'
 import { GROUP_COLORS, GROUP_LABELS, GROUP_ORDER, INK, MUTED, OTHER_SERIES_COLOR } from '../../charts/theme'
 import { MARK_LINE_LABEL, MARK_LINE_STYLE, anchorMonthLabel } from '../../charts/markLine'
@@ -15,6 +15,14 @@ import type { ExportTable } from '../../utils/download'
 import { escapeHtml, formatCurrency, formatCurrencyCompact, formatMonth, formatPct } from '../../utils/format'
 import { toneOf } from '../../utils/tone'
 import type { Tone } from '../../utils/tone'
+import { formatAsOf, provisionalNote } from '../../utils/asOf'
+import { rangeDates, snapshotAt } from './snapshotStates'
+
+/** The tooltip head's note on a provisional snapshot (2026-09-23 spec §T7, the T1 words), null on
+ *  a final one. Absent lists: every snapshot final. */
+function provisionalHead(ts: Pick<NetWorthTimeseries, 'months'> & Partial<Pick<NetWorthTimeseries, 'provisional' | 'recorded_on'>>) {
+  return (i: number) => (ts.provisional?.[i] ? provisionalNote(ts.months[i], ts.recorded_on?.[i]) : null)
+}
 
 /** The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
  * the legend, the tooltip branch and the series stay in lockstep (moved verbatim from
@@ -145,12 +153,20 @@ export function netWorthStackOption({
     data,
   })
 
+  // A provisional snapshot — balances typed before their 1st (2026-09-23 spec §T7) — is a point
+  // that will move: the partial look on the net-worth line (the faded form: a hatch says nothing
+  // on an 8px dot), and the tooltip head says why.
+  const provisional = ts.provisional ?? []
+  const headNote = provisionalHead(ts)
   const netWorthLine = {
     ...LINE,
     name: NET_WORTH_SERIES,
     lineStyle: { width: 2.5 },
     color: INK,
     z: 10,
+    // The provisional point is the line's one symbol: never culled when the month axis thins its
+    // labels (echarts' showAllSymbol 'auto' — from about 81 points here; code review I1).
+    ...(provisional.some(Boolean) ? { showAllSymbol: true } : {}),
     endLabel: {
       show: true,
       color: INK,
@@ -160,7 +176,11 @@ export function netWorthStackOption({
     // The wedding rule rides the net-worth line: one annotation, on the series present in
     // both money modes.
     ...(marriageMark ? { markLine: marriageMark } : {}),
-    data: ts.net_worth.map(Number),
+    data: ts.net_worth.map((value, i) =>
+      provisional[i]
+        ? { value: Number(value), symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(INK, false) }
+        : Number(value),
+    ),
   }
 
   const notesSeries =
@@ -200,10 +220,10 @@ export function netWorthStackOption({
       ),
     )
     return {
-      dataZoom: rangeZoom(ts.months, range),
+      dataZoom: rangeZoom(rangeDates(ts), range),
       grid: grid('endLabel'),
       legend: legendFor(series.length, selected),
-      tooltip: axisTooltip({ unit: 'percent', groups: ASSET_LABELS, totalLabel: false }),
+      tooltip: axisTooltip({ unit: 'percent', groups: ASSET_LABELS, totalLabel: false, headNote }),
       xAxis: monthAxis(labels),
       yAxis: pctAxis({ floor: 0, ceiling: 1 }),
       series,
@@ -237,8 +257,10 @@ export function netWorthStackOption({
   const shown = series.map((s) => s.name)
   return {
     // Windowed, not sliced: dataZoom keeps the whole series loaded so a chip flip never
-    // refetches, and the y-axis re-scales to the visible window.
-    dataZoom: rangeZoom(ts.months, range),
+    // refetches, and the y-axis re-scales to the visible window. The chips cut on the dates the
+    // balances describe (2026-09-23 spec §T7): identical to the month keys for final snapshots,
+    // while an early Jan 1 typed on Dec 28 stays in the old year's YTD.
+    dataZoom: rangeZoom(rangeDates(ts), range),
     grid: grid('endLabel'),
     legend: {
       ...legendFor(series.length, selected),
@@ -253,6 +275,7 @@ export function netWorthStackOption({
       totalLabel: 'Assets',
       annotationSeries: [NOTES_SERIES],
       annotations: noteLines,
+      headNote,
     }),
     xAxis: monthAxis(labels),
     // F2: the floor is zero unless the data goes below it — a stack whose axis starts at a
@@ -322,6 +345,34 @@ export interface NetWorthDrillInput {
   selected: Record<string, boolean>
 }
 
+/** A provisional snapshot on a drill line (2026-09-23 spec §T7): the lines draw their dots on
+ *  hover only — `showSymbol: false` hides every at-rest symbol, a per-point one included — so the
+ *  point is a silent marker ON the line. The value stays on the line (a real balance, only
+ *  early); the partial look (the faded form: a hatch says nothing on an 8px dot) says it will
+ *  move. Undefined when no provisional month has a value on this line. */
+function provisionalMarker(
+  ts: Pick<NetWorthTimeseries, 'months'> & Partial<Pick<NetWorthTimeseries, 'provisional'>>,
+  values: readonly (number | null)[],
+  color: string,
+) {
+  const data = ts.months.flatMap((month, i) => {
+    const value = values[i]
+    if (!ts.provisional?.[i] || value === null || value === undefined) return []
+    // The category the month axis prints — the marker's x is the same label.
+    const label = formatMonth(month)
+    return [{ name: label, coord: [label, value] as [string, number] }]
+  })
+  if (data.length === 0) return undefined
+  return {
+    silent: true as const,
+    symbol: 'circle' as const,
+    symbolSize: 8,
+    itemStyle: partialItemStyle(color, false),
+    label: { show: false as const },
+    data,
+  }
+}
+
 /** Individual account balances over time — up to eight picks on their own slots. Aligned
  *  with the stack above it (F8: same `endLabel` grid, same month axis, one `group`). */
 export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDrillInput): EChartsOption | null {
@@ -329,23 +380,29 @@ export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDril
   const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
   const names = drillNames(ts, drill)
   return {
-    dataZoom: rangeZoom(ts.months, range),
+    dataZoom: rangeZoom(rangeDates(ts), range),
     grid: grid('endLabel'),
     legend: legendFor(drill.length, selected),
-    tooltip: axisTooltip({ unit: 'money' }),
+    // The provisional snapshot says why on hover here too (2026-09-23 spec §T7).
+    tooltip: axisTooltip({ unit: 'money', headNote: provisionalHead(ts) }),
     xAxis: monthAxis(ts.months.map(formatMonth)),
     yAxis: moneyAxis(),
-    series: drill.map(({ accountId, slot }, i) => ({
-      ...LINE,
-      name: names[i],
-      // Circles on hover only: the line is the data, the dots are the hover affordance.
-      symbol: 'circle' as const,
-      symbolSize: 8,
-      showSymbol: false,
-      color: slotColor(slot),
-      connectNulls: false,
-      data: (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v))),
-    })),
+    series: drill.map(({ accountId, slot }, i) => {
+      const values = (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v)))
+      const marker = provisionalMarker(ts, values, slotColor(slot))
+      return {
+        ...LINE,
+        name: names[i],
+        // Circles on hover only: the line is the data, the dots are the hover affordance.
+        symbol: 'circle' as const,
+        symbolSize: 8,
+        showSymbol: false,
+        color: slotColor(slot),
+        connectNulls: false,
+        data: values,
+        ...(marker === undefined ? {} : { markPoint: marker }),
+      }
+    }),
   }
 }
 
@@ -498,14 +555,18 @@ export interface MoversLede {
 
 /** The card's header strip (spec §4.2): from → to, then the move. Null on the first month.
  *  Every figure is the server's — the two totals and the percent are printed verbatim and
- *  the delta is the difference of those totals, never a client-recomputed percentage. */
+ *  the delta is the difference of those totals, never a client-recomputed percentage. The two
+ *  ends are named by the day their balances describe (2026-09-23 spec §T7): "Sep 1 → Oct 1", or
+ *  "Sep 1 → Sep 22 (provisional)". */
 export function netWorthMoversLede(ts: NetWorthTimeseries, index: number): MoversLede | null {
   if (index < 1 || index >= ts.months.length) return null
   const delta = cents(num(ts.net_worth[index]) - num(ts.net_worth[index - 1]))
   const pct = ts.mom_pct[index]
+  const from = snapshotAt(ts, index - 1)
+  const to = snapshotAt(ts, index)
   return {
-    fromLabel: formatMonth(ts.months[index - 1]), fromValue: formatCurrency(ts.net_worth[index - 1]),
-    toLabel: formatMonth(ts.months[index]), toValue: formatCurrency(ts.net_worth[index]),
+    fromLabel: formatAsOf(from), fromValue: formatCurrency(ts.net_worth[index - 1]),
+    toLabel: `${formatAsOf(to)}${to.provisional ? ' (provisional)' : ''}`, toValue: formatCurrency(ts.net_worth[index]),
     delta: signedCurrency(delta), pct: pct == null ? null : formatPct(pct), tone: toneOf(delta),
   }
 }

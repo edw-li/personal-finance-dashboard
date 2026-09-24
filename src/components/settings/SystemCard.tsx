@@ -66,13 +66,13 @@ function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: Cov
   const trail = backupRunLines(status.backup_runs ?? [])
   return (
     <dl className="system-facts">
-      {/* The SAME sentence the Overview footer prints, from the same pure module
-          (components/overview/freshness.ts, honest-numbers spec §3): one clause per
-          hand-entered feed on the month it actually has, and the spending clause naming
-          what the window is still waiting for. Two surfaces telling a reader different
-          months is precisely the dishonesty this program removes — so they share the
-          rule, not just the wording. A feed a month or more behind the balances wears
-          this card's own amber, the one the backup row already uses. */}
+      {/* The SAME sentences the Overview's Data status card prints, from the same pure module
+          (components/overview/freshness.ts, honest-numbers spec §3, 2026-09-23 spec §T4): the
+          balances by the day they describe, spending and take-home by the newest complete
+          month and what is still to come. Two surfaces telling a reader different dates is
+          precisely the dishonesty this program removes — so they share the rule, not just
+          the wording. A feed with an overdue part wears this card's own amber, the one the
+          backup row already uses. */}
       {/* List-valued facts are lists (audit S-8) and take BOTH columns of the facts grid. */}
       <div className="system-fact system-fact-wide">
         <dt>Data through</dt>
@@ -183,7 +183,7 @@ export default function SystemCard() {
     <section className="card span-6" id="system">
       <h2 className="eyebrow">
         System
-        <InfoHint text="Operational status: which month each hand-entered feed reaches, the nightly backup marker recorded by the backup script — with whether last night's dump restored — and the database's size and migration head. The refresh schedule lives on the Price refresh card; snapshots and downloads on Backups." />
+        <InfoHint text="Operational status: the date each hand-entered feed reaches and what is due or overdue, the nightly backup marker recorded by the backup script — with whether last night's dump restored — and the database's size and migration head. The refresh schedule lives on the Price refresh card; snapshots and downloads on Backups." />
       </h2>
       <FeedBanner
         error={error}

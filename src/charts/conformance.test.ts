@@ -22,16 +22,24 @@ const ROSTER = [
   'grammar-heatmap',
   // C2 — Net worth + Overview
   'netWorthStack',
+  // …and with a snapshot typed early (2026-09-23 spec §T7): the provisional point on the line.
+  'netWorthStackProvisional',
   'netWorthStackShare',
   'netWorthDrill',
+  // …and with a snapshot typed early (§T7, spec review M1): the partial marker on each drill line.
+  'netWorthDrillProvisional',
   'netWorthMovers',
   // …and the same builder in Accounts mode over twelve accounts: the branch that colours by
   // the account's group and folds a grey remainder past the cap.
   'netWorthMoversAccounts',
   'overviewNetWorthTrend',
+  // …and with Oct 1 balances typed early (2026-09-23 spec §T1): the provisional point.
+  'overviewNetWorthTrendProvisional',
   'overviewRecentSpend',
   // …and with the month in progress (2026-09-23 spec §C5): the partial bar and marked label.
   'overviewRecentSpendPartial',
+  // …and with a month partly entered after it ended (2026-09-23 spec §T12): the same look.
+  'overviewRecentSpendPartlyEntered',
   'moneyFlow',
   // …and the same builder on a year whose take-home is only part entered: the muted dashed
   // estimate node, a branch the fully-entered fixture never reaches.
@@ -48,11 +56,15 @@ const ROSTER = [
   // …and with the month in progress under Chart patterns (2026-09-23 spec §C5): hatched
   // segments and the detached net-pay marker series.
   'spendingBarsPartial',
+  // …and a month partly entered after it ended (2026-09-23 spec §T12): the same look, faded.
+  'spendingBarsPartlyEntered',
   'spendingMonthPie',
   'spendingHeatmapRow',
   'spendingHeatmapVsAverage',
   // …and the heatmap's in-progress column (§C5): partial cells and the marked rotated label.
   'spendingHeatmapPartial',
+  // …and a partly entered column after its month ended (§T12).
+  'spendingHeatmapPartlyEntered',
   // …and that column in the vs-average reading: a neutral hatched series the scale skips.
   'spendingHeatmapVsAveragePartial',
   'spendingSavings',

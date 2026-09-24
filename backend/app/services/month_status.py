@@ -233,6 +233,7 @@ class MonthStatus:
                 and state.provisional
                 and not self.before_adoption(state.month)
             ],
+            provisional_months=[state.month for state in self.snapshots if state.provisional],
             last_complete_month=self.last_complete_month,
         )
 

@@ -203,6 +203,11 @@ export interface TimeStatusOut {
   flows_due: FlowsPartOut[]
   /** Earlier months whose snapshot is still provisional, newest first (legacy months left out). */
   provisional_past: SnapshotStateOut[]
+  /** EVERY snapshot month whose balances are provisional (snapshot_state's flag — recorded before
+   *  their 1st, or the month still ahead), legacy months included, ascending: what the month ribbon
+   *  hatches (2026-09-23 spec §T8). OPTIONAL, unlike its siblings: a payload from before the field
+   *  (a replayed cache, an older fixture) lacks it, and the ribbon then falls back. */
+  provisional_months?: string[]
   last_complete_month: string | null
 }
 

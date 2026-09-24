@@ -15,6 +15,7 @@ from app.schemas.month_review import (
     MonthSaveOut,
 )
 from app.services.changelog import ChangeBatch, change_batch, row_image
+from app.services.day_labels import month_name
 from app.services.money import require_first_of_month
 from app.services.month_review import load_review_book, lock_review_inputs
 from app.services.month_writes import write_balances, write_spending
@@ -204,7 +205,8 @@ async def batch_close(
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"{item.month:%B %Y} is not eligible for historical batch review. "
+                        f"{month_name(item.month)} {item.month.year} is not eligible for "
+                        "historical batch review. "
                         "Review it individually."
                     ),
                 )
