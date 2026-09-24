@@ -1364,6 +1364,57 @@ def test_once_debt_is_paid_down_the_floor_and_depletion_hold_again():
     assert path.depletion_index == 5
 
 
+def test_withdrawing_while_still_in_debt_is_running_out_and_the_debt_still_shows():
+    # 2026-09-24 re-review: money going out while the balance is below 0 is running out — there is
+    # nothing to draw — so that month is the depletion month; no floor, so the debt still shows.
+    path = project_path(
+        Decimal("-30000.00"),
+        Decimal("10000.00"),
+        Decimal("0"),
+        5,
+        resets=[(3, Decimal("0"))],
+        withdrawal=(3, Decimal("5000.00")),
+    )
+    assert [str(p) for p in path.points] == [
+        "-30000.00",
+        "-20000.00",
+        "-10000.00",
+        "-15000.00",
+        "-20000.00",
+        "-25000.00",
+    ]
+    assert path.depletion_index == 3
+
+
+async def test_retiring_before_the_debt_is_paid_down_is_money_that_does_not_last(
+    auth_client, db, monkeypatch
+):
+    # The re-review's probe: -50,000 invested, 4,000 a month saved, retiring in 6 months. The debt
+    # is still -30,000 when the withdrawals start, so every path runs out in that month (it read
+    # 100 % "on track" while the line fell to -185,000).
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    this_month = await _seed_book(db)
+    brokerage = (
+        await db.execute(
+            select(AccountBalance).where(AccountBalance.balance == Decimal("100000.00"))
+        )
+    ).scalar_one()
+    brokerage.balance = Decimal("-50000.00")
+    await db.commit()
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    retires = month_add(this_month, 6)
+    retire = f"retire={alex.id}:{_month_param(retires)}"
+    zeros = "annual_return=0&inflation=0&contribution_growth=0&volatility=0&years=3"
+    line = (await auth_client.get(f"/api/v1/projection?{zeros}&{retire}")).json()
+    assert line["projected"][5:8] == ["-30000.00", "-35000.00", "-40000.00"]
+    assert line["money_lasts"]["deterministic_depleted_month"] == retires.isoformat()
+    fan = (await auth_client.get(f"/api/v1/projection?years=3&{retire}")).json()
+    assert fan["money_lasts"]["probability"] == "0.000000"
+    assert fan["money_lasts"]["verdict"] == "at_risk"
+    assert fan["money_lasts"]["lasts_until_p10"] == retires.isoformat()
+
+
 async def test_a_negative_investable_balance_is_carried_not_wiped_to_zero(auth_client, db):
     # The route end to end: -50,000 invested (the brokerage row) with 4,000 a month saved climbs
     # as it always did; the clamp used to zero it in month 1 and call that "ran out". The

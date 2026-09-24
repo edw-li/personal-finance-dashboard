@@ -301,6 +301,24 @@ def test_the_simulation_carries_pre_existing_debt_like_the_line():
     assert extended.depletion_indices == [None] * SIMULATIONS
 
 
+def test_withdrawing_while_in_debt_depletes_every_path_without_a_floor():
+    # 2026-09-24 re-review, the float walk (both loops): money out while below 0 is the run-out
+    # month, and the debt keeps showing.
+    kwargs = {"resets": [(3, Decimal("0"))], "withdrawal": (3, Decimal("5000"))}
+    args = (Decimal("-30000"), Decimal("10000"), Decimal("0"), Decimal("0"), Decimal("0"), 5, None)
+    for base in (None, 2):
+        drawn = simulate(*args, base_months=base, **kwargs)
+        assert [str(v) for v in drawn.bands["p50"]] == [
+            "-30000.00",
+            "-20000.00",
+            "-10000.00",
+            "-15000.00",
+            "-20000.00",
+            "-25000.00",
+        ], base
+        assert drawn.depletion_indices == [3] * SIMULATIONS, base
+
+
 def test_lumps_raise_every_band_from_their_month_only():
     args = (Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"))
     plain = simulate(*args, 36, None)

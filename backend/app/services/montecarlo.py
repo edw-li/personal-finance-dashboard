@@ -18,7 +18,8 @@ boundary, escalated), a lump, a withdrawal — comes from the ONE schedule the l
 path. A month whose result would be below 0 is clamped to 0 and the path's first such month
 recorded (2026-09-23 spec §R1), so balances stay at or above 0 in every phase once they have
 been there — a negative STARTING balance is debt, carried unclamped until it first reaches 0,
-as the line carries it (services/projection.project_path, 2026-09-24 review minor 1) — and a
+as the line carries it (services/projection.project_path, 2026-09-24 review minor 1), and money
+going out while still in debt is that path's depletion month, with no floor — and a
 depleted path KEEPS DRAWING its Gaussian every month, so every path sees the same random
 numbers in every scenario (common random numbers: a change of spend or retirement never
 reshuffles later paths, and success stays monotone in them).
@@ -152,9 +153,12 @@ def simulate(
         for month_index in range(1, base + 1):
             previous = balance
             balance = previous * exp(gauss(mu_m, sigma_m)) + flows[month_index]
-            if balance < 0.0 and previous >= 0.0:
-                balance = 0.0
-                if depleted is None:
+            if balance < 0.0:
+                if previous >= 0.0:
+                    balance = 0.0
+                    if depleted is None:
+                        depleted = month_index
+                elif depleted is None and flows[month_index] < 0.0:
                     depleted = month_index
             append(balance)
             if reached is None and target_f is not None and balance >= target_f:
@@ -163,9 +167,12 @@ def simulate(
             for month_index, factor in zip(range(base + 1, months + 1), extension[k], strict=True):
                 previous = balance
                 balance = previous * factor + flows[month_index]
-                if balance < 0.0 and previous >= 0.0:
-                    balance = 0.0
-                    if depleted is None:
+                if balance < 0.0:
+                    if previous >= 0.0:
+                        balance = 0.0
+                        if depleted is None:
+                            depleted = month_index
+                    elif depleted is None and flows[month_index] < 0.0:
                         depleted = month_index
                 append(balance)
                 if reached is None and target_f is not None and balance >= target_f:

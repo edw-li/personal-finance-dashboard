@@ -892,14 +892,15 @@ on, the projection withdraws your annual spend each year in today's dollars (tax
 and Social Security are not modelled). The old "the balance simply stops moving" behaviour is gone,
 and a balance that has been at or above $0 never goes below it in any phase — a negative typed
 contribution bottoms out at $0 and counts as running out — while a negative starting balance is
-debt, paid down as before. The headline FI date is the simulation's median reach, with the months 1
-in 10 and 9 in 10 paths get there; "Money lasts" is the share of the same 500 paths that last
-through a plan-until year (a knob, or a lasting default under Settings › Plan assumptions; a later
-year lengthens the horizon, adding months to every simulated path without re-dealing it). The
-Historical trend is a curve fitted to recorded net worth, not a forecast. `GET /projection` answers
-from a result cache — the serialized response per data fingerprint (the sixteen tables it reads,
-narrowed to the settings and the employer quote it uses), product day and knobs — and runs its Monte
-Carlo in a worker thread, one at a time.
+debt, paid down as before, and money going out while it is still below $0 counts as running out too.
+The headline FI date is the simulation's median reach, with the months 1 in 10 and 9 in 10 paths get
+there; "Money lasts" is the share of the same 500 paths that last through a plan-until year (a knob,
+or a lasting default under Settings › Plan assumptions; a later year lengthens the horizon, adding
+months to every simulated path without re-dealing it). The Historical trend is a curve fitted to
+recorded net worth, not a forecast. `GET /projection` answers from a result cache — the serialized
+response per data fingerprint (the sixteen tables it reads, narrowed to the settings and the
+employer quote it uses), product day and knobs — and runs its Monte Carlo in a worker thread, one at
+a time.
 
 ## Development — running the tests
 
