@@ -300,7 +300,9 @@ two in `test_security.py`. Frontend baseline before any change: 3,899 passed in 
   sequence in the schema. That costs the same (median 5.1 vs 4.9 ms; a read-then-reset variant:
   5.4 ms). The test now parks a sequence exactly as a restore does before each reset.
 - Mutation checks: each reset test was run against a broken reset (sequences not restarted, a table
-  skipped, a no-op fallback, the old `last_value` filter). Every one was caught.
+  skipped, a no-op fallback, the old `last_value` filter). Every one was caught. **The review found
+  two that were not:** a fast path that always fails (the TRUNCATE fallback left the same state
+  behind) and a parent-first DELETE order. Both are caught since 6571d914; see "Review fixes".
 
 ### Task 3 — parallel-safety audit
 
@@ -362,6 +364,9 @@ like to these tests. The real load was a looping full `npx vitest run` beside a 
      The first version of this guard (`first + 0.3 < allowance < first + second - 0.3` with second
      0.8) held only through float rounding (`0.1 + 0.8 - 0.3 == 0.6000000000000001`). It was replaced
      before commit.
+   - **Superseded in review (b7cc7439):** these values dropped `second < allowance`, so the test
+     could no longer catch its own regression (a fresh allowance per retry attempt). Now 0.4 / 0.8 /
+     0.6; see "Review fixes" below.
 
    Backend results:
    - Original file under real load: **failed 7 of 20 runs** (silent-gap ×3, budget ×4).
@@ -471,3 +476,122 @@ the README's new section now says two runs on one database "can hang".
   `finance_test_speed_gw0`–`gw3`, `finance_test_speed2`, `finance_test_speed2_gw0`–`gw3`. No other
   database was touched. The temporary diagnostics (plugins, injected copies, configs) never entered
   the tree.
+
+### Review fixes (2026-09-23 evening)
+
+The code review found one critical, one important and eight minor issues, plus a README gap. All
+are fixed on this branch, one commit each, every behavioural fix proven with a mutation or a
+before/after.
+
+| Commit | Review item |
+|---|---|
+| b7cc7439 | critical 1: retry test values 0.4 / 0.8 / 0.6; the guard asserts `max(first, second) < allowance < first + second` |
+| 040c96b9 | critical 1 follow-up: the silence-bound test also asserts no "Retrying" status |
+| 6571d914 | important 2a/2b: the reset tests assert the fast path did it; a RESTRICT-only child (paycheck profile) pins child-first order |
+| 6e20a6e3 | important 2c: a teardown reset that falls back to TRUNCATE fails that test |
+| ce1cdce0 | minor 4: TRUNCATE before the warning; the warning shows the driver's one-line error |
+| bd6b3a77 | minor 3: `lock_timeout` 30 s on both reset paths |
+| 1b3f4336 | minor 10: `synchronous_commit` off in the reset transaction |
+| 8dc689f5 | minors 6 and 9: docstring on how the reset behaves unlike TRUNCATE; "every" sequence, not "~40" |
+| 1324efbe | minor 8: the reset statements are built by the `engine` fixture after create_all |
+| 34488260 | minor 5: the localhost → 127.0.0.1 rewrite only on Windows |
+| 296f90eb | minor 7: the visibility test checks from a second engine |
+| 3806065e | README: `-n` needs requirements-dev.txt |
+| (this) | this section |
+
+**Critical 1 — my mistake.** Widening the retry test's windows (777de768), I kept
+`first < allowance < first + second` but dropped `second < allowance`. Without that inequality a
+fresh allowance per attempt (the regression the test exists for) also ends in "fallback", so the
+test could not tell the two apart.
+
+The reviewer's harness (`_bounded_output` ignoring `first_deadline`) kills that mutant with the
+original 0.09 / 0.13 / 0.08 and with 0.4 / 0.8 / 0.6, and not with my 0.1 / 0.6 / 0.9. Under the
+same mutant:
+- the committed test (via a monkeypatching plugin) and the original file's test both kill it;
+- the reviewer's stall harness, 0, 50 and 150 ms stalls, 3 reps: the real code passes and the
+  mutant dies every time (18/18);
+- the committed test passes with every mock request stalled 0, 50 or 150 ms.
+
+**Re-check of every timing test I changed** (the plugin breaks one guarded behaviour of
+`assistant_chat` at a time by monkeypatching, never by editing it):
+
+| Mutant | Guarding test | Original file (b33c202b) | Now |
+|---|---|---|---|
+| first-output allowance re-armed per attempt | transient_retry | killed | killed (survived at d84097d5) |
+| reasoning frames re-arm the silence bound | silence_bound[True] | **survived** | killed |
+| nothing bounded before the model's first frame (the header wait) | silence_bound[False] | killed | killed |
+| a silent rung retried like a transient failure | silence_bound[both] | **survived** (killed 1 run in 4, by chance) | killed (040c96b9) |
+| the "partial answer forwarded" flag lost (a concatenated answer) | silent_gap | killed | killed |
+| the budget no longer cancels the context build | total_budget | — (the original failed anyway, cold) | killed |
+
+- **Reasoning re-arm:** under this mutant the original test *passed*. My inference, not measured:
+  on the 15.6 ms loop clock the 0.04 s window is quantized and can fire a tick early, leaving it
+  about as long as the gap between 5 ms reasoning frames (one event-loop poll each, ~5–16 ms). The
+  mutant therefore still went silent at times and failed over like the real code. At 0.5 s the
+  frames always keep it alive, and the test sees the difference. (040c96b9's message says the
+  frames arrive "~16-31 ms apart"; ~5–16 ms is the better estimate.)
+- **Same-rung retry:** once a rung is silent its first-output allowance is spent, so a same-rung
+  retry usually went silent again before sending a request, and `attempts.count(kimi) == 1` still
+  held. A retry always emits "Retrying <model>…" first, and the test now asserts there is none.
+
+**Important 2.**
+- With the reviewer's plugin, a fast path that always fails used to give 3 passed; it now fails
+  both fast-path tests. The parent-first order also gave 3 passed; it now fails both, on
+  `fk_paycheck_profiles_person_id_people`.
+- (c) is a per-teardown error, not a session-end count:
+  - it lands on the test whose data the fast path could not delete;
+  - it reaches the xdist controller like any report, whereas a worker's session exit status does
+    not;
+  - tests that call `reset_database` themselves are unaffected.
+- (c) proof (`test_auth`, `test_conftest_reset`, `test_projection_api`):
+  - always failing: 60 teardown errors plus the 2 test failures, serially and with `-n 4`;
+  - parent-first: exactly the 16 tests that leave a paycheck profile behind error;
+  - unmutated: 70 passed.
+- The reviewer's plugin, as written, stopped working after minor 8 (the `engine` fixture now
+  overwrites a statement set before it runs). An adapted copy that requests `engine` gets the
+  failures above.
+
+**Minors.**
+- **3 (lock timeout):** a second connection held `SELECT … FOR UPDATE` while the reset ran, with
+  the timeout set to 1 s for speed. Before, it was still blocked at a 20 s watchdog; after,
+  `LockNotAvailableError` in 2.0 s (1 s per path).
+- **4 (TRUNCATE first):** fast path forced to fail, `-W error::UserWarning`, `test_auth.py`. The
+  old order gave 13 setup errors (duplicate key from skipped cleanups) and only 4 passes; the new
+  order gives 0 setup errors and all 17 bodies pass.
+- **5 (Windows only):** the conftest body evaluated per platform gives win32 → `127.0.0.1`, linux
+  and darwin → `localhost`.
+- **6 (docstring):** the leaked-transaction claim was checked. The fast reset finished in 38 ms
+  beside an open transaction holding an uncommitted insert and a reader, and that row was still
+  there after its transaction committed.
+- **7 (second engine):** server PIDs: seed and reset ran on 52402, the old re-check used 52402
+  again, the new engine is 52490.
+- **9 (sequence count):** there are 36 sequences today (44 tables); the docstring says "every".
+- **10 (synchronous_commit):** every reset timed over a full `-n 4` run, back to back:
+  - before: median 7.7–8.1 ms, p99 61–125 ms, max 0.19–1.19 s, three over 0.5 s;
+  - after: median 6.0–6.2 ms, p99 13–29 ms, max 36–52 ms, none over 0.5 s (the reviewer measured
+    46 ms);
+  - wall time 57.4 vs 57.6 s.
+
+**Environment tonight.**
+- An orphaned `find / -maxdepth 6 … -name batch2-research …` from another session (started 20:31,
+  1,393 CPU-s) saturated the disk for about an hour. It ended before the final runs, but
+  intermittent disk spikes (up to ~900 % busy, not attributable to any one process) continued. The
+  final times are therefore slower than this afternoon's.
+- A back-to-back A/B (serial, each on its own database) separates the environment from the
+  changes: the pre-review tree `d84097d5` took **197.18 s**, the current tree **180.04 s**.
+- The A/B's single failure is an artifact: my backend-only `git archive` copy lacks the
+  `src/components/navItems.ts` that `test_nav_paths_pin_the_frontend_registry` reads.
+- One `always_fail` mutation run (scratch only) ended with a faulthandler-style stack line instead
+  of a summary. It did not reproduce in three identical re-runs, which all ended normally. It is
+  unexplained, and it was never seen in a real suite run.
+
+**Final runs (tree = 3806065e + this section):**
+- The changed test files (`test_conftest_reset`, `test_assistant_evidence`, `test_security`): 36
+  passed in 12.07 s.
+- Full serial: **2,332 passed / 4 skipped in 185.54 s (189 s wall)**, and **168.13 s (172 s
+  wall)**. No fallback warnings.
+- Full `-n 4`: **2,332 passed / 4 skipped in 66.80 s (71 s wall)**. No fallback warnings.
+- `ruff check .` and `ruff format --check .`: clean, run after the temporary harness files were
+  removed.
+- Dropped at the end: `finance_test_speed`, `finance_test_speed_gw0`–`gw3` and
+  `finance_test_speed2`.
