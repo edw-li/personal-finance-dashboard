@@ -37,18 +37,23 @@ LIVING_NOTE = (
     "force; 'average' = the Spending page's previous-12-months living average. A month absent "
     "from the list has no estimate, which is not zero."
 )
-# The seven Decimal knobs `projection()` takes. `years` is an int and is handled beside
-# them; the vocabulary itself is the page's (src/components/projection/projectionScenario.ts
-# KNOBS) and the router's — this list only says which of them survive a URL.
+# The knobs a Projection URL can carry — the page's own vocabulary
+# (src/components/projection/projectionScenario.ts KNOBS) and the router's. Seven decode as
+# Decimals; `years` and `plan_until` are integers and `vests` a 0/1 flag, each decoded beside
+# them (2026-09-23 spec §R10).
 PROJECTION_KNOBS = (
     "annual_return",
     "annual_spend",
     "contribution_growth",
     "inflation",
     "monthly_contribution",
+    "plan_until",
     "swr",
+    "vests",
     "volatility",
+    "years",
 )
+_DECIMAL_KNOBS = frozenset(PROJECTION_KNOBS) - {"plan_until", "vests", "years"}
 
 
 def jsonable(value: Any) -> Any:
@@ -552,7 +557,21 @@ def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]
                     knobs["years"] = int(value)
                     honored[key] = entry
             continue
-        if key not in PROJECTION_KNOBS:
+        if key == "plan_until":
+            # A four-digit year (isdecimal() for the reason `years` gives). Its RANGE is the
+            # router's to judge — a year before the start or past the 60-year reach is the
+            # 422 the page shows too, reported as this section's error.
+            if value.isascii() and value.isdecimal() and len(value) == 4:
+                knobs["plan_until"] = int(value)
+                honored[key] = entry
+            continue
+        if key == "vests":
+            # The page's flag: 0 leaves the scheduled vests out, 1 is the default spelled out.
+            if value in ("0", "1"):
+                knobs["vests"] = value == "1"
+                honored[key] = entry
+            continue
+        if key not in _DECIMAL_KNOBS:
             continue
         try:
             parsed = Decimal(value)
@@ -591,6 +610,8 @@ async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
                 inflation=scenario.get("inflation"),
                 contribution_growth=scenario.get("contribution_growth"),
                 retire=tuple(scenario["retire"] or ()),
+                plan_until=scenario.get("plan_until"),
+                vests=scenario.get("vests"),
             ),
         )
     except HTTPException as exc:
