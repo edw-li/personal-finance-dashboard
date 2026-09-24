@@ -79,6 +79,13 @@ async def engine():
     await eng.dispose()
 
 
+# How long either reset path waits for a lock before it gives up. Neither statement conflicts
+# with anything a finished test should still hold, so a wait means a leaked transaction is
+# holding row locks (or, for TRUNCATE, any lock at all): without a limit the run would hang
+# at that teardown forever; with one, the reset raises and names the lock.
+_RESET_LOCK_TIMEOUT = "30s"
+
+
 def _fast_reset_sql() -> str:
     """One statement (a DO block works through asyncpg's prepared path; a ';'-joined string
     would not): delete children first, then put every sequence back at its start — what
@@ -97,6 +104,7 @@ def _fast_reset_sql() -> str:
     )
     return (
         "DO $reset$\nDECLARE s record;\nBEGIN\n"
+        f"    PERFORM set_config('lock_timeout', '{_RESET_LOCK_TIMEOUT}', true);\n"
         f"{deletes}\n"
         "    FOR s IN SELECT schemaname, sequencename, start_value FROM pg_sequences\n"
         "             WHERE schemaname = current_schema() LOOP\n"
@@ -121,9 +129,11 @@ _TRUNCATE_SQL = _truncate_sql()
 async def reset_database(engine) -> bool:
     """Empty every table and restart every sequence, committed — the state each test
     starts from. The fast DELETE path first; on ANY failure (an FK cycle a child-first DELETE
-    cannot satisfy, a lock timeout, a schema surprise) the TRUNCATE path in a fresh
-    transaction, so a surprise never leaves a dirty database. The warning says so: a fast
-    path that always fails would otherwise put the suite back at ~20 min without a word.
+    cannot satisfy, a lock held past _RESET_LOCK_TIMEOUT, a schema surprise) the TRUNCATE path
+    in a fresh transaction, so a surprise never leaves a dirty database. The warning says so:
+    a fast path that always fails would otherwise put the suite back at ~20 min without a
+    word. The TRUNCATE path has the same lock timeout, so a lock that blocks both makes the
+    reset RAISE after 2 x 30 s rather than hang the run.
 
     Returns True when the fast statement did the reset, False when TRUNCATE had to."""
     try:
@@ -134,6 +144,7 @@ async def reset_database(engine) -> bool:
         # Clean up FIRST: under `-W error` the warning raises, and it must not be able to skip
         # the TRUNCATE and leave this test's rows to the next one.
         async with engine.begin() as conn:
+            await conn.exec_driver_sql(f"SET LOCAL lock_timeout = '{_RESET_LOCK_TIMEOUT}'")
             await conn.exec_driver_sql(_TRUNCATE_SQL)
         # The driver's error, not str(exc): SQLAlchemy's message repeats the whole DO block.
         warnings.warn(
