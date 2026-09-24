@@ -472,6 +472,38 @@ describe('WhatIfPanel', () => {
     expect(disclaimer.textContent).not.toMatch(/FICA|Medicare|Social Security|SDI/)
   })
 
+  it('the moved list speaks each input’s unit: a percent as a percent, a count whole (2026-09-23 spec §W10)', async () => {
+    // The wire carries the unit and the key's own precision; "$0.98 → $0.95" and "$24.00 →
+    // $20.00" were the old reading of a 97.53% share and a count of paychecks.
+    vi.mocked(runWhatIf).mockResolvedValue(
+      resultFixture({
+        changed_inputs: [
+          {
+            key: 'unq_div_state_exempt_pct',
+            label: 'Treasury-fund dividends — state-exempt share (%)',
+            before: '0.9753',
+            after: '0.9500',
+            unit: 'percent',
+          },
+          { key: 'pay_periods', label: 'Pay periods', before: '24', after: '20', unit: 'count' },
+          {
+            key: 'ltcg_brokerage',
+            label: 'LTCG: Brokerage Gain/Loss',
+            before: '12000.00',
+            after: '30500.00',
+            unit: 'money',
+          },
+        ],
+      }),
+    )
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    expect(
+      await screen.findByText('Treasury-fund dividends — state-exempt share (%) — 97.53% → 95%'),
+    ).toBeTruthy()
+    expect(screen.getByText('Pay periods — 24 → 20')).toBeTruthy()
+    expect(screen.getByText('LTCG: Brokerage Gain/Loss — $12,000.00 → $30,500.00')).toBeTruthy()
+  })
+
   it('says nothing moved rather than drawing seven bars of zero', async () => {
     vi.mocked(runWhatIf).mockResolvedValue(
       resultFixture({

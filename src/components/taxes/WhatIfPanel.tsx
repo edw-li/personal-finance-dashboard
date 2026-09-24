@@ -631,8 +631,11 @@ export default function WhatIfPanel({
                   {changedInputs.map((changed) => (
                     // An em dash, not a colon: the label is the definition table's own text
                     // and often carries a colon already ("LTCG: Brokerage Gain/Loss").
+                    // Each figure in its key's own unit (2026-09-23 spec §W10): "97.53% → 95%",
+                    // "24 → 20" — an absent unit is an older payload's money.
                     <li key={changed.key}>
-                      {changed.label} — {formatCurrency(changed.before)} → {formatCurrency(changed.after)}
+                      {changed.label} — {figureText(changed.unit ?? 'money', changed.before)} →{' '}
+                      {figureText(changed.unit ?? 'money', changed.after)}
                     </li>
                   ))}
                 </ul>

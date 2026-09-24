@@ -67,6 +67,18 @@ vi.mock('../components/EChart', async () => {
 // pins the URL grammar and its own year-keyed remount). Here it is a marker reporting the
 // props the page hands it — which IS this page's whole contract with it — plus a door onto
 // the Apply callback, and it keeps a card the page never opens from spending requests.
+// What the marker's Apply door hands up — money by default; the unit test (§W10) swaps in a
+// percent and a count. Reset before every test.
+const whatIfApply = vi.hoisted(() => ({
+  overrides: {} as Record<string, string | null>,
+  changed: [] as { key: string; label: string; before: string; after: string; unit?: string }[],
+}))
+function resetWhatIfApply() {
+  whatIfApply.overrides = { annual_salary: '210000' }
+  whatIfApply.changed = [
+    { key: 'annual_salary', label: 'Annual Salary', before: '188930.00', after: '210000.00' },
+  ]
+}
 vi.mock('../components/taxes/WhatIfPanel', async () => {
   const { createElement } = await import('react')
   return {
@@ -79,7 +91,7 @@ vi.mock('../components/taxes/WhatIfPanel', async () => {
       definitions?: { key: string; label: string }[]
       onApplyOverrides?: (
         overrides: Record<string, string | null>,
-        changed: { key: string; label: string; before: string; after: string }[],
+        changed: { key: string; label: string; before: string; after: string; unit?: string }[],
       ) => void
     }) =>
       createElement(
@@ -93,15 +105,7 @@ vi.mock('../components/taxes/WhatIfPanel', async () => {
           'button',
           {
             type: 'button',
-            onClick: () =>
-              onApplyOverrides?.({ annual_salary: '210000' }, [
-                {
-                  key: 'annual_salary',
-                  label: 'Annual Salary',
-                  before: '188930.00',
-                  after: '210000.00',
-                },
-              ]),
+            onClick: () => onApplyOverrides?.(whatIfApply.overrides, whatIfApply.changed),
           },
           'Apply 1 override to 2024',
         ),
@@ -413,6 +417,7 @@ beforeEach(() => {
     batchId: 'batch-status',
   }))
   confirmSpy.mockReturnValue(true)
+  resetWhatIfApply()
 })
 
 afterEach(() => {
@@ -1287,6 +1292,29 @@ describe('TaxesPage', () => {
     // The same landing chain the withholding card's Apply uses: remounted form, fresh totals.
     await waitFor(() => expect(salary().value).toBe('$210,000.00'))
     await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
+  })
+
+  it('the Apply confirmation speaks each input’s unit: a percent as a percent, a count whole (2026-09-23 spec §W10)', async () => {
+    whatIfApply.overrides = { unq_div_state_exempt_pct: '0.95', pay_periods: '20' }
+    whatIfApply.changed = [
+      {
+        key: 'unq_div_state_exempt_pct',
+        label: 'Treasury-fund dividends — state-exempt share (%)',
+        before: '0.9753',
+        after: '0.9500',
+        unit: 'percent',
+      },
+      { key: 'pay_periods', label: 'Pay periods', before: '24', after: '20', unit: 'count' },
+    ]
+    renderPage('/taxes?section=whatif')
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0][0]).toBe(
+      "This writes 2 inputs to 2024's stored return and reloads the Inputs view. Continue?\n" +
+        'Treasury-fund dividends — state-exempt share (%): 97.53% → 95%\n' +
+        'Pay periods: 24 → 20',
+    )
   })
 
   it('names the unsaved edits Apply is about to discard', async () => {

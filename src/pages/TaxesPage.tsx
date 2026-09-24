@@ -23,6 +23,7 @@ import Segmented from '../components/shell/Segmented'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import CompositionPanel from '../components/taxes/CompositionPanel'
 import InputsForm from '../components/taxes/InputsForm'
+import { figureText } from '../components/taxes/inputUnits'
 import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
 import type { TaxSection } from '../components/taxes/taxSections'
@@ -41,7 +42,6 @@ import type {
   TaxSummaryOut,
   TaxYearOut,
 } from '../types/api'
-import { formatCurrency } from '../utils/format'
 import '../components/panels.css'
 import './TaxesPage.css'
 
@@ -549,7 +549,11 @@ export default function TaxesPage() {
     // the engine's own derived rows, and listing those would promise writes nobody asked for.
     const lines = changed
       .filter((row) => keys.includes(row.key))
-      .map((row) => `${row.label}: ${formatCurrency(row.before)} → ${formatCurrency(row.after)}`)
+      // Each figure in its key's own unit (2026-09-23 spec §W10): "97.53% → 95%", "24 → 20".
+      .map((row) => {
+        const unit = row.unit ?? 'money'
+        return `${row.label}: ${figureText(unit, row.before)} → ${figureText(unit, row.after)}`
+      })
     const sentence = `This writes ${keys.length} input${keys.length === 1 ? '' : 's'} to ${year}'s stored return and reloads the Inputs view${
       inputsDirty ? ', discarding its unsaved edits' : ''
       }. Continue?`
