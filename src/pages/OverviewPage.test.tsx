@@ -34,7 +34,6 @@ import { formatCompactCents, proratedLivingCents } from '../components/calendar/
 import { upNextWindow } from '../components/overview/upNext'
 import { formatDate, formatMonth } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
-import { setServerToday } from '../utils/productToday'
 import { dayName } from '../utils/timeWords'
 import OverviewPage from './OverviewPage'
 
