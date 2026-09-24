@@ -11,8 +11,12 @@ vi.mock('../../api/taxes', async (importOriginal) => ({
 }))
 import { fetchStatusOptions } from '../../api/taxes'
 
-/** The server's rules for 2024 on a household of two (2026-09-23 spec §W8). */
-function optionsFor(current: FilingStatus, missingMfs = true): TaxStatusOptions {
+const ALEX = { id: 1, name: 'Alex' }
+const SAM = { id: 2, name: 'Sam' }
+
+/** The server's rules for 2024 on a household of two (2026-09-23 spec §W8) — including whose
+ *  withholding the Will I owe? card would count under each status (empty off the card's year). */
+function optionsFor(current: FilingStatus, missingMfs = true, cardYear = true): TaxStatusOptions {
   return {
     year: 2024,
     current,
@@ -20,26 +24,26 @@ function optionsFor(current: FilingStatus, missingMfs = true): TaxStatusOptions 
       {
         status: 'single',
         label: 'Single',
-        people: [{ id: 1, name: 'Alex' }],
+        people: [ALEX],
         tables_missing: [],
         computable: true,
+        withholding_people: cardYear ? [ALEX] : [],
       },
       {
         status: 'married_joint',
         label: 'Married filing jointly',
-        people: [
-          { id: 1, name: 'Alex' },
-          { id: 2, name: 'Sam' },
-        ],
+        people: [ALEX, SAM],
         tables_missing: [],
         computable: true,
+        withholding_people: cardYear ? [ALEX, SAM] : [],
       },
       {
         status: 'married_separate',
         label: 'Married filing separately',
-        people: [{ id: 1, name: 'Alex' }],
+        people: [ALEX],
         tables_missing: missingMfs ? ['federal', 'state', 'capital_gains'] : [],
         computable: !missingMfs,
+        withholding_people: cardYear ? [ALEX] : [],
       },
     ],
   }
@@ -54,7 +58,6 @@ function mount(
     <FilingStatusMenu
       year={2024}
       status={status}
-      withholdingYear
       disabled={false}
       onChange={onChange}
       {...props}
@@ -140,8 +143,25 @@ describe('FilingStatusMenu (2026-09-23 spec §W8)', () => {
   })
 
   it('leaves the withholding card out of a year it does not answer for', async () => {
-    vi.mocked(fetchStatusOptions).mockResolvedValue(optionsFor('married_joint', false))
-    mount('married_joint', { withholdingYear: false })
+    // The server counts nobody's withholding off the card's year.
+    vi.mocked(fetchStatusOptions).mockResolvedValue(optionsFor('married_joint', false, false))
+    mount('married_joint')
+    fireEvent.click(trigger())
+    await waitFor(() => expect(dialog().textContent).not.toMatch(/Reading what/))
+    fireEvent.click(radio(/^Single/))
+    expect(consequences()).toEqual([
+      'Alex’s inputs count on the return.',
+      '2025’s prior-year safe harbor uses this year’s total tax.',
+    ])
+  })
+
+  it('names only what the server says moves — the dialog holds no rule of its own (code-quality M3)', async () => {
+    // A server whose card counted Sam on every status: nobody moves, so nothing is said —
+    // where the old browser-side rule would still have announced "Sam's withholding leaves".
+    const everywhere = optionsFor('married_joint', false)
+    everywhere.options = everywhere.options.map((option) => ({ ...option, withholding_people: [ALEX, SAM] }))
+    vi.mocked(fetchStatusOptions).mockResolvedValue(everywhere)
+    mount('married_joint')
     fireEvent.click(trigger())
     await waitFor(() => expect(dialog().textContent).not.toMatch(/Reading what/))
     fireEvent.click(radio(/^Single/))

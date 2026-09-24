@@ -361,14 +361,23 @@ function statusOptionsFor(year: number, current: TaxYearOut['filing_status']): T
   return {
     year,
     current,
+    // 2024 is not the year the Will I owe? card answers for: nobody's withholding moves.
     options: [
-      { status: 'single', label: 'Single', people: [alex], tables_missing: [], computable: true },
+      {
+        status: 'single',
+        label: 'Single',
+        people: [alex],
+        tables_missing: [],
+        computable: true,
+        withholding_people: [],
+      },
       {
         status: 'married_joint',
         label: 'Married filing jointly',
         people: [alex, { id: 2, name: 'Sam' }],
         tables_missing: married,
         computable: false,
+        withholding_people: [],
       },
       {
         status: 'married_separate',
@@ -376,6 +385,7 @@ function statusOptionsFor(year: number, current: TaxYearOut['filing_status']): T
         people: [alex],
         tables_missing: married,
         computable: false,
+        withholding_people: [],
       },
     ],
   }

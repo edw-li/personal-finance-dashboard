@@ -14,16 +14,15 @@ function possessive(names: string[]): string {
 
 /**
  * What filing the year under `next` would mean (2026-09-23 spec §W8), in the server's terms: whose
- * inputs count on the return, the tables the engine would refuse the year without, whether the
- * partner's withholding joins or leaves the Will I owe? card, and the next year's safe harbor. An
- * option the server did not describe (its read failed) says nothing rather than guessing.
+ * inputs count on the return, the tables the engine would refuse the year without, whose
+ * withholding joins or leaves the Will I owe? card, and the next year's safe harbor. An option the
+ * server did not describe (its read failed) says nothing rather than guessing.
  */
 function consequences(
   year: number,
   current: FilingStatus,
   next: FilingStatus,
   options: TaxStatusOptions | null,
-  withholdingYear: boolean,
 ): string[] {
   const option = options?.options.find((candidate) => candidate.status === next)
   if (option === undefined) return []
@@ -37,15 +36,19 @@ function consequences(
         'Will I owe? stay unavailable until you add or clone them in Tax tables.',
     )
   }
-  // The partner leg exists only on a joint return (the server's `_return_people`), and the card
-  // answers for one year — so only a move onto or off joint, on that year, moves anybody.
-  if (withholdingYear && (current === 'married_joint') !== (next === 'married_joint')) {
-    const joint = options?.options.find((candidate) => candidate.status === 'married_joint')
-    const partners = (joint?.people ?? []).slice(1).map((person) => person.name)
-    if (partners.length > 0) {
-      const verb = next === 'married_joint' ? 'joins' : 'leaves'
-      lines.push(`${possessive(partners)} withholding ${verb} the Will I owe? card.`)
-    }
+  // Whose withholding the card counts is the SERVER's list per status (code-quality M3) — empty
+  // off the card's year — so the dialog only names the difference, with no rule of its own.
+  const before = options?.options.find((candidate) => candidate.status === current)
+  const counted = (people: { id: number }[] | undefined) => new Set((people ?? []).map((p) => p.id))
+  const wasCounted = counted(before?.withholding_people)
+  const isCounted = counted(option.withholding_people)
+  const joins = (option.withholding_people ?? []).filter((person) => !wasCounted.has(person.id))
+  const leaves = (before?.withholding_people ?? []).filter((person) => !isCounted.has(person.id))
+  if (joins.length > 0) {
+    lines.push(`${possessive(joins.map((person) => person.name))} withholding joins the Will I owe? card.`)
+  }
+  if (leaves.length > 0) {
+    lines.push(`${possessive(leaves.map((person) => person.name))} withholding leaves the Will I owe? card.`)
   }
   lines.push(`${year + 1}’s prior-year safe harbor uses this year’s total tax.`)
   return lines
@@ -61,14 +64,11 @@ function consequences(
 export default function FilingStatusMenu({
   year,
   status,
-  withholdingYear,
   disabled,
   onChange,
 }: {
   year: number
   status: FilingStatus
-  /** True when the Will I owe? card answers for this year — the partner line is about it. */
-  withholdingYear: boolean
   /** The page is loading the year or already PATCHing: the dialog can open, not confirm. */
   disabled: boolean
   onChange: (next: FilingStatus) => void
@@ -125,7 +125,7 @@ export default function FilingStatusMenu({
 
   const label = FILING_STATUS_LABELS[status]
   const chosen = selected !== status
-  const lines = chosen ? consequences(year, status, selected, options, withholdingYear) : []
+  const lines = chosen ? consequences(year, status, selected, options) : []
 
   return (
     <div className="scope-bar-group filing-status-menu">

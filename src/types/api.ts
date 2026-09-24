@@ -800,6 +800,9 @@ export interface TaxStatusOption {
   people: TaxPersonOut[]
   tables_missing: string[]
   computable: boolean
+  /** Whose withholding the Will I owe? card would count under this status — the card's own
+   *  rule; empty off the card's year. Optional on older payloads (none then moves). */
+  withholding_people?: TaxPersonOut[]
 }
 
 export interface TaxStatusOptions {

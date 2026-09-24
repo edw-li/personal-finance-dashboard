@@ -325,6 +325,14 @@ class EngineFeed:
         )
 
 
+def _withholding_people(people: list[Person], filing_status: str) -> list[Person]:
+    """Whose withholding the Will I owe? card counts: the primary's simulated leg, plus the
+    partner leg of everyone else on THIS status' return — `_return_people`, the rule the card's
+    liability is computed over. One helper for the card and for the status dialog (§W8), so the
+    dialog's "joins / leaves the card" can never disagree with the card."""
+    return _return_people(people, filing_status)
+
+
 def _return_people(people: list[Person], filing_status: str) -> list[Person]:
     """The people whose per-person rows belong on THIS year's return.
 
@@ -1003,6 +1011,9 @@ async def get_status_options(
         tables = by_status.setdefault(bracket.filing_status, {})
         tables.setdefault(bracket.jurisdiction, []).append((bracket.rate, bracket.threshold))
     options: list[TaxStatusOptionOut] = []
+    # The card answers for the product year alone (its GET refuses any other), so only that
+    # year's statuses move anybody's withholding on or off it.
+    card_year = year == _current_tax_year()
     for status in FILING_STATUSES:
         missing = _missing_for_status(by_status.get(status, {}), status, year)
         options.append(
@@ -1015,6 +1026,10 @@ async def get_status_options(
                 ],
                 tables_missing=missing,
                 computable=not missing,
+                withholding_people=[
+                    TaxPersonOut(id=person.id, name=person.name)
+                    for person in (_withholding_people(roster, status) if card_year else [])
+                ],
             )
         )
     return TaxStatusOptionsOut(year=year, current=row.filing_status, options=options)
@@ -2198,7 +2213,9 @@ async def withholding_estimate(
     # people the liability above was computed over.
     people = feed.roster
     partner_ids = [
-        person.id for person in _return_people(people, feed.filing_status) if not person.is_primary
+        person.id
+        for person in _withholding_people(people, feed.filing_status)
+        if not person.is_primary
     ]
     # `feed.person_inputs`, not a second query and not a second bucketing: the partner's
     # wage base has to be the figure the engine taxed, and since 2026-09-11 that figure is

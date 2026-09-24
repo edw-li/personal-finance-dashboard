@@ -1749,9 +1749,12 @@ async def test_an_unchanged_status_logs_nothing_and_offers_no_undo(auth_client, 
     assert count == 0
 
 
-async def test_status_options_are_the_servers_rules(auth_client, household, definitions):
+async def test_status_options_are_the_servers_rules(
+    auth_client, household, definitions, monkeypatch
+):
     """What each status would mean for the year, from the rules the engine itself applies —
     `_return_people` and `_missing_for_status` — so the dialog never re-derives them."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 9, 23))
     me, partner = household
     await put_inputs(auth_client, 2026, {})
     await put_brackets(auth_client, 2026, brackets_payload(2024)["jurisdictions"])  # single only
@@ -1771,6 +1774,9 @@ async def test_status_options_are_the_servers_rules(auth_client, household, defi
         "people": [{"id": me.id, "name": "Me"}],
         "tables_missing": [],
         "computable": True,
+        # Whose withholding the Will I owe? card would count (code-quality M3): the card's
+        # own people, so the dialog names who joins or leaves it without a rule of its own.
+        "withholding_people": [{"id": me.id, "name": "Me"}],
     }
     assert options["married_joint"]["label"] == "Married filing jointly"
     assert options["married_joint"]["people"] == [
@@ -1780,7 +1786,23 @@ async def test_status_options_are_the_servers_rules(auth_client, household, defi
     assert options["married_separate"]["people"] == [{"id": me.id, "name": "Me"}]
     assert options["married_separate"]["tables_missing"] == list(JURISDICTIONS)
     assert options["married_separate"]["computable"] is False
+    assert options["married_joint"]["withholding_people"] == [
+        {"id": me.id, "name": "Me"},
+        {"id": partner.id, "name": "Partner"},
+    ]
+    assert options["married_separate"]["withholding_people"] == [{"id": me.id, "name": "Me"}]
     assert (await auth_client.get(f"{YEARS}/2031/status-options")).status_code == 404
+
+
+async def test_status_options_count_nobodys_withholding_off_the_cards_year(
+    auth_client, household, definitions, monkeypatch
+):
+    """The Will I owe? card answers for the product year alone, so no status of another year
+    moves anybody's withholding on or off it."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 9, 23))
+    await put_inputs(auth_client, 2025, {})
+    body = (await auth_client.get(f"{YEARS}/2025/status-options")).json()
+    assert [option["withholding_people"] for option in body["options"]] == [[], [], []]
 
 
 async def test_single_summary_shape_is_unchanged(auth_client, definitions):

@@ -856,7 +856,6 @@ export default function TaxesPage() {
             key={selectedYear}
             year={selectedYear}
             status={filingStatus}
-            withholdingYear={selectedYear === cardYear}
             disabled={statusSaving || busy}
             onChange={changeFilingStatus}
           />

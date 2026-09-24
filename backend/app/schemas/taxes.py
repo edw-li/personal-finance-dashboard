@@ -58,6 +58,10 @@ class TaxStatusOptionOut(BaseModel):
     people: list[TaxPersonOut]
     tables_missing: list[str]
     computable: bool
+    # Whose withholding the Will I owe? card would count under this status — the card's own
+    # rule (`_withholding_people`), so the dialog names who joins or leaves it without one of
+    # its own. Empty for any year but the one the card answers for (the product year).
+    withholding_people: list[TaxPersonOut] = []
 
 
 class TaxStatusOptionsOut(BaseModel):
