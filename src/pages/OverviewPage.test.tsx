@@ -32,6 +32,7 @@ import { formatCompactCents, proratedLivingCents } from '../components/calendar/
 import { upNextWindow } from '../components/overview/upNext'
 import { formatDate, formatMonth } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
+import { setServerToday } from '../utils/productToday'
 import OverviewPage from './OverviewPage'
 
 // Six modules, eleven clients, one snapshot: the page's whole contract is that these
@@ -974,16 +975,21 @@ describe('OverviewPage data status card', () => {
     expect(screen.queryByText(/^Living spending: /)).toBeNull()
   })
 
-  it('names the months the window is still waiting for and ambers the feeds that lag', async () => {
-    serve({ coverage: LAGGING })
+  it('dates the balances, names what is still to come and ambers only an overdue feed', async () => {
+    // The server's day and answer for that day (2026-09-23 spec §T4): Sep 1 balances final,
+    // August's flows overdue — the fixtures' own year, so the words hold on any real date.
+    const today = `${CURRENT_YEAR}-09-20`
+    setServerToday(today)
+    serve({ coverage: { ...LAGGING, time: timeStatus(today, { flows_due: [flowsPart(AUG, { overdue: true })] }) } })
     renderPage()
 
     await waitFor(() =>
-      expect(statusValue('Spending through').textContent).toBe(`${formatMonth(YEAR_MONTHS[6])} (Aug missing, Sep empty)`),
+      expect(statusValue('Spending through').textContent).toBe(`${formatMonth(YEAR_MONTHS[6])} · Aug overdue`),
     )
     expect(statusValue('Spending through').className).toContain('stale')
-    expect(statusValue('Balances through').textContent).toBe(formatMonth(SEP))
-    expect(statusValue('Balances through').className).not.toContain('stale')
+    expect(statusValue('Balances as of').textContent).toBe('Sep 1')
+    expect(statusValue('Balances as of').className).not.toContain('stale')
+    expect(statusValue('Net pay through').textContent).toBe(`${formatMonth(YEAR_MONTHS[6])} · Aug overdue`)
     expect(statusValue('Net pay through').className).toContain('stale')
   })
 

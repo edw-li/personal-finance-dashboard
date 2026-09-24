@@ -8,9 +8,11 @@ import { freshnessClauses } from './freshness'
  * while balances, spending and net pay are hand-entered and each stands on its OWN month
  * (honest-numbers spec §3). They used to be a bare row of clauses at the page floor and a
  * one-line orphan between two card groups; here they are `dl` rows inside a card, and the
- * sentence about the Living spending comparison sits beneath them. A feed a month or more
- * behind the balances wears the same amber a stale quote does — one language for "older than
- * it looks". Capitalised labels on purpose: these are peer rows, not a footnote.
+ * sentence about the Living spending comparison sits beneath them. Balances are named by the day
+ * they describe, the flows by the newest complete month and what is still to come (2026-09-23 spec
+ * §T4); a feed wears the same amber a stale quote does only once one of its parts is overdue —
+ * one language for "older than it should be", never for the routine's own lag. Capitalised labels
+ * on purpose: these are peer rows, not a footnote.
  */
 export default function DataStatusCard({
   asOf,
