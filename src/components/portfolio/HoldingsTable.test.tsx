@@ -171,4 +171,18 @@ describe('HoldingsTable', () => {
     expect(box.className).toBe('table-scroll holdings-scroll')
     expect(box.querySelector(':scope > table.port-table')).toBe(screen.getByRole('table'))
   })
+
+  // The pinned header lets a reader sort from row 40 (Task 5 review): the new order reads from its
+  // first row. Both paths — the same column flipped, a new column — since the reset sits above them.
+  it('a sort starts the capped box from its first row', () => {
+    render(<HoldingsTable holdings={rows} sparklines={{}} />)
+    const box = screen.getByRole('region', { name: 'Holdings table' })
+    box.scrollTop = 300
+    fireEvent.click(screen.getByRole('button', { name: /market value/i }))
+    expect(box.scrollTop).toBe(0)
+    expect(tickerColumn()[0]).toContain('AAA') // the sort itself still ran: now ascending
+    box.scrollTop = 300
+    fireEvent.click(screen.getByRole('button', { name: /^ticker/i }))
+    expect(box.scrollTop).toBe(0)
+  })
 })

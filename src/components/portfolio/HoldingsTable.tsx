@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import type { HoldingOut, SparklinesResponse } from '../../types/api'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
@@ -56,6 +56,7 @@ export default function HoldingsTable({
 }) {
   const [sortKey, setSortKey] = useState<SortKey>('market_value')
   const [descending, setDescending] = useState(true)
+  const boxRef = useRef<HTMLDivElement>(null)
 
   const sorted = useMemo(() => {
     const rows = [...holdings]
@@ -69,6 +70,12 @@ export default function HoldingsTable({
   }, [holdings, sortKey, descending])
 
   const onSort = (key: SortKey) => {
+    // A sort is a new list, read from its first row (Task 5 review). The pinned header lets a reader
+    // sort from row 40, and a keyed re-sort only MOVES the row nodes, so the box's scroll anchoring
+    // chased them — measured in Edge on a 73-row box at scrollTop 1000: the rows on screen stayed on
+    // screen (the sort looked like it did nothing), or unrelated mid-list rows came up. Reset BEFORE
+    // the state update: at offset 0 anchoring has nothing to chase, and the commit shows the new top.
+    if (boxRef.current) boxRef.current.scrollTop = 0
     if (key === sortKey) {
       setDescending((d) => !d)
     } else {
@@ -81,7 +88,7 @@ export default function HoldingsTable({
     return <p className="empty-note">No holdings yet — add transactions in Manage.</p>
   }
   return (
-    <TableScroll className="holdings-scroll" label="Holdings table">
+    <TableScroll className="holdings-scroll" label="Holdings table" ref={boxRef}>
       <table className="port-table">
         <thead>
           <tr>
