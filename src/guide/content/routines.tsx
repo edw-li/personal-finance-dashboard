@@ -286,7 +286,7 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Set the filing status',
         where: 'Taxes → Filing status',
         steps: [
-          'In the scope row, **Filing status** names the status this year is filed as; press its Change… button, pick another and confirm with **Change to <status>**.',
+          'In the scope row, **Filing status** names the status this year is filed as; press **Change…**, pick another and confirm with **Change to <status>**.',
         ],
         to: '/taxes',
         watch: ['Every year starts Single.'],
