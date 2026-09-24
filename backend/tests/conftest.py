@@ -98,12 +98,19 @@ def _fast_reset_sql() -> str:
     pg_sequences reports as last_value NULL — exactly like an untouched sequence — so a
     "reset only what was read" filter misses it and the next test's first row is id 2.
     Resetting all ~40 costs no more (median ~5 ms either way). setval(seq, start, false)
-    makes the next nextval return start — RESTART IDENTITY's state, serial or identity."""
+    makes the next nextval return start — RESTART IDENTITY's state, serial or identity.
+
+    synchronous_commit is off for this one transaction: its COMMIT returns without waiting
+    for the WAL flush. Under -n 4 (four workers flushing at once) that wait made the rare
+    0.5-3 s resets: the slowest reset of a run went from 0.8-3.1 s to 36-52 ms. Other
+    sessions still see the commit at once — visibility does not wait for the flush — and a
+    crash could only lose a reset of a disposable database whose schema every run rebuilds."""
     deletes = "\n".join(
         f'    DELETE FROM "{t.name}";' for t in reversed(Base.metadata.sorted_tables)
     )
     return (
         "DO $reset$\nDECLARE s record;\nBEGIN\n"
+        "    PERFORM set_config('synchronous_commit', 'off', true);\n"
         f"    PERFORM set_config('lock_timeout', '{_RESET_LOCK_TIMEOUT}', true);\n"
         f"{deletes}\n"
         "    FOR s IN SELECT schemaname, sequencename, start_value FROM pg_sequences\n"
