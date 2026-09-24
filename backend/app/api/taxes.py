@@ -260,6 +260,11 @@ class EngineFeed:
     # database with no roster.
     earner_people: list[tuple[int | None, str | None]] = dataclass_field(default_factory=list)
     brackets_missing_for_status: list[str] = dataclass_field(default_factory=list)
+    # What the feed was ASSEMBLED from (2026-09-23 spec §W3): the year's stored rows and the
+    # full roster, so a caller can overlay a what-if-shaped change on the rows in memory and
+    # re-assemble through `_engine_feed_from_rows` — one engine run, never another query.
+    rows: list = dataclass_field(default_factory=list)
+    roster: list[Person] = dataclass_field(default_factory=list)
 
     @property
     def primary_column(self) -> int | None:
@@ -608,14 +613,32 @@ async def _engine_feed(
 ) -> EngineFeed:
     """One year's feed. `people` is an optional hoist for callers that loop over years —
     the roster is the same for all of them — and defaults to loading it here, so a
-    single-year caller cannot forget it and read a stale one."""
+    single-year caller cannot forget it and read a stale one.
+
+    The DB half of the feed; the assembly is `_engine_feed_from_rows`, pure, so the
+    withholding card's reconciliation can re-assemble the same year over overlaid rows
+    without reading anything again (2026-09-23 spec §W3)."""
     filing_status = await _filing_status(db, year)
     if people is None:
         people = await load_people(db)
-    on_return = _return_people(people, filing_status)
-    columns = [person.id for person in on_return] or [None]
     rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
     tables, person_tables = await _engine_tables(db, year, filing_status)
+    return _engine_feed_from_rows(year, filing_status, people, rows, tables, person_tables)
+
+
+def _engine_feed_from_rows(
+    year: int,
+    filing_status: str,
+    people: list[Person],
+    rows: Sequence[TaxInput | _InputRow],
+    tables: dict[str, list[Bracket]],
+    person_tables: dict[int, dict[str, list[Bracket]]],
+) -> EngineFeed:
+    """The feed's pure assembly over rows already in hand — stored rows, or the preview's
+    `_InputRow`s laid over them. Everything `_engine_feed` decides beyond the reads is here,
+    so an overlaid feed and the stored one can only differ by the rows."""
+    on_return = _return_people(people, filing_status)
+    columns = [person.id for person in on_return] or [None]
     views = _input_views(year, rows, columns, filing_status)
     assembled = _assemble_earners(views.stored, columns, person_tables)
     names = {person.id: person.name for person in on_return}
@@ -640,6 +663,8 @@ async def _engine_feed(
         person_tables=person_tables,
         earner_people=[(column, names.get(column)) for column in earner_columns],
         brackets_missing_for_status=_missing_for_status(tables, filing_status, year),
+        rows=list(rows),
+        roster=list(people),
     )
 
 
@@ -1854,7 +1879,9 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
     # partner wages in it. Every other non-primary person on a joint return folds into one
     # "partner": the design ships a household of two, and a third person's wages still belong
     # on the withheld side rather than nowhere.
-    people = await load_people(db)
+    # The roster the feed was assembled with — one read for the whole card, and the same
+    # people the liability above was computed over.
+    people = feed.roster
     partner_ids = [
         person.id for person in _return_people(people, feed.filing_status) if not person.is_primary
     ]
