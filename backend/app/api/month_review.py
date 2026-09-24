@@ -87,7 +87,16 @@ async def save_month(
         balance_result = (
             None
             if body.balances is None
-            else await write_balances(month, body.balances, db, batch, record_metadata=True)
+            else await write_balances(
+                month,
+                body.balances,
+                db,
+                batch,
+                record_metadata=True,
+                # K4 (2026-09-23 spec): a legacy month is never restamped — `current` is this
+                # month's state in the book read before the write.
+                restamp=current.state != "unreviewed_history",
+            )
         )
         spending_result = (
             None if body.spending is None else await write_spending(month, body.spending, db, batch)

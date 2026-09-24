@@ -28,6 +28,7 @@ from app.schemas.ordering import OrderIn
 from app.services import clock
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import mom_pct, require_first_of_month
+from app.services.month_review import load_review_book
 from app.services.month_writes import write_balances
 from app.services.net_worth_calc import (
     ZERO,
@@ -563,7 +564,12 @@ async def put_month(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> MonthUpsertResult:
-    result = await write_balances(month, body, db, batch)
+    require_first_of_month(month)
+    # K4 (2026-09-23 spec): never restamp a legacy month — re-saving one recorded early would
+    # move its digest off `legacy_revision` and drop it from the averages. Read BEFORE the write.
+    book = await load_review_book(db, extra_months=[month])
+    restamp = book.months[month].state != "unreviewed_history"
+    result = await write_balances(month, body, db, batch, restamp=restamp)
     result.batch_id = await batch.commit()
     return result
 

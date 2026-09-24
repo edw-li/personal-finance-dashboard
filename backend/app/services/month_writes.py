@@ -35,6 +35,7 @@ async def write_balances(
     batch: ChangeBatch,
     *,
     record_metadata: bool = False,
+    restamp: bool = True,
 ) -> MonthUpsertResult:
     """Upsert a month's balances, deriving every parent-with-components as it writes.
 
@@ -43,6 +44,15 @@ async def write_balances(
     `updated` rows (and log them) for parents nobody typed. That is deliberate — a month
     you touch is left consistent — and it is why a save's row count can exceed the
     payload's length.
+
+    K4 (2026-09-23 spec): a PROVISIONAL snapshot — its stored recorded_on is earlier than its
+    month — is restamped on ANY balances save that does not send recorded_on itself: recorded
+    today, values changed or not. On or after its 1st that makes it final; before, it stays
+    provisional but its as-of moves to the day its values were last saved. The restamp is
+    always logged — even here, where metadata otherwise is not — so Undo restores the earlier
+    date. `restamp=False` (a legacy month, `unreviewed_history`) leaves the date alone: a new
+    date would move its digest off `legacy_revision` and drop it from the averages. A final
+    snapshot and a NULL date are never restamped.
     """
     require_first_of_month(month)
     ids = [entry.account_id for entry in body.balances]
@@ -103,6 +113,7 @@ async def write_balances(
     to_write = quantized | derived
 
     snapshot_created = snapshot is None
+    restamped_on: date | None = None
     if snapshot is None:
         if not body.balances:
             # An empty month would poison the summary KPI and the coverage ribbon.
@@ -125,10 +136,13 @@ async def write_balances(
         before_snapshot = row_image(snapshot)
         provided = body.model_fields_set
         if "recorded_on" in provided:
-            snapshot.recorded_on = body.recorded_on
+            snapshot.recorded_on = body.recorded_on  # an explicit date still wins
+        elif restamp and snapshot.recorded_on is not None and snapshot.recorded_on < month:
+            restamped_on = clock.product_today()  # K4: provisional → saved again today
+            snapshot.recorded_on = restamped_on
         if "notes" in provided:
             snapshot.notes = body.notes
-        if record_metadata:
+        if record_metadata or restamped_on is not None:
             batch.record_update(snapshot, before_snapshot, month=month)
 
     created = updated = unchanged = 0
@@ -151,11 +165,13 @@ async def write_balances(
         await db.flush()  # ids for the insert images
         for row in new_rows:
             batch.record_insert(row, month=month)
-    # Meta-only edits (recorded_on, notes) are deliberately not logged (spec section 9).
+    # Meta-only edits (recorded_on, notes) are deliberately not logged (spec section 9) — except
+    # K4's restamp above, which Undo must be able to reverse.
+    recorded = "" if restamped_on is None else f", recorded {restamped_on:%b} {restamped_on.day}"
     batch.label = (
         f"Entered {month:%b %Y} balances — {created} accounts"
         if snapshot_created
-        else f"Saved {month:%b %Y} balances — {created + updated} updated"
+        else f"Saved {month:%b %Y} balances — {created + updated} updated{recorded}"
     )
     return MonthUpsertResult(
         month=month,
