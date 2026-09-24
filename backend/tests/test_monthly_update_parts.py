@@ -395,3 +395,36 @@ async def test_changing_a_spending_amount_clears_the_zero_spending_consent(
         assert saved.status_code == 200, saved.text
     # Back at $0.00 without the box: the zeros are no longer confirmed.
     assert not await zero_confirmed(auth_client, db)
+
+
+# --- The wizard reads K4's blocker by its phrase (src/pages/MonthlyUpdatePage.tsx
+# `serverEarlyBlocker`): it shows the sentence beside "Save and close", and offers "Confirm {Oct 1}
+# balances", only when the server lists it. A reworded sentence would silently take the Confirm
+# away — so the phrase is pinned here, beside the exemption the wizard relies on.
+
+EARLY_PHRASE = " balances were recorded early, on "
+
+
+async def test_an_early_month_lists_the_blocker_phrase_the_wizard_reads_history_does_not(
+    auth_client, db, monkeypatch
+):
+    db.add(MonthReviewAdoption(id=1, adopted_on=date(2026, 9, 12)))
+    account = Account(name="Cash", slug="cash", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    # Oct 1 recorded Sep 22 (after adoption, blocked); Aug 1 recorded Jul 25 (history, exempt).
+    for month, recorded_on in ((OCT, date(2026, 9, 22)), (AUG, date(2026, 7, 25))):
+        snapshot = NetWorthSnapshot(month=month, recorded_on=recorded_on)
+        db.add(snapshot)
+        await db.flush()
+        db.add(
+            AccountBalance(
+                snapshot_id=snapshot.id, account_id=account.id, balance=Decimal("100.00")
+            )
+        )
+    await db.commit()
+    on(monkeypatch, date(2026, 10, 3))
+    october = (await auth_client.get(f"{MR}/{OCT}")).json()["blockers"]
+    assert any(EARLY_PHRASE in line for line in october), october
+    august = (await auth_client.get(f"{MR}/{AUG}")).json()["blockers"]
+    assert not any(EARLY_PHRASE in line for line in august), august

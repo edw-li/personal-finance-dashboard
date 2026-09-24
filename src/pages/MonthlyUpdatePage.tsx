@@ -1307,6 +1307,8 @@ function MonthlyUpdateWizard() {
   // K4's close blocker in the SERVER's words — listed only for a month the server refuses to close
   // for its early balances. History from before the review's adoption is exempt (spec §K4), and only
   // the server knows where that line falls, so the wizard reads the blocker rather than guessing.
+  // Found by its phrase (services/month_review.early_balances_blocker names this reader, and
+  // backend/tests/test_monthly_update_parts.py pins the phrase).
   const serverEarlyBlocker = review?.blockers.find((line) => line.includes(' balances were recorded early, on ')) ?? null
   // Balances recorded before their 1st, once that 1st has arrived: a save now makes them final
   // (K4), so an unchanged save IS the Confirm (spec §M4). Offered only where the server says the

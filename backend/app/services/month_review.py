@@ -101,7 +101,13 @@ def day_label(value: date, today: date | None = None) -> str:
 
 def early_balances_blocker(month: date, recorded_on: date, today: date) -> str:
     """K4's sentence (2026-09-23 spec): "Oct 1 balances were recorded early, on Sep 22 — save
-    them again on or after Oct 1 before closing October." """
+    them again on or after Oct 1 before closing October."
+
+    A reader outside this module: the Monthly update (src/pages/MonthlyUpdatePage.tsx,
+    `serverEarlyBlocker`) finds this blocker in a review's `blockers` by the phrase
+    " balances were recorded early, on " — it shows the sentence, and offers "Confirm {Oct 1}
+    balances", only when the server lists it. Rewording the sentence means changing that match
+    too; tests/test_monthly_update_parts.py pins the phrase."""
     name = f"{month:%B}" if month.year == today.year else f"{month:%B %Y}"
     first = day_label(month, today)
     return (
