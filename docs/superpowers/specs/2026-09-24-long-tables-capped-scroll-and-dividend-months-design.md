@@ -260,10 +260,14 @@ down the whole ledger):
   same size/transition tokens as `disclosure.css`), the month label, and "N entries" (muted; "1 entry");
   then `<td className="num">` with the month's total under the Amount column; then `<td colSpan={4} />`.
   The whole row toggles on click (handler on the `<tr>`; the button is the keyboard and screen-reader
-  control — its click bubbles to the row, so one toggle per activation).
+  control — its click bubbles to the row, so one toggle per activation). Its accessible name is
+  "Sep 2026, 40 entries" (a visually-hidden comma between label and count) and its description is the month's
+  total (`aria-describedby` → the total cell); being a padding-free text button it keeps an OUTSIDE focus ring.
 - Look: the month row's cells use an opaque band (`--surface-2`), `font-weight: 600`, text `--text`, the
-  count `--muted`; hover lifts the band (`color-mix(in srgb, var(--text) 6%, var(--surface-2))`, opaque,
-  both themes). Entry rows are unchanged (same cells, badges, per-share line, Edit/Delete), indented one
+  count `--muted`; hover lifts the band to `--fill` (opaque; the muted count keeps AA: 4.59:1 dark, 4.53:1
+  light — the first draft's 6% color-mix fell to 4.40:1); the pinned cells draw a bottom hairline
+  (`box-shadow: 0 1px 0 var(--border)`, the pinned totals row's idiom) so rows visibly slide under the band;
+  `user-select: none` (a double-click toggles twice, never selects the label). Entry rows are unchanged (same cells, badges, per-share line, Edit/Delete), indented one
   step in the first cell so they read as children of the month.
 - Toolbar line above the box: "14 months · 378 entries" (muted) and an **Expand all / Collapse all**
   button (label follows state: "Collapse all" only when every month is open). Hidden with fewer than two
@@ -279,11 +283,14 @@ column header. When the next month's row arrives it takes the place: Edge pins a
 against the whole TABLE, not their row group (measured 2026-09-24 — sticky cells, a sticky row and a
 positioned tbody alike), so passed month lines stack at one offset and the newest passed paints on top —
 the line shown is the month you are in. Two consequences are handled:
-- a focus or a click that lands on a month line whose month began above the band first scrolls the BOX
+- a click, or a TAB (Shift+Tab) that lands on a COVERED month line — focus arriving from another element with
+  Tab as the last key, and the next month's line overlapping this one — first scrolls the BOX
   until that month's group starts just under the column header (its own line uncovered). Shift+Tab back
   up the ledger would otherwise rest on a toggle hidden under a later month's line — the browser does not
   scroll to it, since it counts as in view (WCAG 2.4.11) — and collapsing the month you are inside keeps
-  your place instead of dropping you among the months below;
+  your place instead of dropping you among the months below. Focus handed back by code (the palette's Esc,
+  a dialog closing) or a window refocus never scrolls: those reach a line the reader already left, and a
+  jump would lose their place (both reproduced in Edge during review);
 - entry rows carry `scroll-margin-top: calc(var(--table-head-h, 0px) + 2.5rem)` (2.5rem ≥ one month line in
   both densities) so a Tab-focused Edit/Delete lands clear of both pinned lines — a margin on the rows, not
   scroll padding on the box, which would count the pinned toggles themselves as out of view and jump the
@@ -307,11 +314,14 @@ lands exactly below it.
 
 ### 4.5 Add, edit, delete, undo
 
-- After a successful **add** or **edit** save, the saved entry's month (from the response's `pay_date`) is
+- After a successful **add** or **edit** save, the saved entry's month (from the SAVED form's `pay_date` —
+  the month the entry was saved into) is
   opened, and once the refreshed rows render, the BOX (never the page) scrolls so the saved row shows below
   the pinned lines: `revealInBox(box, row)` adjusts `box.scrollTop` only when the row is outside the box's
   visible band. The entry form keeps focus (the rapid-entry session: amount box focused after an add) and
-  the page does not move.
+  the page does not move. The pending reveal is consumed by the next ledger the page renders after the save
+  (found → revealed, not found → dropped), is dropped by a delete or a new edit, and lapses after 10 s (an
+  identical refetch is skipped by the page, and a later unrelated ledger change must not scroll to an old row).
 - **Delete** and its **Undo** are unchanged; the month's count and total follow the rows.
 - **Edit** still seeds the form above the table without scrolling or focusing (unchanged).
 - Empty ledger: unchanged ("No dividends recorded." — no toolbar, no box).
