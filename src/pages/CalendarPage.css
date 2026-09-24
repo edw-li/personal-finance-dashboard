@@ -39,12 +39,31 @@
   min-width: 0;
 }
 
+/* Out-of-month days recede to 45% — their border, date, chips and "+N more", NOT the cell. Opacity
+   on the cell reached every descendant, the event popover open inside it included: September's
+   Oct 1 reminder painted at 45% with the legend showing through it, and August's Aug 31 bubble sat
+   under the next rows' chips, the dimmed cell being its own stacking context (batch-2 polish D2).
+   The popover is a layer above the grid, not part of the day. The border mixes its colour down to
+   the same 45% (each plain line first: an engine without color-mix keeps a full-strength border),
+   and so does today's accent when today falls in a neighbouring month. */
 .cal-day-outside {
+  border-color: var(--border);
+  border-color: color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+.cal-day-outside > .cal-day-number,
+.cal-day-outside .cal-chip,
+.cal-day-outside > .cal-more {
   opacity: 0.45;
 }
 
 .cal-day-today {
   border-color: var(--accent);
+}
+
+.cal-day-outside.cal-day-today {
+  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .cal-day-number {
@@ -108,8 +127,8 @@
 }
 
 /* The details popover — the app's bubble layer (z-index 2, InfoHint's). Days in the
-   right two columns anchor right so the bubble stays inside the card; a last-row
-   bubble may overhang downward — accepted, it floats and dismisses on outside click. */
+   right two columns anchor right so the bubble stays inside the card, and days in the
+   grid's lower half open upward (below) so it stays on the grid. */
 .cal-popover {
   position: absolute;
   top: calc(100% + 4px);
@@ -127,6 +146,14 @@
 .cal-popover-right {
   left: auto;
   right: 0;
+}
+
+/* Downward from the last rows the bubble ran off the grid and over the legend and notes under it —
+   and the monthly reminder, the tallest bubble, always sits in the last row: the 1st of the next
+   month (batch-2 polish D2). CalendarGrid.tsx sets this on the lower half's rows. */
+.cal-popover-up {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 
 .cal-event-type {

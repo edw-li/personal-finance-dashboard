@@ -2528,6 +2528,24 @@ it('the disabled Save and close is described by the sentence that says why (revi
   expect(reason()).toBe('Record Aug 1 balances before closing August.')
 })
 
+// Batch 2 final verification D6: beside the buttons, the gate sentence wrapped against "Save
+// progress" once the primary read "Save and close September". It leads the footer now — a line of
+// its own above Back and the actions (MonthlyUpdatePage.css) — so reading order is visual order.
+it('the gate sentence leads the Review footer, above Back and the actions (batch 2 final verification D6)', async () => {
+  setServerToday('2026-10-03')
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: '6000.00', amounts: [{ category_id: 7, amount: '300.00' }], budgets: [],
+  })
+  renderPage('/update?month=2026-08-01&step=review')
+  const close = await screen.findByRole('button', { name: 'Save and close August' })
+  const footer = close.closest('.wizard-footer') as HTMLElement
+  expect([...footer.children].map((child) => child.textContent)).toEqual([
+    'Record Aug 1 balances before closing August.',
+    'Back',
+    'Save progressSave and close August',
+  ])
+})
+
 it("after one part saves, the receipt names the other part's unsaved changes (review M2)", async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /^2\s*spending$/i }))

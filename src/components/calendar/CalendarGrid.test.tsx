@@ -134,6 +134,41 @@ describe('CalendarGrid', () => {
     )
   })
 
+  // Batch-2 polish D2: a bubble opened in the grid's lower half opens UPWARD, so it stays on the
+  // grid instead of running down over the legend beneath it. The monthly reminder always sits in
+  // the last row — the 1st of the next month — and is the tallest bubble.
+  it('opens a popover upward in the lower half of the grid and downward above it', () => {
+    const reminder = calendarEvent({ date: '2026-10-01', type: 'update_due', label: 'Monthly update — Oct 1 balances', short_label: 'Monthly update', entity_ref: '2026-09' })
+    const sep24 = calendarEvent({ date: '2026-09-24', type: 'custom', label: 'Dentist', id: 9 })
+    const sep30 = calendarEvent({ date: '2026-09-30', type: 'payday', label: 'Payday', short_label: 'Payday', amount: '4137.11', direction: 'in' })
+    const aug31 = calendarEvent({ date: '2026-08-31', type: 'espp_purchase', label: 'ESPP purchase — August 2026', short_label: 'ESPP purchase' })
+    const oct2 = calendarEvent({ date: '2026-10-02', type: 'custom', label: 'Fri', id: 10 })
+    const events = [...fixtures, reminder, sep24, sep30, aug31, oct2]
+    const popover = (event: CalendarEvent) => {
+      cleanup()
+      mount({ events, openKey: event.key })
+      return screen.getByRole('dialog', { name: event.label }).className.split(' ')
+    }
+    // September 2026 is five rows: Oct 1 (Thu, out of month) and Sep 30 (Wed) in row 5, Sep 24 in row 4.
+    expect(popover(reminder)).toEqual(['cal-popover', 'cal-popover-up'])
+    expect(popover(sep30)).toEqual(['cal-popover', 'cal-popover-up'])
+    expect(popover(sep24)).toEqual(['cal-popover', 'cal-popover-up'])
+    // Rows 1-3 open downward, as before — an out-of-month day's included.
+    expect(popover(fixtures[5])).toEqual(['cal-popover']) // Sep 16, row 3
+    expect(popover(aug31)).toEqual(['cal-popover']) // Aug 31 (Mon, out of month), row 1
+    // The right two columns still anchor right, in either direction.
+    expect(popover(oct2)).toEqual(['cal-popover', 'cal-popover-right', 'cal-popover-up'])
+    // A six-row month's lower half is three rows: August 2026's Aug 16-22 (row 4) opens upward too,
+    // where only two rows of grid lie below it; Aug 9-15 (row 3) still opens downward.
+    const aug18 = calendarEvent({ date: '2026-08-18', type: 'custom', label: 'Row four', id: 11 })
+    const aug11 = calendarEvent({ date: '2026-08-11', type: 'custom', label: 'Row three', id: 12 })
+    for (const [event, expected] of [[aug18, ['cal-popover', 'cal-popover-up']], [aug11, ['cal-popover']]] as const) {
+      cleanup()
+      mount({ month: '2026-08-01', activeDay: '2026-08-11', events: [aug18, aug11], openKey: event.key })
+      expect(screen.getByRole('dialog', { name: event.label }).className.split(' ')).toEqual(expected)
+    }
+  })
+
   it('moves the active day with the keyboard and steps the month at the edges', () => {
     const handlers = mount()
     const active = cell(SEP15)

@@ -142,10 +142,16 @@
   text-decoration: none;
 }
 
+/* The date keeps ONE line and the label beside it takes the squeeze (batch 2 final verification
+   D3): the monthly reminder's longer label broke the date as "Oct 1," over "2026" at 1280 and 1600.
+   The row is a flex line, so nowrap makes the whole date the item's minimum width and `flex: none`
+   stops it shrinking; the label — the anonymous text item after it — wraps instead. */
 .up-next-date {
+  flex: none;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   margin-right: 0.25rem;
+  white-space: nowrap;
 }
 
 /* Up next amounts sit right-aligned in the row (2026-09-03 calendar spec §14). */
@@ -221,7 +227,9 @@
    advisory register (--warn) — a feed behind the ritual, a quote past its day. */
 .overview-data-status .data-status-list { margin: 0; display: grid; gap: .35rem; }
 .data-status-row { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; font-size: .85rem; }
-.data-status-row dt { color: var(--muted); }
+/* The label keeps one line and the value takes the squeeze (batch 2 final verification D4): the
+   overdue wording broke "Balances as of" into "Balances as" over "of" at 1600 on Oct 16. */
+.data-status-row dt { flex: none; color: var(--muted); white-space: nowrap; }
 .data-status-row dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .overview-data-status .stale { color: var(--warn); }
 .data-status-note { margin: .6rem 0 0; }

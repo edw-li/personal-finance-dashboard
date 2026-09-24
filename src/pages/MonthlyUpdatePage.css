@@ -285,10 +285,14 @@
 .review-changes-head .eyebrow { margin: 0; }
 .review-changes-count { color: var(--muted); font-size: .85rem; }
 .review-changes-footer { margin: .75rem 0 0; padding-top: .6rem; border-top: 1px solid var(--border); }
-/* The footer's middle slot: the gate sentence beside the button it explains (T4). */
-.wizard-footer { align-items: center; }
-.wizard-footer-note { flex: 1; margin: 0; text-align: right; }
-.wizard-footer-actions { display: flex; gap: .6rem; }
+/* The gate sentence sits right above the button it explains (T4), on a line of its own and
+   right-aligned over the actions: in the slot beside them it wrapped against "Save progress" once
+   the primary read "Save and close September" (batch 2 final verification D6). It leads the footer
+   in the markup too, so reading order is visual order. Back keeps the left edge and the actions
+   the right, on whichever line they land. */
+.wizard-footer { align-items: center; flex-wrap: wrap; row-gap: .5rem; }
+.wizard-footer-note { flex: 1 0 100%; margin: 0; text-align: right; }
+.wizard-footer-actions { display: flex; gap: .6rem; margin-left: auto; }
 
 /* ── The two parts (2026-09-23 spec §M1–§M4) ─────────────────────────────────────────── */
 /* A part's note — the .draft-note register (panel fill, a left rule): the accent for a fact about

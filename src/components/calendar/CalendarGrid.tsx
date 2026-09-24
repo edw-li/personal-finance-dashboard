@@ -162,7 +162,7 @@ export default function CalendarGrid({
           Week
         </div>
       </div>
-      {weeks.map((week) => (
+      {weeks.map((week, weekIndex) => (
         <div role="row" className="cal-grid-row" key={week[0]}>
           {week.map((day, dayIndex) => {
             const outside = day.slice(0, 7) !== shownMonth
@@ -231,12 +231,17 @@ export default function CalendarGrid({
                         )}
                       </button>
                       {isOpen && (
+                        // The bubble stays on the grid: the right two columns anchor it right,
+                        // and the lower half's rows open it upward — downward from the last rows
+                        // it ran over the legend beneath the grid (batch-2 polish D2).
                         <div
                           ref={popoverRef}
                           role="dialog"
                           aria-label={event.label}
                           tabIndex={-1}
-                          className={`cal-popover${dayIndex >= 5 ? ' cal-popover-right' : ''}`}
+                          className={`cal-popover${dayIndex >= 5 ? ' cal-popover-right' : ''}${
+                            weekIndex >= weeks.length / 2 ? ' cal-popover-up' : ''
+                          }`}
                         >
                           {renderDetails(event)}
                         </div>
