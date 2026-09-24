@@ -521,6 +521,111 @@
   padding-left: 10px;
 }
 
+/* "Your inputs vs your records" (2026-09-23 spec §W4): a quiet sub-card under the tiles, the
+   partner block's shape. The flag is the warn register — the amber rule the brackets call to
+   action wears — on the row's first cell AND the word "differs", never colour alone. */
+.recon-strip {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, transparent);
+}
+
+.recon-strip > .eyebrow {
+  margin: 0 0 6px;
+}
+
+.recon-lead {
+  margin: 0 0 2px;
+  font-size: 0.85rem;
+}
+
+.recon-lead.is-flagged {
+  border-left: 3px solid var(--warn);
+  padding-left: 8px;
+}
+
+.recon-matched {
+  margin: 2px 0 8px;
+  font-size: 0.8rem;
+}
+
+/* At 1280 the six columns fit; anything narrower scrolls inside the strip, never the card. */
+.recon-scroll {
+  overflow-x: auto;
+}
+
+.recon-table {
+  width: 100%;
+}
+
+.recon-table td {
+  vertical-align: top;
+}
+
+.recon-table td.num {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.recon-table tr.is-flagged > td:first-child {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
+.recon-line {
+  white-space: nowrap;
+}
+
+.recon-figure {
+  font-variant-numeric: tabular-nums;
+}
+
+.recon-source,
+.recon-detail {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.recon-detail {
+  display: block;
+}
+
+.recon-flag {
+  margin-left: 6px;
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.recon-person th {
+  padding-top: 10px;
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.recon-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.recon-actions .chip + .chip {
+  margin-left: 0.4rem;
+}
+
+.recon-note {
+  margin: 6px 0 0;
+}
+
+/* A start-date sentence (§W1) beside the figure it qualifies: a finding, not a footnote. */
+.withholding-panel .withholding-start {
+  border-left: 3px solid var(--warn);
+  padding-left: 10px;
+}
+
 /* The Apply chip rides inside the vest sentence — one gap, not a new layout. */
 .withholding-panel .hint .chip {
   margin-left: 0.5rem;
