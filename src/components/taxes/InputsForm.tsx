@@ -572,7 +572,8 @@ export default function InputsForm({
       </h2>
       <p className="drill-hint">
         Stored values feed the engine; computed lines follow their components. Clearing a
-        field unsets that input.
+        field unsets that input. Enter the whole year’s figures, including paychecks and vests
+        still to come.
       </p>
       {/* Married-JOINT alone: an MFS return is one person's by design (the CA caveat in the
           year card is exactly about what that does not model), so its single column is the

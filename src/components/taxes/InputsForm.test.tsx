@@ -289,6 +289,15 @@ describe('InputsForm', () => {
     expect(screen.queryByRole('button', { name: 'Apply suggestion for Annual Salary' })).toBeNull()
   })
 
+  it('asks for the whole year’s figures (2026-09-23 spec §W2)', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(
+      screen.getByText(
+        /Enter the whole year’s figures, including paychecks and vests still to come\./,
+      ),
+    ).toBeTruthy()
+  })
+
   it('renders a count as an integer and a percent as a percent', () => {
     render(<InputsForm inputs={unitInputs()} onSaved={vi.fn()} />)
     const count = field('Pay periods (checks received so far this year)')
