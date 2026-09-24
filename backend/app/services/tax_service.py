@@ -105,8 +105,10 @@ FOLDED_TO_BASE_CG = dict(zip(FOLDED_CG_RATES, BASE_CG_RATES, strict=True))
 
 # Suggestions land in tax_inputs, Numeric(14,4).
 SUGGESTION_QUANTUM = Decimal("0.0001")
-# The sheet divides annual salary by a hardcoded 24 — `pay_periods` is the year-to-date
-# count of checks received, not the annual cadence.
+# The sheet divides annual salary by a hardcoded 24 — `pay_periods` is the number of
+# semi-monthly periods in the WHOLE year, 24 for a full year, including those still to come
+# (2026-09-23 spec §W2): the withholding side always projects the full year, so a
+# year-to-date count here would put the two halves of "Will I owe?" on different bases.
 PAYCHECKS_PER_YEAR = Decimal("24")
 SALT_CAP_FIRST_RAISED_YEAR = 2025
 SALT_CAP_BEFORE = Decimal("10000")

@@ -88,6 +88,7 @@ from app.schemas.taxes import (
     WhatIfDelta,
     WhatIfIn,
     WhatIfOut,
+    WithholdingGridOut,
     WithholdingJurisdictionOut,
     WithholdingJurisdictionsOut,
     WithholdingLegOut,
@@ -991,8 +992,8 @@ def _check_input_unit(key: str, value: Decimal) -> None:
 
     Money keys keep the column bound alone — every figure on a tax sheet is money and the
     engine has no opinion about its size. The two non-money keys DO have one: `pay_periods`
-    counts checks received so far this year (a whole number; 53 is the most a weekly
-    payroll can pay), and a percent key stores the FRACTION the engine multiplies by, so a
+    counts the year's pay periods (a whole number; 53 is the most a weekly payroll can pay),
+    and a percent key stores the FRACTION the engine multiplies by, so a
     stored 98 would have multiplied treasury dividends by ninety-eight. Same `values.{key}`
     vocabulary as the quantizer above, so a rejected input reads the same wherever it
     arrived.
@@ -1817,6 +1818,9 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
             continue
         profiles.append(profile)
 
+    names = {person.id: person.name for person in people}
+    partner_name = names.get(partner_ids[0]) if len(partner_ids) == 1 else None
+
     # Whose paycheck is whose (2026-08-27 spec §4.2). Before the person migration every
     # profile was the primary's and this route fed them all to one leg; with per-person
     # profiles that would price the primary's checks off the partner's salary.
@@ -1917,6 +1921,11 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         # None really is "no row stored on the primary's side" — an entered 0 is a real
         # answer (a bonus nobody withheld on) and must not be replaced by the model.
         bonus_withholding=_primary_share(feed.inputs, partner_values, BONUS_WITHHOLDING_KEY),
+        # Whose checks the §W1 sentences are about ("Grace's checks on or before Sep 1 …"). A
+        # partner is named only when the return covers exactly one: several fold into ONE
+        # simulated leg, and a sentence naming one of them would be about the others too.
+        primary_name=None if primary is None else primary.name,
+        partner_name=partner_name,
     )
     warnings.extend(estimated.warnings)
 
@@ -2113,6 +2122,44 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
             ),
         )
 
+    # Each simulated leg's counted-check facts (2026-09-23 spec §W2), in the order the card
+    # reads them: the primary's (when they have a usable profile), then the partner's.
+    grids: list[WithholdingGridOut] = []
+    if primary_profiles:
+        grids.append(
+            WithholdingGridOut(
+                role="primary",
+                person_id=feed.primary_column,
+                name=None if primary is None else primary.name,
+                checks_elapsed=estimated.checks_elapsed,
+                checks_total=estimated.checks_total,
+                first_check=estimated.salary_first_check,
+                starts_on=estimated.salary_starts_on,
+                gross_projected=_money(estimated.salary_gross_projected),
+                trad_401k_projected=_money(estimated.salary_trad_401k_projected),
+                roth_401k_projected=_money(estimated.salary_roth_401k_projected),
+                hsa_projected=_money(estimated.salary_hsa_projected),
+                early_checks_note=estimated.salary_early_note,
+            )
+        )
+    if estimated.partner_source == withholding_calc.PARTNER_SIMULATED:
+        grids.append(
+            WithholdingGridOut(
+                role="partner",
+                person_id=partner_ids[0] if len(partner_ids) == 1 else None,
+                name=partner_name,
+                checks_elapsed=estimated.partner_checks_elapsed,
+                checks_total=estimated.partner_checks_total,
+                first_check=estimated.partner_first_check,
+                starts_on=estimated.partner_starts_on,
+                gross_projected=_money(estimated.partner_gross_projected),
+                trad_401k_projected=_money(estimated.partner_trad_401k_projected),
+                roth_401k_projected=_money(estimated.partner_roth_401k_projected),
+                hsa_projected=_money(estimated.partner_hsa_projected),
+                early_checks_note=estimated.partner_early_note,
+            )
+        )
+
     return WithholdingOut(
         year=year,
         filing_status=feed.filing_status,
@@ -2156,6 +2203,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         safe_harbor=safe_harbor,
         jurisdictions=jurisdictions,
         warnings=warnings,
+        grids=grids,
     )
 
 

@@ -407,6 +407,34 @@ class WithholdingPartnerLegOut(BaseModel):
     checks_total: int
 
 
+class WithholdingGridOut(BaseModel):
+    """One simulated leg's check grid, summed over its COUNTED checks (2026-09-23 spec §W1–§W2).
+
+    A grid check on or before the person's first paycheck profile pays nothing and is not
+    counted, so `checks_total` is the checks after that date and every sum below is over those
+    alone. The 401(k) and HSA sums are what payroll would take at these rates BEFORE any 402(g)
+    or HSA stop — the reconciliation applies the year's stored limits. `starts_on` is the first
+    profile's date when it left grid checks at $0, and `early_checks_note` is the exact
+    sentence the payload's `warnings` carries for it, so the card can show it beside the figure
+    and keep it out of the folded notes by equality.
+    """
+
+    role: Literal["primary", "partner"]
+    # The person the leg belongs to: the primary's column (null on a roster-less database) or
+    # the one partner the return covers (null when several partners share the folded leg).
+    person_id: int | None
+    name: str | None
+    checks_elapsed: int
+    checks_total: int
+    first_check: date | None
+    starts_on: date | None
+    gross_projected: Decimal
+    trad_401k_projected: Decimal
+    roth_401k_projected: Decimal
+    hsa_projected: Decimal
+    early_checks_note: str | None = None
+
+
 class SafeHarborOut(BaseModel):
     """The statutory harbor is the LESSER of two legs (2026-08-31 spec C4); either can
     be missing — a first year has no prior return, a refused engine year has no current
@@ -507,3 +535,7 @@ class WithholdingOut(BaseModel):
     # its combined meaning either way — the calendar and the assistant read those.
     jurisdictions: WithholdingJurisdictionsOut | None = None
     warnings: list[str]
+    # Each simulated leg's counted-check facts (2026-09-23 spec §W2): the primary's when they
+    # have a usable profile, then the partner's when their leg is simulated. Additive and
+    # defaulted, so a replayed older payload still validates.
+    grids: list[WithholdingGridOut] = Field(default_factory=list)

@@ -295,7 +295,13 @@ async def test_get_inputs_stamps_the_unit_and_the_two_relabelled_rows(auth_clien
         "pay_periods",
         "unq_div_state_exempt_pct",
     }
-    assert items["pay_periods"]["label"] == "Pay periods (checks received so far this year)"
+    # The whole year's periods since 2026-09-23 spec §W2: the engine divides the salary by a
+    # hard-coded 24, and the withholding side always projects the full year — "so far" set
+    # the two sides on different bases.
+    assert items["pay_periods"]["label"] == (
+        "Pay periods (semi-monthly periods in the whole year — 24 for a full year, including "
+        "those still to come)"
+    )
     assert (
         items["unq_div_state_exempt_pct"]["label"]
         == "Treasury-fund dividends — state-exempt share (%)"

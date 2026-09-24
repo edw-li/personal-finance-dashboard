@@ -13,7 +13,17 @@ SECTIONS = (ORDINARY_INCOME, DEDUCTIONS, CAPITAL_GAINS)
 TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("annual_salary", "Annual Salary", ORDINARY_INCOME, 10, False),
     ("gross_paycheck", "Gross Paycheck", ORDINARY_INCOME, 20, True),
-    ("pay_periods", "Pay periods (checks received so far this year)", ORDINARY_INCOME, 30, False),
+    # The WHOLE year's periods (2026-09-23 spec §W2): the engine divides the salary by a
+    # hard-coded 24, so "paychecks" would invite 26 from a biweekly earner, and "so far" set the
+    # liability on a year-to-date basis against a withholding side that projects the full year.
+    (
+        "pay_periods",
+        "Pay periods (semi-monthly periods in the whole year — 24 for a full year, including "
+        "those still to come)",
+        ORDINARY_INCOME,
+        30,
+        False,
+    ),
     ("latest_w2_income", "Latest W2 Income", ORDINARY_INCOME, 40, True),
     ("other_w2_income", "Other W2 Income", ORDINARY_INCOME, 50, True),
     ("w2_stock_rsus_sold", "W2: Stock/RSUs Sold", ORDINARY_INCOME, 60, False),
@@ -125,8 +135,8 @@ def label_for(key: str, stored: str) -> str:
     return _LABELS.get(key, stored)
 
 
-# The ranges the PUT enforces per unit. A count of checks received so far this year is a
-# whole number, and 53 is the most a weekly payroll can pay in one calendar year; a percent
+# The ranges the PUT enforces per unit. A count of the year's pay periods is a whole number,
+# and 53 is the most a weekly payroll can pay in one calendar year; a percent
 # key stores a fraction, so 0..1 (the engine multiplies it directly).
 MIN_INPUT_COUNT = 0
 MAX_INPUT_COUNT = 53

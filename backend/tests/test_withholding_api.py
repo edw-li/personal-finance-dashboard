@@ -1284,6 +1284,62 @@ async def test_withholding_simulates_the_partner_when_they_have_a_profile(
     assert body["additional_medicare_gap"] == "900.00"
 
 
+async def test_withholding_publishes_each_legs_counted_check_facts(
+    auth_client, db, married_world, frozen_today
+):
+    """2026-09-23 spec §W1–§W2: one grid per simulated leg, summed over COUNTED checks only,
+    with the start date and the exact sentence the card shows inline."""
+    me_id, partner_id = married_world
+    await seed_profile(
+        db,
+        person_id=partner_id,
+        effective_date=date(2026, 3, 1),
+        annual_salary=Decimal("150000.00"),
+        trad_401k_pct=Decimal("0"),
+        withholding_pct=Decimal("0.200000000"),
+        dental_vision_per_check=Decimal("0.00"),
+        hsa_per_check=Decimal("0.00"),
+    )
+    body = await get_withholding(auth_client)
+    primary, partner = body["grids"]
+    assert primary == {
+        "role": "primary",
+        "person_id": me_id,
+        "name": "Me",
+        "checks_elapsed": 11,
+        "checks_total": 24,
+        "first_check": "2026-01-16",
+        "starts_on": None,
+        "gross_projected": "240000.00",
+        "trad_401k_projected": "12000.00",  # 24 x 500
+        "roth_401k_projected": "0.00",
+        "hsa_projected": "2400.00",  # 24 x 100
+        "early_checks_note": None,
+    }
+    # The partner starts Mar 1: Mar 2 … Jun 17 have landed, 21 checks count at all.
+    assert (partner["role"], partner["person_id"], partner["name"]) == (
+        "partner",
+        partner_id,
+        "Partner",
+    )
+    assert (partner["checks_elapsed"], partner["checks_total"]) == (8, 21)
+    assert (partner["first_check"], partner["starts_on"]) == ("2026-03-02", "2026-03-01")
+    assert partner["gross_projected"] == "131250.00"  # 21 x 6250
+    assert partner["early_checks_note"] == (
+        "Partner's checks on or before Mar 1, the first paycheck profile's start, count as $0 "
+        "— add a profile for an earlier job or salary to include them"
+    )
+    assert partner["early_checks_note"] in body["warnings"]
+    assert body["partner_salary"]["checks_total"] == 21
+    assert body["partner_salary"]["projected"] == "26250.00"  # 21 x 1250, not 24 x 1250
+
+
+async def test_a_single_year_publishes_one_grid_and_no_partner(auth_client, world, frozen_today):
+    body = await get_withholding(auth_client)
+    assert [grid["role"] for grid in body["grids"]] == ["primary"]
+    assert body["grids"][0]["gross_projected"] == "240000.00"
+
+
 async def test_a_partner_profile_ignores_their_tracker_rows_but_still_reports_them(
     auth_client, db, married_world, frozen_today
 ):
