@@ -83,9 +83,9 @@ const ROUTE_SAMPLES: Record<string, SamplePrompt[]> = {
   ],
   '/projection': [
     {
-      label: 'Why do my FI dates differ?',
+      label: 'When do we reach FI, and does the money last?',
       prompt:
-        'The projection shows a deterministic FI date and Monte Carlo percentiles. Explain what each means, why they differ, and which assumptions move them most.',
+        'When do we reach financial independence, and does the money last? Give the FI date with its range across the simulated paths and, once retirement months are set, the share of paths that last through the plan-until year and the year 9 in 10 paths last until. Name the assumptions that move them most.',
     },
   ],
   '/credit-cards': [

@@ -9,7 +9,7 @@ export const PLANNING_CARDS: GuideCard[] = [
     id: 'page-projection',
     title: 'Projection',
     purpose:
-      'A retirement projection from your own records — investable balance, contribution, spend and withdrawal rate — with a fan of simulated paths. Nothing here is saved.',
+      'A retirement projection from your own records — investable balance, contribution, spend and withdrawal rate — with a fan of simulated paths, one FI date and whether the money lasts through the year you choose. Nothing here is saved.',
     to: '/projection',
     views: ['Planning workspace', 'Historical trend'],
     keywords: ['projection', 'forecast', 'retire', 'fire', 'monte carlo', 'fi date'],
@@ -20,7 +20,8 @@ export const PLANNING_CARDS: GuideCard[] = [
         where: 'Projection → Planning workspace → Planning assumptions',
         steps: [
           'Type into **Annual return**, **Monthly contribution**, **Annual spend** or **Withdrawal rate**.',
-          'Or into the model knobs: **Horizon (years)**, **Volatility**, **Inflation**, **Contribution growth**.',
+          'Or into the model knobs: **Horizon (years)**, **Plan until**, **Volatility**, **Inflation**, **Contribution growth**.',
+          'Scheduled RSU vests are in by default — clear **Include scheduled vests** to leave them out.',
           'Blank means derived — the badge names the source: **From your records**, **Settings** or **Planning default**.',
           'Enter 5 for 5%.',
           'The chart and the outcomes re-run as you type; the address carries the scenario.',
@@ -44,11 +45,24 @@ export const PLANNING_CARDS: GuideCard[] = [
         where: 'Projection → Planning assumptions → Retires',
         steps: [
           'Type a month in **Retires** for each person — a dashed rule marks it on the chart.',
+          'While one of you works, that person keeps saving; from the last retirement on, your annual spend is withdrawn.',
           'Clear the box to put that person back to work.',
-          'The sentences under the knobs say what the drop covers.',
         ],
         to: '/projection',
-        keywords: ['retire', 'retirement date', 'stop working'],
+        keywords: ['retire', 'retirement date', 'stop working', 'withdrawal', 'drawdown'],
+      },
+      {
+        id: 'projection-plan-until',
+        title: 'Check whether the money lasts',
+        where: 'Projection → Planning assumptions → Plan until',
+        steps: [
+          'Give everyone with a paycheck a retirement month — withdrawals start at the last one.',
+          'Type a year in **Plan until**; a later year lengthens the horizon.',
+          '**Money lasts** gives the share of paths that last through that year, and the year 9 in 10 paths last until.',
+          'Keep a lasting default year in Settings → Planning → Plan assumptions.',
+        ],
+        to: '/projection',
+        keywords: ['money lasts', 'plan until', 'run out', 'success rate', 'safe withdrawal'],
       },
       {
         id: 'projection-dollars',
@@ -91,7 +105,7 @@ export const PLANNING_CARDS: GuideCard[] = [
         where: 'Projection → Historical trend',
         steps: [
           'The trend loads when you first open the tab — the projection never waits for it.',
-          'Every monthly net-worth snapshot draws as a dot.',
+          'Every monthly net-worth snapshot draws as a dot; the curve is fitted to them — not a forecast.',
           'The span toggle sets how far the fit runs forward.',
           'Under three snapshots there is no fit — the dots stay and the footer says why.',
         ],
@@ -102,7 +116,8 @@ export const PLANNING_CARDS: GuideCard[] = [
         title: 'Read the outcomes band',
         where: 'Projection → Planning workspace',
         steps: [
-          'Five tiles: **FI target**, **FI ratio**, **Investable balance**, **Projected FI date**, and the odds.',
+          'Five tiles: **FI target**, **FI ratio**, **Investable balance**, **FI date** and **Money lasts**.',
+          'The FI date is when half of the simulated paths reach the target; the range says when 1 in 10 and 9 in 10 do.',
           'Press **About this number** beside a tile for the figures behind it.',
           'FI target and FI ratio are defined in this guide’s glossary.',
         ],
@@ -110,9 +125,9 @@ export const PLANNING_CARDS: GuideCard[] = [
       },
     ],
     watch: [
-      'Nothing on this page is saved — the stored withdrawal rate lives under Settings → Planning → Plan assumptions.',
-      'The probability tile asks whether the target is reached within the horizon, not whether the spending lasts.',
-      'RSU vests are not in the derived contribution — raise it by hand to model them.',
+      'Nothing on this page is saved — the stored withdrawal rate and plan-until year live under Settings → Planning → Plan assumptions.',
+      'Withdrawals are untaxed and Social Security is not modelled, so the money-lasts share leans hopeful.',
+      'Scheduled RSU vests are in by default, at today\u2019s quote after about 32 % sell-to-cover — clear **Include scheduled vests** to leave them out.',
       'A volatility of 0 turns the fan off; it is a legitimate value, not an error.',
     ],
   },

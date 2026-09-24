@@ -859,7 +859,8 @@ Three pages carry a sandbox — Paycheck's **Try it**, Taxes' **What if**, Proje
 A sandbox's live scenario lives in the page URL as a repeated `whatif=` query parameter, one entry
 per knob or leg in the server's own wire vocabulary: `whatif=trad_401k_pct:0.15`,
 `whatif=sale:7:40:62.50:S` (security 7, 40 shares, $62.50, short-term), `whatif=espp:3`,
-`whatif=qualified_dividends:null`, `whatif=annual_return:0.06`, `whatif=retire:2:2035-06`. The
+`whatif=qualified_dividends:null`, `whatif=annual_return:0.06`, `whatif=retire:2:2035-06`,
+`whatif=plan_until:2075`, `whatif=vests:0`. The
 URL is the state: copy it and the recipient sees the same scenario; a drag is written
 replace-style, so the back button leaves the page rather than replaying slider positions.
 Unknown entries are dropped on arrival and the URL rewritten without them; the older
@@ -877,6 +878,23 @@ confirmation: Paycheck pre-fills the profile form (you click its own Add profile
 input overrides through the inputs editor's PUT, Projection has no Apply. Up to three scenarios
 per page can be pinned in the browser (`localStorage`, knobs only — pins re-run against live data
 on every visit and are never part of a link).
+
+**Projection — moved by design (2026-09-23 correctness batch; do not "fix" these).** Scheduled RSU
+vests are included by default — each vest after the starting balance's date, at today's employer
+quote less the calendar's ≈ 32.23 % sell-to-cover, stopping at the primary's retirement
+(`vests:0` leaves them out) — so the FI date moves earlier. A retirement month now splits the plan
+into phases: while one of you works, that person's payroll saving and employer match continue and
+their pay is assumed to cover spending (a note says when it does not); from the last retirement on,
+the projection withdraws your annual spend each year in today's dollars (taxes on withdrawals and
+Social Security are not modelled). The old "the balance simply stops moving" behaviour is gone, and
+a balance never goes below $0 in any phase — a negative typed contribution bottoms out at $0 and
+counts as running out. The headline FI date is the simulation's median reach, with the months 1 in
+10 and 9 in 10 paths get there; "Money lasts" is the share of the same 500 paths that last through
+a plan-until year (a knob, or a lasting default under Settings › Plan assumptions; a later year
+lengthens the horizon). The Historical trend is a curve fitted to recorded net worth, not a
+forecast. `GET /projection` answers from a result cache — the serialized response per data
+fingerprint (the sixteen tables it reads), product day and knobs — and runs its Monte Carlo in a
+worker thread, one at a time.
 
 ## Development — running the tests
 
