@@ -1208,6 +1208,26 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     )
   })
 
+  // Spec review M8: the T1 gap case on the page itself — Oct 1 against Aug 1, September's
+  // balances never recorded: the change says what it is since and how long, not whose story it is.
+  it('names a gap in months: "since Aug 1 · 2 months"', async () => {
+    setServerToday('2026-10-03')
+    const gap = summaryOut({
+      ...EARLY,
+      as_of: '2026-10-01',
+      recorded_on: '2026-10-01',
+      provisional: false,
+      previous: { month: '2026-08-01', as_of: '2026-08-01', recorded_on: '2026-08-01', provisional: false },
+      days_since_previous: 61,
+    })
+    seedOverview(snapshotOf(serve({ summary: gap })))
+    renderPage()
+    await screen.findByText('Net worth — as of Oct 1')
+    const hero = tileFor('Net worth — as of Oct 1')
+    expect(hero.textContent).not.toContain('Provisional')
+    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583.02 (+15.7%) since Aug 1 · 2 months')
+  })
+
   it('carries the as-of date, the provisional completeness and the reason on its receipt', async () => {
     setServerToday('2026-09-23')
     seedOverview(snapshotOf(serve({ summary: EARLY })))
