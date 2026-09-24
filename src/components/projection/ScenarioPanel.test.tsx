@@ -239,10 +239,18 @@ describe('ScenarioPanel', () => {
     expect(screen.queryByText(/Records from/)).toBeNull()
   })
 
+  it('offers the Horizon KNOB as the baseline when a Settings plan-until year lengthened the run (2026-09-24 re-review)', async () => {
+    preview.mockImplementation(async () => ({ ...echo, years: 50, base_years: 30, plan_until: 2075, plan_until_source: 'setting' }))
+    mount()
+    await waitFor(() => expect(preview).toHaveBeenCalled())
+    expect(await screen.findByRole('button', { name: 'Baseline 30' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Baseline 50' })).toBeNull()
+  })
+
   it('states that the seed is fixed and points the withdrawal rate at Settings', () => {
     mount()
     // Only on one horizon: a different `years` re-deals the paths (2026-09-24 review I1).
-    expect(screen.getByText(/Scenarios on the same horizon reuse the same random samples/)).toBeTruthy()
+    expect(screen.getByText(/Scenarios with the same Horizon \(years\) setting reuse the same random samples/)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
   })
 

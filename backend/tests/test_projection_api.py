@@ -234,6 +234,80 @@ async def test_a_lengthening_plan_until_keeps_every_month_the_horizon_had(
         assert longer["bands"][band][: len(values)] == values, band
 
 
+def _source_link_query(body: dict) -> str:
+    """The request the page's "Inspect assumptions" link makes (projectionDisplay.ts
+    projectionSourceLink): the echoed knobs — `years` from `base_years`, the horizon KNOB, not the
+    lengthened one — the plan-until year, vests when switched off, and the retirements."""
+    params = [
+        f"annual_return={body['annual_return']}",
+        f"monthly_contribution={body['monthly_contribution']}",
+        f"swr={body['swr_pct']}",
+        f"years={body['base_years']}",
+    ]
+    for key in ("annual_spend", "inflation", "volatility", "contribution_growth"):
+        if body[key] is not None:
+            params.append(f"{key}={body[key]}")
+    if body["plan_until"] is not None:
+        params.append(f"plan_until={body['plan_until']}")
+    vests = body.get("vests")
+    if vests is not None and not vests["included"] and vests["excluded_reason"] is None:
+        params.append("vests=0")
+    params += [f"retire={row['person_id']}:{row['month'][:7]}" for row in body["retirements"]]
+    return "&".join(params)
+
+
+async def test_base_years_echoes_the_horizon_knob_under_a_lengthening_plan_until(
+    auth_client, db, monkeypatch
+):
+    # 2026-09-24 re-review: the simulated paths are drawn on the `years` KNOB's months, so the page
+    # needs the knob back, not just the lengthened horizon it ran — or a link or a box that sends
+    # the lengthened `years` re-deals every path.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_book(db)
+    plain = (await auth_client.get("/api/v1/projection")).json()
+    assert plain["years"] == plain["base_years"] == 30
+    longer = (await auth_client.get("/api/v1/projection?plan_until=2075")).json()
+    assert (longer["years"], longer["base_years"]) == (50, 30)
+    typed = (await auth_client.get("/api/v1/projection?years=40&plan_until=2075")).json()
+    assert (typed["years"], typed["base_years"]) == (50, 40)
+
+
+@pytest.mark.parametrize("plan_until", [2075, 2085])
+async def test_a_lengthened_runs_source_link_answers_with_identical_figures(
+    auth_client, db, monkeypatch, plan_until
+):
+    # The page and the request its "Inspect assumptions" link makes must show the same numbers:
+    # the reviewer's probe had the page at FI Nov 2043 / 67.2 % and its link at Jan 2044 / 65.0 %.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    retire = f"retire={alex.id}:{_month_param(month_add(this_month, 216))}"
+    page = (
+        await auth_client.get(
+            f"/api/v1/projection?annual_return=0.07&plan_until={plan_until}&{retire}"
+        )
+    ).json()
+    assert page["years"] > page["base_years"]
+    link = (await auth_client.get(f"/api/v1/projection?{_source_link_query(page)}")).json()
+    for key in (
+        "years",
+        "base_years",
+        "months",
+        "projected",
+        "bands",
+        "fi_month",
+        "fi_month_p10",
+        "fi_month_p50",
+        "fi_month_p90",
+        "fi_probability",
+        "money_lasts",
+        "phases",
+        "drawdown",
+    ):
+        assert link[key] == page[key], key
+
+
 async def test_a_snapshot_two_months_ahead_is_never_the_base(auth_client, db, monkeypatch):
     # Only an API client or an import can store one (K2); it stays in the charts, never "now".
     monkeypatch.setattr(clock, "product_today", lambda: SEP_23)

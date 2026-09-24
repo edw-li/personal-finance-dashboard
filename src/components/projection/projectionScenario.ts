@@ -157,7 +157,9 @@ export function derivedOf(baseline: ProjectionOut | null): Record<ProjectionKnob
     swr: baseline?.swr_pct ?? null,
     vests: vests === null ? null : vests.included ? '1' : '0',
     volatility: baseline?.volatility ?? null,
-    years: baseline === null ? null : String(baseline.years),
+    // The KNOB (2026-09-24 re-review): a baseline lengthened by the Settings plan-until year
+    // ran 50 years on a 30-year knob, and 50 back in the box would re-deal every path.
+    years: baseline === null ? null : String(baseline.base_years ?? baseline.years),
   }
 }
 

@@ -2164,6 +2164,10 @@ export interface ProjectionOut {
   /** The year the money has to last through, resolved, and where it came from (§R3). */
   plan_until?: number | null
   plan_until_source?: 'knob' | 'setting' | 'default' | null
+  /** The Horizon (years) KNOB the run resolved (2026-09-24 re-review): `years` is the horizon it RAN,
+   *  lengthened to reach the plan-until year, but the simulated paths are drawn on this one's
+   *  months — send `years` back from here, never from the lengthened echo. */
+  base_years?: number | null
   money_lasts?: MoneyLastsOut | null
   vests?: VestsOut | null
 }

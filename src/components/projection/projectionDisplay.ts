@@ -32,9 +32,11 @@ export function balanceAsOf(data: ProjectionOut): string {
 }
 
 export function projectionSourceLink(data: ProjectionOut): string {
+  // The Horizon KNOB, not the horizon a plan-until year lengthened: the simulated paths are drawn
+  // on the knob's months, so a link carrying the lengthened `years` would re-deal every path.
   const scenario: ProjectionScenario = { knobs: {
     annual_return: data.annual_return, monthly_contribution: data.monthly_contribution,
-    swr: data.swr_pct, years: String(data.years),
+    swr: data.swr_pct, years: String(data.base_years ?? data.years),
   }, retirements: {} }
   for (const key of ['annual_spend', 'inflation', 'volatility', 'contribution_growth'] as const) {
     if (data[key] !== null) scenario.knobs[key] = data[key]

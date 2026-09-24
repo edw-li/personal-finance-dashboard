@@ -91,6 +91,15 @@ describe('projection display dollars', () => {
     const unpriced = new URL(projectionSourceLink(fixture({ vests: { ...vests, excluded_reason: 'No NVDA quote yet — scheduled vests are left out' } })), 'http://local')
     expect(unpriced.searchParams.getAll('whatif')).not.toContain('vests:0')
   })
+
+  it('links the Horizon KNOB, not the horizon a plan-until year lengthened — the same paths redraw (2026-09-24 re-review)', () => {
+    const knobs = new URL(projectionSourceLink(fixture({ years: 50, base_years: 30, plan_until: 2075 })), 'http://local').searchParams.getAll('whatif')
+    expect(knobs).toContain('years:30')
+    expect(knobs).not.toContain('years:50')
+    expect(knobs).toContain('plan_until:2075')
+    // An older payload without the knob's echo links the horizon it has.
+    expect(new URL(projectionSourceLink(fixture({ years: 2 })), 'http://local').searchParams.getAll('whatif')).toContain('years:2')
+  })
 })
 
 describe('the FI date tile (2026-09-23 spec §R6)', () => {

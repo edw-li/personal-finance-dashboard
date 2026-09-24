@@ -1209,6 +1209,7 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
         drawdown=plan.drawdown,
         plan_until=plan_until,
         plan_until_source=plan_until_source,
+        base_years=knobs.years,
         money_lasts=money_lasts,
         vests=vests.echo,
     )

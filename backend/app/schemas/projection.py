@@ -209,6 +209,10 @@ class ProjectionOut(BaseModel):
     # year past the default horizon lengthens it (`years` echoes the effective horizon).
     plan_until: int | None = None
     plan_until_source: Literal["knob", "setting", "default"] | None = None
+    # The `years` KNOB the run resolved (2026-09-24 re-review): `years` above is the horizon it RAN,
+    # lengthened to reach the plan-until year, but the simulated paths are drawn on this one's
+    # months — a link or a box that re-sends a lengthened `years` would re-deal every path.
+    base_years: int | None = None
     # Always present from this server (spec §R3); nullable so an older stored payload still
     # validates.
     money_lasts: MoneyLastsOut | None = None

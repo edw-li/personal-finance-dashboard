@@ -112,6 +112,9 @@ describe('projection scenario codec', () => {
     expect(derivedOf({ ...echo, vests: { ...vests, included: false } }).vests).toBe('0')
     expect(derivedOf({ ...echo, volatility: null, annual_spend: null }).volatility).toBeNull()
     expect(derivedOf(null).years).toBeNull()
+    // The Horizon box's value is the KNOB (2026-09-24 re-review): a Settings plan-until year that
+    // lengthened the baseline to 50 years must not become a years:50 that re-deals every path.
+    expect(derivedOf({ ...echo, years: 50, base_years: 30 }).years).toBe('30')
   })
 
   it('labels a pin by its first two knobs, naming a retiring person when the roster is known', () => {
