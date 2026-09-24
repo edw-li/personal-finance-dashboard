@@ -60,7 +60,7 @@ async def test_system_prices_matches_the_old_endpoint_which_stands(auth_client, 
 
 async def test_system_status_reads_the_alembic_head_when_the_table_exists(auth_client, db):
     # Prod databases are alembic-built; the test schema is not, so stage the table by
-    # hand — and DROP it before leaving, because conftest's TRUNCATE walks
+    # hand — and DROP it before leaving, because conftest's per-test reset walks
     # Base.metadata.sorted_tables and would never clean a stray table out of the
     # session-scoped schema (it would leak into every later test).
     await db.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
@@ -77,7 +77,7 @@ async def test_system_status_reads_the_alembic_head_when_the_table_exists(auth_c
     finally:
         # A failing GET above would leave the SHARED session in an aborted transaction;
         # without this rollback the DROP itself raises and the stray table outlives
-        # drop_all/TRUNCATE forever (neither walks non-metadata tables).
+        # drop_all and the per-test reset forever (neither walks non-metadata tables).
         await db.rollback()
         await db.execute(text("DROP TABLE alembic_version"))
         await db.commit()

@@ -488,9 +488,13 @@ describe('RestoreCard', () => {
     fireEvent.click(restoreButton())
     expect(await screen.findByText('Restored.')).toBeTruthy()
     // The arm input leaves the tree and the button goes dead the moment the apply lands;
-    // focus falls to <body> unless it is put somewhere, and the report is what to read.
-    expect(document.activeElement).toBe(
-      screen.getByText('Restored.').closest('.import-report')?.parentElement,
+    // focus falls to <body> unless it is put somewhere, and the report is what to read. The
+    // card moves it in an effect of the render that shows the report — a scheduler task after
+    // the text reaches the DOM — so wait for it rather than reading focus on the same tick.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByText('Restored.').closest('.import-report')?.parentElement,
+      ),
     )
   })
 

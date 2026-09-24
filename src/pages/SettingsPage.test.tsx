@@ -1379,11 +1379,15 @@ describe('SettingsPage — loading states (2026-09-13 spec §9)', () => {
   it('warms a task’s data on tab hover or focus, once, so the click finds it already loaded', async () => {
     renderPage()
     await waitFor(() => expect(document.getElementById('accounts')).not.toBeNull())
+
+    // Household mounted, so its roster is already on the wire once. The cards mount when the
+    // page's /settings gate answers — a render outside act, whose mount effects (the fetches)
+    // React runs a scheduler task AFTER the one that put #accounts in the DOM: wait for the
+    // fetch itself, and only then check what must NOT have been fetched (read earlier, those two
+    // would hold before any mount effect had run at all).
+    await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(fetchProfiles)).not.toHaveBeenCalled()
     expect(vi.mocked(fetchLimits)).not.toHaveBeenCalled()
-
-    // Household mounted, so its roster is already on the wire once.
-    expect(vi.mocked(fetchHousehold)).toHaveBeenCalledTimes(1)
 
     fireEvent.pointerOver(screen.getByRole('tab', { name: 'Planning' }))
     expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)

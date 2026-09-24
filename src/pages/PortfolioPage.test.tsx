@@ -999,7 +999,10 @@ describe("the household's ledgers never hold a person's view", () => {
     exdivOnVoo()
     renderPage('/portfolio?owner=2')
     await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
-    expect(householdCalls()).toHaveLength(1)
+    // The request is an effect of the render that put the person's data (and, from their own
+    // ledgers until the household's land, these markers) on screen — it runs a scheduler task
+    // later, so wait for it rather than counting on the same tick.
+    await waitFor(() => expect(householdCalls()).toHaveLength(1))
     const order = (scope: unknown) =>
       vi.mocked(fetchHoldings).mock.invocationCallOrder[vi.mocked(fetchHoldings).mock.calls.findIndex(([s]) => s === scope)]
     expect(order(null)).toBeGreaterThan(order(SAM.id))

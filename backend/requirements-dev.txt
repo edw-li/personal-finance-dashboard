@@ -1,4 +1,5 @@
 pytest==9.1.1
 pytest-asyncio==1.4.0
+pytest-xdist==3.8.0  # opt-in `pytest -n 4`: one test database per worker (tests/conftest.py)
 ruff==0.16.2
 icalendar==6.3.2  # feed smoke parser (tests only)

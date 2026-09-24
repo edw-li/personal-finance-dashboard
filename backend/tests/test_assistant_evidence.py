@@ -347,6 +347,16 @@ def test_exact_election_precision_survives_evidence_serialization():
             MetricEvidence.model_validate({**wire, "display_precision": invalid})
 
 
+# The model-silence window the timing tests below patch in for the production 25 s. Their old
+# 0.03-0.13 s windows were two to eight ticks of a 15.6 ms loop clock (Python 3.12 on Windows
+# reads time.monotonic from GetTickCount64), and asyncio runs a timer up to one tick early
+# whenever the loop is busy — a streaming conversation always is: a nominal 0.03 s wait_for
+# measured 1-12 ms of real time there. The first frame then missed its allowance on a loaded
+# box and the rung took the OTHER branch (2026-09-23 test speed-up plan, Task 4). Half a
+# second is ~32 ticks and far above the first-output latency measured under load.
+SILENCE = 0.5
+
+
 class QuietStream(httpx.AsyncByteStream):
     def __init__(self, *, text_first=False, reasoning=False):
         self.closed = False
@@ -383,7 +393,9 @@ async def test_silence_bound_covers_headers_and_reasoning_and_skips_same_rung(
             return httpx.Response(200, stream=quiet)
         return httpx.Response(200, text=_openai_stream([_delta("fallback"), _finish()]))
 
-    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", 0.04)
+    # The primary never speaks (30 s of silence >> SILENCE); the fallback's first frame must
+    # land inside ITS allowance, which a loaded box could not always do within 0.04 s.
+    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", SILENCE)
     monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", httpx.MockTransport(responder))
     events = _all_events(
         await _collect(
@@ -395,6 +407,12 @@ async def test_silence_bound_covers_headers_and_reasoning_and_skips_same_rung(
         )
     )
     assert attempts.count("moonshotai/kimi-k3") == 1
+    # ...and not even a retry that never reached the wire: the silent rung's allowance is spent,
+    # so a same-rung retry would usually go silent again before sending anything (the count
+    # above only sees one that did). A retry always announces itself first.
+    assert not any(
+        kind == "status" and payload["text"].startswith("Retrying") for kind, payload in events
+    )
     assert attempts[-1] == "deepseek-ai/deepseek-v4-pro-0813"
     assert any(kind == "token" and payload["text"] == "fallback" for kind, payload in events)
     if reasoning:
@@ -409,7 +427,10 @@ async def test_silent_gap_after_partial_output_stops_without_concatenated_fallba
         attempts.append(json.loads(request.content)["model"])
         return httpx.Response(200, stream=quiet)
 
-    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", 0.03)
+    # The window is ALSO the first-output allowance, armed before the request: `partial` must
+    # arrive inside it (else the rung reads as silent and fails over — the other branch), and
+    # the 30 s gap after it must outlast it. A loaded box missed the 0.03 s allowance.
+    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", SILENCE)
     monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", httpx.MockTransport(responder))
     events = _all_events(
         await _collect(
@@ -429,19 +450,27 @@ async def test_silent_gap_after_partial_output_stops_without_concatenated_fallba
 
 async def test_transient_retry_keeps_the_same_first_output_allowance(monkeypatch):
     primary_attempts = 0
+    # max(first, second) < allowance < first + second. first < allowance: the 503 lands inside
+    # the allowance, so the rung retries. first + second > allowance: under the SAME allowance
+    # the retry's token is late, so the rung fails over. second < allowance: under a FRESH
+    # allowance per attempt (the regression this test exists for) that token would have been
+    # in time — without it the test cannot tell the two apart. Every gap is 0.2-0.4 s, 13-25
+    # ticks of this box's 15.6 ms loop clock (the old ones were 0.04-0.05 s, under three).
+    first, allowance, second = 0.4, 0.8, 0.6
+    assert max(first, second) < allowance < first + second
 
     async def responder(request):
         nonlocal primary_attempts
         if json.loads(request.content)["model"] == "moonshotai/kimi-k3":
             primary_attempts += 1
             if primary_attempts == 1:
-                await asyncio.sleep(0.09)
+                await asyncio.sleep(first)
                 return httpx.Response(503, text="temporary failure")
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(second)
             return httpx.Response(200, text=_openai_stream([_delta("too late"), _finish()]))
         return httpx.Response(200, text=_openai_stream([_delta("fallback"), _finish()]))
 
-    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", 0.13)
+    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", allowance)
     monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", httpx.MockTransport(responder))
     events = _all_events(
         await _collect(
@@ -457,16 +486,32 @@ async def test_transient_retry_keeps_the_same_first_output_allowance(monkeypatch
 
 
 async def test_total_budget_includes_context_loading(monkeypatch):
+    """The request budget covers the context build: a build that outlives it is cancelled and
+    the stream ends with the time-budget error.
+
+    What runs BEFORE the build must fit well inside the budget: a session and the app_settings
+    read that resolves the key — this file's `wire` fixture's "nvapi-test" (no override row, no
+    .env involved; CI has none). On a cold process that read is the run's first ORM query
+    (~15-30 ms of mapper configuration and compilation), which alone outlasted the old 0.03 s
+    budget: the budget then cancelled the QUERY, the build never began, and `cancelled` stayed
+    unset — failing every time the test ran alone. So the read is warmed first, the budget is
+    half a second (~32 ticks of this box's 15.6 ms loop clock), and `started` makes a box too
+    slow even for that fail as exactly that."""
+    started = asyncio.Event()
     cancelled = asyncio.Event()
 
     async def slow_context(*args, **kwargs):
+        started.set()
         try:
             await asyncio.sleep(30)
-        finally:
-            cancelled.set()
+        except asyncio.CancelledError:
+            cancelled.set()  # cancelled by the budget, not merely finished
+            raise
 
+    async with assistant_chat.SESSION_FACTORY() as db:
+        assert await assistant_models.resolve_api_key(db) == ("nvapi-test", "env")
     monkeypatch.setattr(assistant_chat, "build_context", slow_context)
-    monkeypatch.setattr(assistant_chat, "TOTAL_BUDGET_SECONDS", 0.03)
+    monkeypatch.setattr(assistant_chat, "TOTAL_BUDGET_SECONDS", 0.5)
     events = _all_events(
         await _collect(
             assistant_chat.stream_chat(
@@ -476,6 +521,7 @@ async def test_total_budget_includes_context_loading(monkeypatch):
             )
         )
     )
+    assert started.is_set(), "the budget ran out before the context build began"
     assert events[-1][0] == "error"
     assert "time budget" in events[-1][1]["message"]
     assert cancelled.is_set()
