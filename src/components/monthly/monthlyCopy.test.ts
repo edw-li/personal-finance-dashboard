@@ -18,6 +18,7 @@ import {
   partialBanner,
   recordedEarly,
   reviewSaveNote,
+  unsavedPartNote,
 } from './monthlyCopy'
 
 // The server's year decides when a label carries its year (utils/asOf.ts); setup forgets the day.
@@ -142,5 +143,14 @@ describe('sentences', () => {
       'This save writes September spending — Sep 1 balances are not recorded yet; record them on the Balances step.',
     )
     expect(note(false, false)).toBe('Nothing has changed — saving records your confirmations only.')
+  })
+
+  it("the receipt names a part still unsaved after a save, and the step that saves it (review M2)", () => {
+    expect(unsavedPartNote('flows', '2026-09-01')).toBe(
+      'September spending & take-home still have unsaved changes — save them on the Spending step.',
+    )
+    expect(unsavedPartNote('balances', '2026-10-01')).toBe(
+      'Oct 1 balances still have unsaved changes — save them on the Balances step.',
+    )
   })
 })

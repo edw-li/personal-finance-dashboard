@@ -2437,7 +2437,9 @@ it('preserves entries typed during a save and submits them against the returned 
   fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
 
   await act(async () => { pending.resolve(savedMonthResult('2026-08-01')) })
-  await screen.findByText('You have new unsaved changes. Save again to include them.')
+  // Each part still unsaved is named, with the step that saves it (review M2).
+  await screen.findByText('Aug 1 balances still have unsaved changes — save them on the Balances step.')
+  expect(screen.getByText('August spending & take-home still have unsaved changes — save them on the Spending step.')).toBeTruthy()
   expect(JSON.parse(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')!)).toMatchObject({
     balances: { 1: '1900' }, notes: 'Entered while saving',
   })
@@ -2455,7 +2457,21 @@ it('preserves entries typed during a save and submits them against the returned 
   ])
   await waitFor(() => expect(sessionStorage.getItem('finance-update-draft:balances:2026-08-01')).toBeNull())
   expect(sessionStorage.getItem('finance-update-draft:flows:2026-08-01')).toBeNull()
-  expect(screen.queryByText('You have new unsaved changes. Save again to include them.')).toBeNull()
+  expect(screen.queryByText(/still have unsaved changes/)).toBeNull()
+})
+
+it("after one part saves, the receipt names the other part's unsaved changes (review M2)", async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /^2\s*spending$/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '250.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Aug 1 balances' }))
+  await screen.findByRole('heading', { name: 'Aug 1 balances saved' })
+  expect(
+    screen.getByText('August spending & take-home still have unsaved changes — save them on the Spending step.'),
+  ).toBeTruthy()
+  expect(screen.queryByText(/^Aug 1 balances still have unsaved changes/)).toBeNull()
 })
 
 it('rejects a response from an earlier load even after returning to the same month', async () => {

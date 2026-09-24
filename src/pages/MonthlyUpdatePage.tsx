@@ -54,6 +54,7 @@ import {
   partialBanner,
   recordedEarly,
   reviewSaveNote,
+  unsavedPartNote,
   type BalancesMeta,
 } from '../components/monthly/monthlyCopy'
 import { buildMonthSave, type SaveKind } from '../components/monthly/monthSave'
@@ -1665,9 +1666,10 @@ function MonthlyUpdateWizard() {
             {(lastSave.kind === 'review' || lastSave.kind === 'close') && !lastSave.sentSpending && (
               <p>Spending: unchanged — not sent.</p>
             )}
-            {(balancesDirty || flowsDirty) && (
-              <p role="status">You have new unsaved changes. Save again to include them.</p>
-            )}
+            {/* Whatever is still unsaved once the save has landed — the other part, or typing done
+                while it ran — named with the step that saves it (review M2). */}
+            {balancesDirty && <p role="status">{unsavedPartNote('balances', month)}</p>}
+            {flowsDirty && !notBegun && <p role="status">{unsavedPartNote('flows', month)}</p>}
             {lastSave.nextDue !== null && (
               // The toast's "Next due" as a working link (spec §M2): the toast's one action is Undo.
               <p>
