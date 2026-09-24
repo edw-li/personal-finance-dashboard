@@ -10,7 +10,8 @@ Model: monthly growth factor exp(N(mu_m, sigma_m)) with mu_m = ln(1 + r) / 12, s
 MEDIAN growth FACTOR is exactly the deterministic rate; with contributions the p50
 band tracks the deterministic line approximately, not identically (summed lognormals
 pull the median toward the mean over long horizons — measured ~+8% at month 360 on
-typical knobs), which is one reason p50 is never drawn as its own curve.
+typical knobs), which is why the chart draws p50 as its own hairline ("Median path") beside
+the constant-return line rather than letting either stand for the other.
 sigma_m = sigma / sqrt(12). Each month's flow — the contribution (re-leveled at a phase
 boundary, escalated), a lump, a withdrawal — comes from the ONE schedule the line uses
 (services/projection.monthly_flows), built once per run because it does not depend on the
