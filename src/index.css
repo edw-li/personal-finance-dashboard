@@ -175,8 +175,9 @@ button {
    for weight: :is() counts its most specific argument, so this is (0,3,0) and moves the
    components' own rings too — `.button:focus-visible` (0,2,0), and portfolio.css's bare
    `.row-actions button:focus-visible` (0,2,1), which loads after this sheet and reaches the
-   Settings tables' Edit buttons. */
-:is(.attention-strip, .settings-scroll, .categories-scroll) :is(a, button, .button):focus-visible {
+   Settings tables' Edit buttons. Every capped table box (TableScroll, 2026-09-24) clips the same
+   way, so it is listed too. */
+:is(.attention-strip, .settings-scroll, .categories-scroll, .table-scroll) :is(a, button, .button):focus-visible {
   outline-offset: -2px;
 }
 

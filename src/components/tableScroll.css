@@ -1,0 +1,112 @@
+/* THE capped table box (2026-09-24 table-scroll spec §2.2), TableScroll's own sheet. A long table
+   scrolls inside its card instead of down the page; one that fits renders as it always did —
+   max-height only bites when the table outgrows it. The cap is the vesting schedule's
+   (CompPage.css, 2026-09-13 polish §7): one scroll usually suffices on a tall screen, and a short
+   one still gets a box rather than a card that swallows the page. Scroll chaining is the browser's
+   default: at the box's end the wheel carries on down the page, so nothing traps it.
+   --table-head-h / --table-foot-h are the pinned rows' measured heights (tableScrollDom.ts): the
+   padding keeps a Tab, a keyboard reorder or a reveal clear of them, with room for an outside ring. */
+.table-scroll {
+  max-height: clamp(420px, 60vh, 720px);
+  overflow: auto;
+  scroll-padding-top: calc(var(--table-head-h, 0px) + 4px);
+  scroll-padding-bottom: calc(var(--table-foot-h, 0px) + 4px);
+}
+
+/* The reorder tables' border model (reorder.css), for every capped table: a collapsed border belongs
+   to the table's grid and stays behind when its cell sticks, so a pinned header would float
+   hairline-less over the rows. Separate borders with zero spacing give each cell its own
+   border-bottom — every target table draws bottom borders only, so the resting table still shows
+   one hairline per row boundary. */
+.table-scroll > table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* The pinned header: the card's own solid surface, or the rows would ghost through it. z 1 like
+   .settings-scroll's and .categories-scroll's, so a lifted reorder row (z 2, reorder.css) still
+   paints over it as lane R7 accepted. These rules live here, not in panels.css: the pinned-column
+   rules there are pinned verbatim by surfaceGrammar.test.ts. */
+.table-scroll > table > thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* The two corners that stick on both axes — the identity column's header and the last header cell
+   of a table with pinned row actions — sit above the body cells pinned on the same axis (col-identity
+   is z 1 and later in the DOM, so it would otherwise paint over its own header). */
+.table-scroll > table > thead th.col-identity,
+.table-scroll > table:has(td.row-actions) > thead th:last-child {
+  z-index: 2;
+}
+
+/* The pinned totals row (Net worth's, the rewards matrix's). Its top hairline is an OUTER shadow: at
+   rest it lands exactly on the last body row's own bottom border (one line); stuck, it draws the
+   edge the scrolling rows pass under. */
+.table-scroll > table > tfoot :is(td, th) {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: 0 -1px 0 var(--border);
+}
+
+.table-scroll > table > tfoot .col-identity {
+  z-index: 2;
+  box-shadow: 0 -1px 0 var(--border), 1px 0 0 var(--border);
+}
+
+/* "More below": a fade stuck to the box's foot while rows hide there. A child of the box, so it does
+   not compete with the box's own horizontal mask (panels.css); sticky on both axes, so a table that
+   also scrolls sideways keeps it in view. Hidden at the end (the last row is never faded) and
+   wherever a pinned totals row already marks that edge. The top edge needs no cue: the pinned
+   header is the edge. */
+.table-scroll::after {
+  content: '';
+  position: sticky;
+  left: 0;
+  bottom: 0;
+  z-index: 1;
+  display: block;
+  height: 28px;
+  margin-top: -28px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  opacity: 0;
+}
+
+.table-scroll[data-scroll-more~="bottom"]:not(:has(> table > tfoot))::after {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .table-scroll::after {
+    transition: opacity var(--t-fast) var(--ease-out);
+  }
+}
+
+/* Forced colours drop author backgrounds; a gradient left alone there reads as a smear. */
+@media (forced-colors: active) {
+  .table-scroll::after {
+    display: none;
+  }
+}
+
+/* Paper has no scroller: every capped box prints whole — the four older caps too, which until now
+   printed only their visible slice (spec §2.5). Listed here so their own sheets stay untouched. */
+@media print {
+  .table-scroll,
+  .settings-scroll,
+  .categories-scroll,
+  .vest-scroll,
+  .chart-table-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .table-scroll::after {
+    display: none;
+  }
+}
