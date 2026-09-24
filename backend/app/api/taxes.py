@@ -16,6 +16,7 @@ all read through the routers that own them. It is a pure read with four soft lin
 degrades where the editors above raise — see its section comment.
 """
 
+from bisect import bisect_right
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -1900,6 +1901,9 @@ async def _reconciliation(
     ticker: str | None,
     has_grants: bool,
     future_vests: list[withholding_calc.VestTuple],
+    bar_days: list[date],
+    bar_closes: list[Decimal],
+    latest_price: Decimal | None,
     liability_total: Decimal,
     withheld_projected: Decimal,
 ) -> ReconciliationOut:
@@ -2001,13 +2005,28 @@ async def _reconciliation(
         future_income = _money(
             sum((Decimal(shares) * price for _day, shares, price in future_vests), ZERO)
         )
+        # The flag's reference (§W3, stateless): the not-yet-vested vests — the SAME set the
+        # card priced — at the newest close on or before the 1st of this month, the latest
+        # quote when no such close is stored. A quote move inside the month cannot reach it.
+        reference_day = today.replace(day=1)
+        index = bisect_right(bar_days, reference_day) - 1
+        reference_price, reference_date = (
+            (bar_closes[index], bar_days[index]) if index >= 0 else (latest_price, None)
+        )
+        reference_future = (
+            None
+            if reference_price is None
+            else sum((Decimal(shares) * reference_price for _d, shares, _p in future_vests), ZERO)
+        )
         rsu = RsuFacts(
             projected=_money(estimated.vest_income_projected),
             future_income=future_income,
-            reference_projected=None,
-            reference_future=None,
-            reference_price=None,
-            reference_date=None,
+            reference_projected=(
+                None if reference_future is None else estimated.vest_income_ytd + reference_future
+            ),
+            reference_future=reference_future,
+            reference_price=reference_price,
+            reference_date=reference_date,
         )
 
     # ESPP sale income: the lots SOLD this year, decomposed exactly as the what-if decomposes
@@ -2526,6 +2545,9 @@ async def withholding_estimate(
             ticker=ticker,
             has_grants=bool(grants),
             future_vests=future_vests,
+            bar_days=bar_days,
+            bar_closes=bar_closes,
+            latest_price=latest_price,
             liability_total=liability_total,
             withheld_projected=total_projected,
         )

@@ -1599,11 +1599,16 @@ async def test_liability_if_matched_is_the_liability_after_saving_every_projecti
     assert Decimal(rec["balance_if_matched"]) == Decimal(rec["liability_if_matched"]) - Decimal(
         body["total"]["projected"]
     )
-    # ...and once they match, nothing is left to flag or to apply.
+    # ...and once they match, no shown effect is left and nothing is offered to apply.
     after = (await get_withholding(auth_client))["reconciliation"]
-    assert after["flagged_count"] == 0
     assert all(row["tax_effect"] == "0.00" for row in after["rows"])
+    assert all(row["apply"] is None for row in after["rows"])
     assert after["liability_if_matched"] == summary["totals"]["total_tax"]
+    # The one flag left is the stateless RSU rule doing its job: the row matched today's 500
+    # quote, but the month's reference close is the 06-17 bar of 600 — 17 % away, outside the
+    # ±10 % band — so it still reads the difference until the quote comes back inside the band
+    # or next month's reference close moves (§W3).
+    assert [row["key"] for row in after["rows"] if row["flagged"]] == ["rsu"]
 
 
 async def test_the_stored_limits_cap_the_401k_and_the_hsa(auth_client, db, world, frozen_today):
@@ -1736,3 +1741,75 @@ async def test_the_reconciliation_writes_nothing(auth_client, world, frozen_toda
 
 async def test_the_calendars_internal_reads_carry_no_reconciliation(db, world, frozen_today):
     assert (await withholding_estimate(db, YEAR, PINNED_TODAY)).reconciliation is None
+
+
+# --- the stateless RSU flag (2026-09-23 spec §W3): the month's reference close, a ±10 % band ---
+#
+# Frozen at 2026-07-01: 50,000 of vests are behind today, 70 shares are still to come. The
+# newest close on or before Jul 1 is the 06-17 bar of 600; today's quote is 500.
+
+
+async def set_rsu_typed(db, value: str) -> None:
+    db.add(TaxInput(year=YEAR, key="w2_stock_rsus_sold", value=Decimal(value)))
+    await db.commit()
+
+
+async def rsu_row(auth_client) -> dict:
+    return rows_of(await get_withholding(auth_client))["rsu"]
+
+
+async def test_the_rsu_flag_reads_the_close_on_or_before_the_first_of_the_month(
+    auth_client, world, frozen_today
+):
+    row = await rsu_row(auth_client)
+    assert row["facts"]["reference_price"] == "600.0000"
+    assert row["facts"]["reference_date"] == "2026-06-17"
+    assert row["facts"]["quote_tolerance"] == "4200.00"  # 10 % of 70 sh x 600
+    assert row["facts"]["future_vest_income"] == "35000.00"  # the SHOWN figure: today's quote
+
+
+async def test_a_quote_move_inside_the_month_never_changes_the_rsu_flag(
+    auth_client, db, world, frozen_today
+):
+    # Typed at the reference figure: 50,000 + 70 x 600.
+    await set_rsu_typed(db, "92000")
+    first = await rsu_row(auth_client)
+    assert first["projected"] == "85000.00"  # shown on today's 500 quote
+    assert first["flagged"] is False
+    assert Decimal(first["tax_effect"]) != 0
+
+    quote = (await db.execute(select(LatestPrice))).scalar_one()
+    quote.price = Decimal("530.0000")  # +6 % within the month
+    await db.commit()
+    moved = await rsu_row(auth_client)
+    assert moved["projected"] == "87100.00"
+    assert moved["tax_effect"] != first["tax_effect"]
+    assert moved["flagged"] is False
+    assert moved["facts"]["reference_price"] == "600.0000"
+
+
+async def test_a_new_reference_close_on_the_first_can_flag_the_rsu_row(
+    auth_client, db, world, frozen_today
+):
+    await set_rsu_typed(db, "92000")
+    security = (await db.execute(select(Security))).scalar_one()
+    db.add(PriceHistory(security_id=security.id, price_date=date(2026, 7, 1), close=Decimal("800")))
+    await db.commit()
+    row = await rsu_row(auth_client)
+    assert (row["facts"]["reference_price"], row["facts"]["reference_date"]) == (
+        "800.0000",
+        "2026-07-01",
+    )
+    # 50,000 + 70 x 800 = 106,000 against the typed 92,000: 14,000 less the 5,600 band.
+    assert row["flagged"] is True
+
+
+async def test_without_any_close_the_reference_is_todays_quote(
+    auth_client, db, definitions, frozen_today
+):
+    await seed_tax_year(db, YEAR, "600000.0000")
+    await seed_profile(db)
+    await seed_employer(db, bars=[])  # a quote, but no history at all
+    await seed_grants(db)
+    row = await rsu_row(auth_client)
+    assert (row["facts"]["reference_price"], row["facts"]["reference_date"]) == ("500.0000", None)

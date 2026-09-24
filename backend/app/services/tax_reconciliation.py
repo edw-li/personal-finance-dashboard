@@ -170,6 +170,10 @@ class _Row:
     out: dict
     overlays: list[Overlay]
     unchanged: bool  # the overlay would store exactly what is stored — no engine run needed
+    # What the FLAG is priced on, when that is not the shown effect: the RSU row's overlay at
+    # the reference close, after the band — [] when the band absorbs the whole difference.
+    # None: the flag reads the shown effect (every other row, and RSU with no reference).
+    flag_overlays: list[Overlay] | None = None
 
 
 def _row(
@@ -272,9 +276,26 @@ def _paycheck_rows(person: PersonFacts, paycheck: PaycheckFacts) -> list[_Row | 
     return rows
 
 
+def _rsu_flag_overlays(person: PersonFacts, rsu: RsuFacts) -> list[Overlay] | None:
+    """The RSU flag's own overlay (§W3, stateless hysteresis): the not-yet-vested vests priced
+    at the close on or before the 1st of the month, and the difference from the typed figure
+    shrunk toward zero by QUOTE_TOLERANCE of that not-yet-vested income before it is priced.
+    A quote move inside the month cannot touch it; a new reference close on the 1st can."""
+    if rsu.reference_projected is None or rsu.reference_future is None:
+        return None
+    typed = person.bucket.get(RSU_KEY, ZERO)
+    difference = rsu.reference_projected - typed
+    band = QUOTE_TOLERANCE * rsu.reference_future
+    beyond = max(abs(difference) - band, ZERO)
+    if beyond == ZERO:
+        return []
+    shrunk = beyond if difference > ZERO else -beyond
+    return [(RSU_KEY, person.person_id, typed + shrunk)]
+
+
 def _rsu_row(person: PersonFacts, rsu: RsuFacts) -> _Row | None:
     typed = person.bucket.get(RSU_KEY)
-    return _row(
+    row = _row(
         key="rsu",
         person=person,
         label="RSU income",
@@ -295,6 +316,9 @@ def _rsu_row(person: PersonFacts, rsu: RsuFacts) -> _Row | None:
             reference_date=rsu.reference_date,
         ),
     )
+    if row is not None:
+        row.flag_overlays = _rsu_flag_overlays(person, rsu)
+    return row
 
 
 def _espp_row(
@@ -367,6 +391,12 @@ def reconcile(
     rows: list[ReconciliationRowOut] = []
     for row in built:
         effect = ZERO if row.unchanged else price(row.overlays) - liability
+        if row.flag_overlays is None:
+            flag_effect = effect
+        elif row.flag_overlays:
+            flag_effect = price(row.flag_overlays) - liability
+        else:
+            flag_effect = ZERO  # the band absorbs the whole difference
         apply = None
         if row.out["key"] == "rsu" and row.out["typed"] != row.out["projected"]:
             apply = ReconciliationApplyOut(
@@ -376,7 +406,7 @@ def reconcile(
             ReconciliationRowOut(
                 **row.out,
                 tax_effect=_cents(effect),
-                flagged=abs(effect) > FLAG_ABOVE,
+                flagged=abs(flag_effect) > FLAG_ABOVE,
                 apply=apply,
             )
         )

@@ -326,3 +326,95 @@ def test_the_hsa_cap_subtracts_the_employer_deposit_and_ignores_no_coverage():
     assert cap_hsa(D("600.00"), D("4400.00"), D("5000.00")) == (D("0.00"), D("0.00"))
     # Coverage 'none' or no stored limit: the caller passes no limit, and nothing caps.
     assert cap_hsa(D("600.00"), None, D("0")) == (D("600.00"), None)
+
+
+# --- the RSU flag: judged at the month's reference close, inside a ±10 % band (§W3) --------
+#
+# 100,000 of vests are behind today (at their vest-day closes); 200 shares are still to come.
+# The reference close (on or before the 1st) is 250, today's quote 270 — 8 % up. A pricer
+# that taxes RSU income at 30 % makes every effect hand-checkable.
+
+PAST = D("100000")
+REFERENCE = RsuFacts(
+    projected=D("154000.00"),  # 100,000 + 200 x 270, today's quote
+    future_income=D("54000.00"),
+    reference_projected=D("150000"),  # 100,000 + 200 x 250
+    reference_future=D("50000"),
+    reference_price=D("250.0000"),
+    reference_date=date(2026, 9, 1),
+)
+
+
+def rsu_pricer(typed: Decimal):
+    def price(overlays):
+        return LIABILITY + sum(
+            (
+                (value - typed) * D("0.3")
+                for key, _p, value in overlays
+                if key == "w2_stock_rsus_sold"
+            ),
+            D("0"),
+        )
+
+    return price
+
+
+def rsu_row(typed: str, rsu: RsuFacts = REFERENCE):
+    bucket = {"w2_stock_rsus_sold": D(typed)}
+    me = person(1, "Edward", bucket=bucket, paycheck=None)
+    out = run([me], rsu=rsu, price=rsu_pricer(D(typed)))
+    return next(row for row in out.rows if row.key == "rsu")
+
+
+def test_a_row_matched_at_the_reference_close_never_flags_on_an_8_percent_quote_move():
+    row = rsu_row("150000")
+    assert row.tax_effect == D("1200.00")  # shown on today's quote: 4,000 x 30 %
+    assert row.flagged is False
+
+
+def test_a_row_matched_at_todays_quote_stays_quiet_inside_the_band():
+    # Applied today: 4,000 below the reference figure, inside the 5,000 band.
+    row = rsu_row("154000")
+    assert row.tax_effect == D("0.00")
+    assert row.flagged is False
+
+
+def test_a_difference_inside_the_band_is_not_flagged_even_when_its_effect_is():
+    # 4,000 short of the reference: inside 10 % of the 50,000 still to vest.
+    row = rsu_row("146000")
+    assert row.tax_effect == D("2400.00")  # the SHOWN effect, today's quote
+    assert row.flagged is False
+
+
+def test_a_real_difference_is_flagged_on_what_is_left_after_the_band():
+    # 30,000 short of the reference, less the 5,000 band: 25,000 x 30 % = 7,500 of tax.
+    row = rsu_row("120000")
+    assert row.tax_effect == D("10200.00")  # 34,000 x 30 %, today's quote
+    assert row.flagged is True
+    assert row.facts.quote_tolerance == D("5000.00")
+    assert (row.facts.reference_price, row.facts.reference_date) == (
+        D("250.0000"),
+        date(2026, 9, 1),
+    )
+    assert row.facts.future_vest_income == D("54000.00")
+
+
+def test_the_band_only_shrinks_toward_zero():
+    # 800 over the reference and a 5,000 band: nothing left to flag, never a flip in sign.
+    row = rsu_row("149200")
+    assert row.flagged is False
+
+
+def test_without_a_reference_price_the_flag_reads_the_shown_effect():
+    bare = RsuFacts(
+        projected=D("154000.00"),
+        future_income=D("54000.00"),
+        reference_projected=None,
+        reference_future=None,
+        reference_price=None,
+        reference_date=None,
+    )
+    row = rsu_row("153000", bare)
+    assert row.tax_effect == D("300.00")
+    assert row.flagged is True
+    assert row.facts.quote_tolerance is None
