@@ -1,16 +1,20 @@
 """The projection's result cache and its worker thread (2026-09-23 spec §R9): an identical request
 is answered from the serialized bytes of the first, a write to any of the sixteen tables the
 route reads — or a new day, or any knob — builds again, a 422 or a 404 is never kept, and the
-Monte Carlo runs off the event loop behind a capacity of one."""
+Monte Carlo runs off the event loop one at a time — even when a request is cancelled mid-run."""
 
+import asyncio
 import re
+import threading
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from time import sleep
+from types import SimpleNamespace
 
-import anyio
 import pytest
 from sqlalchemy import event, update
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api import projection as projection_api
 from app.api.projection import ProjectionKnobs, projection_json, run_projection
@@ -259,16 +263,77 @@ async def test_a_session_with_pending_changes_builds_uncached(db, builds):
     await db.rollback()
 
 
-async def test_the_simulation_runs_in_a_worker_thread_under_a_capacity_of_one(db, monkeypatch):
+@pytest.fixture
+def simulations(monkeypatch):
+    """Watches the Monte Carlo as it runs in its worker thread: how many are running now, the
+    most ever at once, how many ran, when one first started and when all are done — each held a
+    moment, so an overlap cannot hide."""
+    watch = SimpleNamespace(
+        now=0, most=0, calls=0, started=threading.Event(), idle=threading.Event()
+    )
+    watch.idle.set()
+    guard = threading.Lock()
+    real = projection_api.simulate
+
+    def watched(*args, **kwargs):
+        with guard:
+            watch.now += 1
+            watch.calls += 1
+            watch.most = max(watch.most, watch.now)
+            watch.idle.clear()
+        watch.started.set()
+        try:
+            sleep(0.2)
+            return real(*args, **kwargs)
+        finally:
+            with guard:
+                watch.now -= 1
+                if watch.now == 0:
+                    watch.idle.set()
+
+    monkeypatch.setattr(projection_api, "simulate", watched)
+    return watch
+
+
+async def _answer(engine, knobs: ProjectionKnobs) -> bytes:
+    """One request's answer on a session of its own, as the app gives every request — the
+    shared test session admits no concurrent use."""
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        return await projection_json(session, knobs)
+
+
+async def test_one_simulation_at_a_time_and_one_build_for_identical_requests(
+    db, engine, simulations
+):
+    # Three different cold requests and two repeats of the first, all at once: the three builds
+    # simulate one after another, and the repeats join the first's build (single-flight).
     await seed_everything(db)
-    limiters = []
-    real = anyio.to_thread.run_sync
+    distinct = [ProjectionKnobs(years=5, annual_return=Decimal(f"0.0{n}")) for n in (4, 5, 6)]
+    answers = await asyncio.gather(
+        *(_answer(engine, knobs) for knobs in (*distinct, distinct[0], distinct[0]))
+    )
+    assert simulations.most == 1
+    assert simulations.calls == 3
+    assert answers[3] == answers[0] and answers[4] == answers[0]
+    assert len(set(answers[:3])) == 3
 
-    async def spy(func, *args, limiter=None, **kwargs):
-        limiters.append(limiter)
-        return await real(func, *args, limiter=limiter, **kwargs)
 
-    monkeypatch.setattr(anyio.to_thread, "run_sync", spy)
-    await projection_json(db, ProjectionKnobs(years=5))
-    assert projection_api.MC_LIMITER in limiters
-    assert projection_api.MC_LIMITER.total_tokens == 1
+async def test_a_natively_cancelled_request_keeps_the_next_simulation_waiting(
+    db, engine, simulations
+):
+    # asyncio's own Task.cancel() — not an anyio cancel scope — unwinds the request at once and
+    # hands MC_LIMITER's token back while its worker thread is still simulating. The lock inside
+    # the thread keeps the next simulation from starting beside it (2026-09-24 review minor 2).
+    await seed_everything(db)
+    first = asyncio.create_task(
+        _answer(engine, ProjectionKnobs(years=5, annual_return=Decimal("0.04")))
+    )
+    assert await asyncio.to_thread(simulations.started.wait, 30)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await _answer(engine, ProjectionKnobs(years=5, annual_return=Decimal("0.05")))
+    # The cancelled request's thread runs to its end regardless; wait for every run to finish.
+    assert await asyncio.to_thread(simulations.idle.wait, 30)
+    assert simulations.calls == 2
+    assert simulations.most == 1

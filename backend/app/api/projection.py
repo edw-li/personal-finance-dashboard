@@ -38,6 +38,7 @@ model for direct callers (the assistant), so every caller gets its own copy.
 
 import math
 import re
+import threading
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -128,6 +129,18 @@ router = APIRouter(
 # so other requests slow down during a cold run — but they interleave instead of queueing behind
 # it, and a second cold run waits for the first rather than splitting the CPU with it.
 MC_LIMITER = anyio.CapacityLimiter(1)
+# ...and one at a time INSIDE the thread too: asyncio's own cancellation (Task.cancel()) unwinds
+# the awaiting request at once and returns the limiter's token while the worker thread is still
+# simulating — anyio's shielded wait does not hold against it (measured, 2026-09-24 review
+# minor 2) — so the token alone would let the next simulation start beside the first.
+_MC_THREAD_LOCK = threading.Lock()
+
+
+def _simulate_serially(*args, **kwargs) -> MonteCarloResult:
+    """`simulate` for the worker thread, never two at once whatever the limiter was told."""
+    with _MC_THREAD_LOCK:
+        return simulate(*args, **kwargs)
+
 
 ZERO = Decimal("0.00")
 DEFAULT_ANNUAL_RETURN = Decimal("0.05")
@@ -1137,7 +1150,7 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
         # lengthening the run never re-deals a path (2026-09-24 review I1).
         mc = await anyio.to_thread.run_sync(
             partial(
-                simulate,
+                _simulate_serially,
                 starting,
                 monthly_contribution,
                 real_return,
