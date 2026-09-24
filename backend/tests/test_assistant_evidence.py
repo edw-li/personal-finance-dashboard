@@ -347,6 +347,16 @@ def test_exact_election_precision_survives_evidence_serialization():
             MetricEvidence.model_validate({**wire, "display_precision": invalid})
 
 
+# The model-silence window the timing tests below patch in for the production 25 s. Their old
+# 0.03-0.13 s windows were two to eight ticks of a 15.6 ms loop clock (Python 3.12 on Windows
+# reads time.monotonic from GetTickCount64), and asyncio runs a timer up to one tick early
+# whenever the loop is busy — a streaming conversation always is: a nominal 0.03 s wait_for
+# measured 1-12 ms of real time there. The first frame then missed its allowance on a loaded
+# box and the rung took the OTHER branch (2026-09-23 test speed-up plan, Task 4). Half a
+# second is ~32 ticks and far above the first-output latency measured under load.
+SILENCE = 0.5
+
+
 class QuietStream(httpx.AsyncByteStream):
     def __init__(self, *, text_first=False, reasoning=False):
         self.closed = False
@@ -383,7 +393,9 @@ async def test_silence_bound_covers_headers_and_reasoning_and_skips_same_rung(
             return httpx.Response(200, stream=quiet)
         return httpx.Response(200, text=_openai_stream([_delta("fallback"), _finish()]))
 
-    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", 0.04)
+    # The primary never speaks (30 s of silence >> SILENCE); the fallback's first frame must
+    # land inside ITS allowance, which a loaded box could not always do within 0.04 s.
+    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", SILENCE)
     monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", httpx.MockTransport(responder))
     events = _all_events(
         await _collect(
@@ -409,7 +421,10 @@ async def test_silent_gap_after_partial_output_stops_without_concatenated_fallba
         attempts.append(json.loads(request.content)["model"])
         return httpx.Response(200, stream=quiet)
 
-    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", 0.03)
+    # The window is ALSO the first-output allowance, armed before the request: `partial` must
+    # arrive inside it (else the rung reads as silent and fails over — the other branch), and
+    # the 30 s gap after it must outlast it. A loaded box missed the 0.03 s allowance.
+    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", SILENCE)
     monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", httpx.MockTransport(responder))
     events = _all_events(
         await _collect(
@@ -429,19 +444,24 @@ async def test_silent_gap_after_partial_output_stops_without_concatenated_fallba
 
 async def test_transient_retry_keeps_the_same_first_output_allowance(monkeypatch):
     primary_attempts = 0
+    # first < allowance < first + second: the 503 lands inside the allowance, so the rung
+    # retries; the retry's first token lands past it, so the SAME allowance fails the rung over
+    # to the fallback. Both gaps are 0.4-0.5 s (they were 0.04 s — under three clock ticks).
+    first, allowance, second = 0.1, 0.6, 0.9
+    assert first < allowance < first + second
 
     async def responder(request):
         nonlocal primary_attempts
         if json.loads(request.content)["model"] == "moonshotai/kimi-k3":
             primary_attempts += 1
             if primary_attempts == 1:
-                await asyncio.sleep(0.09)
+                await asyncio.sleep(first)
                 return httpx.Response(503, text="temporary failure")
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(second)
             return httpx.Response(200, text=_openai_stream([_delta("too late"), _finish()]))
         return httpx.Response(200, text=_openai_stream([_delta("fallback"), _finish()]))
 
-    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", 0.13)
+    monkeypatch.setattr(assistant_chat, "MODEL_SILENCE_SECONDS", allowance)
     monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", httpx.MockTransport(responder))
     events = _all_events(
         await _collect(
