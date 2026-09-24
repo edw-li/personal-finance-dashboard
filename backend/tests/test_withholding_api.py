@@ -39,6 +39,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services import read_cache
 from app.services.tax_reconciliation import NEVER_RECONCILED_NOTE
 
 YEARS = "/api/v1/taxes/years"
@@ -1971,10 +1972,13 @@ async def test_the_overlay_pricer_refuses_a_computed_total(db, world, frozen_tod
 async def test_the_reconciliation_writes_nothing(
     auth_client, db, world, frozen_today, forbid_writes
 ):
-    """Compute-only (§W3), proven twice: no ORM flush under the guard, AND the rows it could
-    touch are counted before and after — a core statement would slip past a flush guard
-    (code-quality suggestion). An RSU figure is typed, so an Apply is on offer and unwritten."""
+    """Compute-only (§W3), proven three ways: no ORM flush under the guard; the change log and
+    the inputs keep their row counts; and the fingerprint of every table the GET reads — row
+    CONTENTS, not only counts — is unchanged, so an unlogged in-place UPDATE is caught too. The
+    likeliest silent regression is the projection overwriting the typed RSU figure, so an RSU
+    figure is typed (an Apply is on offer), and it must still read 120000 afterwards."""
     await set_rsu_typed(db, "120000")
+    tables = read_cache._WITHHOLDING_FINGERPRINT.bindparams(ticker="NVDA")
 
     async def counts() -> tuple[int, int]:
         change_log = (await db.execute(select(func.count()).select_from(ChangeLog))).scalar_one()
@@ -1982,11 +1986,17 @@ async def test_the_reconciliation_writes_nothing(
         return change_log, inputs
 
     before = await counts()
+    fingerprint = await read_cache._fingerprint(db, tables)
     with forbid_writes():
         body = await get_withholding(auth_client)
     assert body["reconciliation"]["rows"]
     assert rows_of(body)["rsu"]["apply"] is not None
     assert await counts() == before
+    assert await read_cache._fingerprint(db, tables) == fingerprint
+    typed = await db.execute(
+        select(TaxInput.value).where(TaxInput.year == YEAR, TaxInput.key == "w2_stock_rsus_sold")
+    )
+    assert typed.scalar_one() == Decimal("120000")
 
 
 async def test_the_calendars_internal_reads_carry_no_reconciliation(db, world, frozen_today):
