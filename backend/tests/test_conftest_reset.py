@@ -18,7 +18,7 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
 from app.limit_keys import LIMIT_401K_ELECTIVE
@@ -224,11 +224,17 @@ async def test_reset_is_visible_to_other_connections(db, engine):
     assert await reset_database(engine), "the fast path failed and TRUNCATE did the reset"
 
     # Committed, not merely done inside one connection's transaction: tests open their own
-    # sessions on the shared engine (the assistant's SESSION_FACTORY, the lifecycle CLI).
-    async with async_sessionmaker(engine)() as other:
-        await _assert_reset_state(other)
-    async with engine.connect() as raw:
-        await _assert_reset_state(raw)
+    # sessions (the assistant's SESSION_FACTORY, the lifecycle CLI). Checked from a SECOND
+    # engine, so from new server sessions: the shared engine's pool would hand back the very
+    # connection the reset ran on, which sees its own work committed or not.
+    other_engine = create_async_engine(conftest.TEST_DATABASE_URL)
+    try:
+        async with async_sessionmaker(other_engine)() as other:
+            await _assert_reset_state(other)
+        async with other_engine.connect() as raw:
+            await _assert_reset_state(raw)
+    finally:
+        await other_engine.dispose()
 
 
 async def test_reset_falls_back_to_truncate(db, engine):
