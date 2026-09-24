@@ -89,9 +89,11 @@ export function projectionSelection(data: DisplayProjection, index: number): Cha
   }
 }
 
-/** A tile's words: its value, its delta, the delta's tone and an optional badge. */
+/** A tile's words: its value (with a unit set small beneath it when the reading is longer than
+ *  a figure), its delta, the delta's tone and an optional badge. */
 export interface TileText {
   value: string
+  unit?: string
   delta?: string
   tone: 'positive' | 'negative' | 'neutral' | 'warn'
   badge?: string
@@ -128,7 +130,8 @@ export function moneyLastsTile(data: ProjectionOut): TileText {
   if (lasts.reason) return { value: '—', delta: lasts.reason, tone: 'neutral' }
   if (lasts.probability !== null && lasts.verdict !== null) {
     return {
-      value: `${formatPct(lasts.probability, { signed: false })} of paths through ${lasts.plan_until}`,
+      value: formatPct(lasts.probability, { signed: false }),
+      unit: `of paths through ${lasts.plan_until}`,
       delta: lasts.lasts_until_p10 === null
         ? `In 9 of 10 paths the money lasts beyond ${formatMonth(lasts.horizon_end)}, the end of the projection`
         : `In 9 of 10 paths the money lasts until at least ${lasts.lasts_until_p10.slice(0, 4)}`,
@@ -137,8 +140,8 @@ export function moneyLastsTile(data: ProjectionOut): TileText {
   }
   const out = lasts.deterministic_depleted_month
   return out !== null && out <= `${lasts.plan_until}-12-01`
-    ? { value: `Runs out ${formatMonth(out)} at a constant return`, tone: 'neutral' }
-    : { value: `Lasts through ${lasts.plan_until} at a constant return`, tone: 'neutral' }
+    ? { value: 'Runs out', unit: `${formatMonth(out)} at a constant return`, tone: 'neutral' }
+    : { value: 'Lasts', unit: `through ${lasts.plan_until} at a constant return`, tone: 'neutral' }
 }
 
 const PHASE_WORDS: Record<PhaseOut['kind'], string> = {

@@ -49,6 +49,15 @@ describe('StatTile delta glyph', () => {
     expect(delta()?.className).toContain('stat-delta-neutral')
   })
 
+  it('sets a unit under the value, small, so a long reading still fits a fifth of the row', () => {
+    // The Projection's "Money lasts": the figure big, its unit on a line of its own — read
+    // together they are one sentence (2026-09-23 correctness spec §R7).
+    render(<StatTile label="Money lasts" value="92.4%" unit="of paths through 2075" />)
+    const value = document.querySelector('.stat-value')
+    expect(value?.textContent).toBe('92.4% of paths through 2075')
+    expect(value?.querySelector('.stat-value-unit')?.textContent?.trim()).toBe('of paths through 2075')
+  })
+
   it('colours a warn tone amber with no glyph — a caution is not a movement', () => {
     // The Projection's "Money lasts" verdict (2026-09-23 spec §R7): borderline reads amber.
     render(<StatTile label="Money lasts" value="82.0% of paths through 2075" delta="In 9 of 10 paths…" tone="warn" />)

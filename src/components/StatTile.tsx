@@ -39,6 +39,7 @@ const COUNT_UP_MS = 450
 export default function StatTile({
   label,
   value,
+  unit,
   delta,
   tone,
   direction,
@@ -50,6 +51,9 @@ export default function StatTile({
 }: {
   label: string
   value: string
+  /** Words that complete the value, set small on a line of their own ("of paths through 2075")
+   *  so a reading longer than a figure still fits the tile (2026-09-23 correctness spec §R7). */
+  unit?: string
   delta?: string
   /** `warn` is a caution (amber) with no glyph of its own — the Projection's borderline verdict. */
   tone?: 'positive' | 'negative' | 'neutral' | 'warn'
@@ -125,7 +129,10 @@ export default function StatTile({
         </span>
         {badge !== undefined && <span className="stat-badge">{badge}</span>}
       </div>
-      <div className="stat-value">{display ?? value}</div>
+      <div className="stat-value">
+        {display ?? value}
+        {unit !== undefined && <span className="stat-value-unit"> {unit}</span>}
+      </div>
       {delta !== undefined && (
         <div className={`stat-delta stat-delta-${tone ?? 'neutral'}`}>
           {glyph && <span aria-hidden="true">{glyph} </span>}

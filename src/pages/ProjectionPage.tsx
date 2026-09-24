@@ -129,7 +129,7 @@ export default function ProjectionPage() {
                 hint="The month half of the simulated paths reach the FI target, with the months 1 in 10 and 9 in 10 get there." />
               {/* Money lasts (spec §R3, §R7): a verdict, not a movement — coloured and worded (the
                   badge), never a glyph. From the same simulation as the FI date. */}
-              <StatTile label="Money lasts" value={lasts.value} delta={lasts.delta} tone={lasts.tone} direction="none"
+              <StatTile label="Money lasts" value={lasts.value} unit={lasts.unit} delta={lasts.delta} tone={lasts.tone} direction="none"
                 badge={lasts.badge} evidence={receipts.moneyLasts}
                 hint="The share of simulated paths whose balance lasts through your plan-until year, once withdrawals start after the last retirement." />
             </div>

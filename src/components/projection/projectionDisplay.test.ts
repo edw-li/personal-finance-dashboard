@@ -117,8 +117,9 @@ describe('the FI date tile (2026-09-23 spec §R6)', () => {
 
 describe('the money-lasts tile (2026-09-23 spec §R3, §R7)', () => {
   it('reads the probability through the plan-until year, with the verdict as tone and badge', () => {
+    // The figure big, its unit on a line of its own: read together, "92.4% of paths through 2075".
     expect(moneyLastsTile(fixture({ money_lasts: LASTS }))).toEqual({
-      value: '92.4% of paths through 2075', delta: 'In 9 of 10 paths the money lasts until at least 2079',
+      value: '92.4%', unit: 'of paths through 2075', delta: 'In 9 of 10 paths the money lasts until at least 2079',
       tone: 'positive', badge: 'On track',
     })
     expect(moneyLastsTile(fixture({ money_lasts: { ...LASTS, probability: '0.800000', verdict: 'borderline' } }))).toMatchObject({ tone: 'warn', badge: 'Borderline' })
@@ -133,10 +134,10 @@ describe('the money-lasts tile (2026-09-23 spec §R3, §R7)', () => {
 
   it('speaks the constant-return line alone with volatility 0 — neutral, no percentage', () => {
     const constant = { ...LASTS, probability: null, verdict: null, lasts_until_p10: null }
-    expect(moneyLastsTile(fixture({ money_lasts: { ...constant, deterministic_depleted_month: '2061-03-01' } }))).toEqual({ value: 'Runs out Mar 2061 at a constant return', tone: 'neutral' })
+    expect(moneyLastsTile(fixture({ money_lasts: { ...constant, deterministic_depleted_month: '2061-03-01' } }))).toEqual({ value: 'Runs out', unit: 'Mar 2061 at a constant return', tone: 'neutral' })
     // Running out AFTER the plan-until year still lasts through it.
-    expect(moneyLastsTile(fixture({ money_lasts: { ...constant, deterministic_depleted_month: '2076-02-01' } })).value).toBe('Lasts through 2075 at a constant return')
-    expect(moneyLastsTile(fixture({ money_lasts: constant })).value).toBe('Lasts through 2075 at a constant return')
+    expect(moneyLastsTile(fixture({ money_lasts: { ...constant, deterministic_depleted_month: '2076-02-01' } }))).toMatchObject({ value: 'Lasts', unit: 'through 2075 at a constant return' })
+    expect(moneyLastsTile(fixture({ money_lasts: constant }))).toMatchObject({ value: 'Lasts', unit: 'through 2075 at a constant return' })
   })
 
   it('dashes with the reason when no withdrawal is modelled, and for an older payload', () => {

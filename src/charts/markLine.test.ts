@@ -129,6 +129,16 @@ describe('areas, marks, baselines', () => {
       { name: '9 in 10 paths', coord: ['Aug 2032', 1500000], detail: 'c' },
     ])
   })
+  it('sets a label below the line when asked — neighbours stop colliding', () => {
+    const marks = percentileMarks([
+      { name: 'A', label: 'Aug 2030', value: 1, detail: 'a' },
+      { name: 'B', label: 'Sep 2030', value: 1, detail: 'b', position: 'bottom' },
+    ])
+    expect(marks.data).toEqual([
+      { name: 'A', coord: ['Aug 2030', 1], detail: 'a' },
+      { name: 'B', coord: ['Sep 2030', 1], detail: 'b', label: { position: 'bottom' } },
+    ])
+  })
   it('zeroLine is the solid MUTED hairline the savings-rate and card-value charts draw', () => {
     expect(zeroLine()).toEqual({
       silent: true, symbol: 'none', lineStyle: { color: MUTED, width: 1, type: 'solid' }, label: { show: false }, data: [{ yAxis: 0 }],

@@ -252,15 +252,16 @@ describe('projectionOption — F3', () => {
     const option = read(projectionOption(FI))
     const target = option.series.find((s) => s.name === PROJECTION_SERIES[2])!
     // p90 is null → two marks; each sits ON the target value at its anchored month, named in
-    // the reader's words — never "p10/p50/p90" (spec §R6).
+    // the reader's words — never "p10/p50/p90" (spec §R6). Short on the chart (a long axis puts
+    // them close together), with "Half" set below the line; the hover says the whole sentence.
     expect(target.markPoint?.data).toEqual([
-      { name: '1 in 10 paths', coord: ['Sep 2026', 1500000], detail: '1 in 10 paths reach FI by Sep 2026' },
-      { name: 'Half of paths', coord: ['Oct 2026', 1500000], detail: 'Half of paths reach FI by Oct 2026' },
+      { name: '1 in 10', coord: ['Sep 2026', 1500000], detail: '1 in 10 paths reach FI by Sep 2026' },
+      { name: 'Half', coord: ['Oct 2026', 1500000], detail: 'Half of paths reach FI by Oct 2026', label: { position: 'bottom' } },
     ])
     const mark = target.markPoint as unknown as { silent?: boolean; tooltip: { trigger: string; formatter: (p: unknown) => string } }
     expect(mark.silent).toBeUndefined()
     expect(mark.tooltip.trigger).toBe('item')
-    expect(mark.tooltip.formatter({ name: '1 in 10 paths', data: { detail: '1 in 10 paths reach FI by Sep 2026' } })).toBe('1 in 10 paths reach FI by Sep 2026')
+    expect(mark.tooltip.formatter({ name: '1 in 10', data: { detail: '1 in 10 paths reach FI by Sep 2026' } })).toBe('1 in 10 paths reach FI by Sep 2026')
     // No drawdown → no wash: the old "After FI" wash is gone (spec §R7).
     expect(option.series.every((s) => s.markArea === undefined)).toBe(true)
     // No FI → no marks, no rules (a stale payload or an unreachable target).
@@ -275,7 +276,7 @@ describe('projectionOption — F3', () => {
     const target = option.series.find((s) => s.name === PROJECTION_SERIES[2])!
     expect(target.markPoint?.data).toEqual([
       {
-        name: '1 in 10 paths · Half of paths',
+        name: '1 in 10 · Half',
         coord: ['Oct 2026', 1500000],
         detail: '1 in 10 paths reach FI by Oct 2026 · Half of paths reach FI by Oct 2026',
       },

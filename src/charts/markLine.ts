@@ -113,12 +113,12 @@ export function afterArea(fromLabel: string, toLabel: string, label: string) {
  *  mark means (`detail`), so they are no longer `silent`. Points sharing a coordinate merge
  *  into ONE circle named for both (' · '): two arrivals in the same month would otherwise stack
  *  two circles and two labels on the same pixel. */
-export function percentileMarks(points: { name: string; label: string; value: number; detail: string }[]) {
-  const byCoord = new Map<string, { coord: [string, number]; names: string[]; details: string[] }>()
+export function percentileMarks(points: { name: string; label: string; value: number; detail: string; position?: 'top' | 'bottom' }[]) {
+  const byCoord = new Map<string, { coord: [string, number]; names: string[]; details: string[]; position?: 'top' | 'bottom' }>()
   for (const point of points) {
     const key = `${point.label}|${point.value}`
     const seen = byCoord.get(key)
-    if (seen === undefined) byCoord.set(key, { coord: [point.label, point.value], names: [point.name], details: [point.detail] })
+    if (seen === undefined) byCoord.set(key, { coord: [point.label, point.value], names: [point.name], details: [point.detail], position: point.position })
     else {
       seen.names.push(point.name)
       seen.details.push(point.detail)
@@ -144,10 +144,13 @@ export function percentileMarks(points: { name: string; label: string; value: nu
         return p?.data?.detail ?? p?.name ?? ''
       },
     },
+    // A label may sit BELOW the line (`position: 'bottom'`), so neighbours on a long axis stop
+    // printing over each other; a merged mark keeps its first point's side.
     data: [...byCoord.values()].map((entry) => ({
       name: entry.names.join(' · '),
       coord: entry.coord,
       detail: entry.details.join(' · '),
+      ...(entry.position === 'bottom' ? { label: { position: 'bottom' as const } } : {}),
     })),
   }
 }

@@ -240,18 +240,22 @@ export default function ScenarioPanel({
           return (
             <div key={key} className="slider-box projection-vests">
               <div className="slider-box-head">
-                <label htmlFor="scenario-vests" className="projection-toggle">
-                  <input
-                    id="scenario-vests"
-                    type="checkbox"
-                    checked={vestsOn}
-                    disabled={vests.excluded_reason !== null}
-                    // Checked is the default: drop the entry rather than spell `vests:1`.
-                    onChange={(e) => knob('vests')(e.target.checked ? '' : '0', true)}
-                  />
-                  {LABELS.vests}
-                </label>
-                <InfoHint text={vestsHint} />
+                {/* The ⓘ sits beside the words, as on every other knob, but outside the <label>:
+                    a label would otherwise name the hint button too. */}
+                <span className="projection-toggle-head">
+                  <label htmlFor="scenario-vests" className="projection-toggle">
+                    <input
+                      id="scenario-vests"
+                      type="checkbox"
+                      checked={vestsOn}
+                      disabled={vests.excluded_reason !== null}
+                      // Checked is the default: drop the entry rather than spell `vests:1`.
+                      onChange={(e) => knob('vests')(e.target.checked ? '' : '0', true)}
+                    />
+                    {LABELS.vests}
+                  </label>
+                  <InfoHint text={vestsHint} />
+                </span>
               </div>
               <span className="projection-derived">
                 {vests.excluded_reason ??

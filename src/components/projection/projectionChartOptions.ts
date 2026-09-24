@@ -128,11 +128,13 @@ export function logFloor(start: number): number {
   return start > 0 ? 10 ** (Math.floor(Math.log10(start)) - 2) : 1
 }
 
-// The reach marks in the reader's words (spec §R6): never "p10/p50/p90".
+// The reach marks in the reader's words (spec §R6): never "p10/p50/p90". Short on the chart —
+// a long axis puts the three close together — with "Half" set below the line; the hover says
+// the whole sentence.
 const REACH_MARKS = [
-  ['1 in 10 paths', 'fi_month_p10'],
-  ['Half of paths', 'fi_month_p50'],
-  ['9 in 10 paths', 'fi_month_p90'],
+  ['1 in 10', '1 in 10 paths', 'fi_month_p10', 'top'],
+  ['Half', 'Half of paths', 'fi_month_p50', 'bottom'],
+  ['9 in 10', '9 in 10 paths', 'fi_month_p90', 'top'],
 ] as const
 
 /** A pinned scenario's deterministic line, drawn as a reference series (chart grammar §10):
@@ -196,11 +198,11 @@ export function projectionOption(
   const marks =
     target === null
       ? []
-      : REACH_MARKS.flatMap(([name, key]) => {
+      : REACH_MARKS.flatMap(([name, words, key, position]) => {
           const label = anchorMonthLabel(data.months, data[key] ?? null)
           return label === undefined
             ? []
-            : [{ name, label, value: Number(targetValues?.[labels.indexOf(label)] ?? target), detail: `${name} reach FI by ${label}` }]
+            : [{ name, label, value: Number(targetValues?.[labels.indexOf(label)] ?? target), detail: `${words} reach FI by ${label}`, position }]
         })
 
   const bandSeries =
