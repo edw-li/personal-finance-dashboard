@@ -30,13 +30,16 @@ WITHHELD = D("100000.00")
 NO_ESPP = EsppFacts(ordinary=D("0.00"), long_term=D("0.00"), short_term=D("0.00"), lots=0)
 
 
+ZERO = D("0.00")  # a module singleton: ruff's B008 bans calls in argument defaults
+
+
 def paycheck(
     *,
     checks=24,
     first=date(2026, 1, 16),
-    gross=D("0.00"),
-    trad=D("0.00"),
-    hsa=D("0.00"),
+    gross=ZERO,
+    trad=ZERO,
+    hsa=ZERO,
     trad_capped_at=None,
     hsa_capped_at=None,
 ):
@@ -146,7 +149,11 @@ def test_an_input_nobody_entered_reads_not_entered_and_is_still_compared():
     grace = person(
         2,
         "Grace",
-        bucket={"pay_periods": D("10"), "annual_salary": D("24000"), "latest_w2_income": D("10000")},
+        bucket={
+            "pay_periods": D("10"),
+            "annual_salary": D("24000"),
+            "latest_w2_income": D("10000"),
+        },
         paycheck=paycheck(
             checks=8, first=date(2026, 9, 16), gross=D("8000.00"), trad=D("800.00"), hsa=D("600.00")
         ),
@@ -161,7 +168,9 @@ def test_an_input_nobody_entered_reads_not_entered_and_is_still_compared():
 
 
 def test_a_row_with_nothing_on_either_side_is_left_out():
-    quiet = person(1, "Me", bucket={"hsa_contributions": D("0")}, paycheck=paycheck(gross=D("1000")))
+    quiet = person(
+        1, "Me", bucket={"hsa_contributions": D("0")}, paycheck=paycheck(gross=D("1000"))
+    )
     keys = [row.key for row in run([quiet]).rows]
     assert "hsa" not in keys and "trad_401k" not in keys
 
