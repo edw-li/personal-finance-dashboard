@@ -392,6 +392,12 @@ export default function WhatIfPanel({
   const changedInputs = wire?.changed_inputs ?? []
   // A sale in cash terms (2026-09-23 spec §W7): present only when the scenario sells something.
   const saleSummary = wire?.sale_summary ?? null
+  // A sale at a loss LOWERS the year's tax (code-quality M6): the tiles say "Tax saved" and
+  // "After-tax loss" with positive figures rather than a negative tax due or a negative gain.
+  const taxSaved = saleSummary !== null && Number(saleSummary.tax_due) < 0
+  const taxWord = taxSaved ? 'Tax saved' : 'Tax due'
+  const afterTaxLoss = saleSummary !== null && Number(saleSummary.after_tax_gain) < 0
+  const lossBeforeTax = saleSummary !== null && Number(saleSummary.gain) < 0
 
   const taxTone = result === null || previewUnusable ? 'neutral' : toneOf(result.delta.total_tax)
   const takeHomeTone =
@@ -468,26 +474,34 @@ export default function WhatIfPanel({
                     hint="What the shares in this scenario sell for, before tax."
                   />
                   <StatTile
-                    label="Tax due"
-                    value={formatCurrency(saleSummary.tax_due)}
-                    hint={`The tax the sales add to ${year} as stored.`}
+                    label={taxWord}
+                    value={formatCurrency(Math.abs(Number(saleSummary.tax_due)))}
+                    hint={
+                      taxSaved
+                        ? `The tax the sales take off ${year} as stored — the loss offsets other income.`
+                        : `The tax the sales add to ${year} as stored.`
+                    }
                   />
                   <StatTile
                     label="Net cash"
                     value={formatCurrency(saleSummary.net_cash)}
-                    hint="Proceeds minus tax due — the cash the sales leave you."
+                    hint={`Proceeds ${taxSaved ? 'plus the tax saved' : 'minus tax due'} — the cash the sales leave you.`}
                   />
                   <StatTile
-                    label="After-tax gain"
-                    value={formatCurrency(saleSummary.after_tax_gain)}
-                    delta={`${formatCurrency(saleSummary.gain)} gain before tax`}
+                    label={afterTaxLoss ? 'After-tax loss' : 'After-tax gain'}
+                    value={formatCurrency(Math.abs(Number(saleSummary.after_tax_gain)))}
+                    delta={`${formatCurrency(Math.abs(Number(saleSummary.gain)))} ${
+                      lossBeforeTax ? 'loss' : 'gain'
+                    } before tax`}
                     tone={toneOf(saleSummary.after_tax_gain)}
-                    hint="The gain — brokerage gains plus ESPP income — minus tax due."
+                    hint={`The gain — brokerage gains plus ESPP income — ${
+                      taxSaved ? 'plus the tax saved' : 'minus tax due'
+                    }.`}
                   />
                 </div>
                 {overrideCount > 0 && (
                   <p className="drill-hint">
-                    Tax due counts the sales only; the overrides change the total below.
+                    {taxWord} counts the sales only; the overrides change the total below.
                   </p>
                 )}
               </>

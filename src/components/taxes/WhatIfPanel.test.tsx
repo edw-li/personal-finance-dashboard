@@ -443,6 +443,30 @@ describe('WhatIfPanel', () => {
     expect(screen.getByText('Take-home').closest('tr')).toBeTruthy()
   })
 
+  it('a sale at a loss reads as tax saved and an after-tax loss, never a negative tax due (code-quality M6)', async () => {
+    const LOSS = {
+      proceeds: '8000.00',
+      gain: '-4000.00',
+      tax_due: '-1200.00',
+      net_cash: '9200.00',
+      after_tax_gain: '-2800.00',
+    }
+    vi.mocked(runWhatIf).mockResolvedValue(resultFixture({ sale_summary: LOSS }))
+    mount('/taxes?whatif=sale%3A7%3A40&whatif=annual_salary%3A210000', { definitions: DEFS, inputs: INPUTS })
+    await screen.findByText('Net cash')
+    expect(kpiLabels()).toEqual(['Proceeds', 'Tax saved', 'Net cash', 'After-tax loss'])
+    expect(tile('Tax saved').querySelector('.stat-value')?.textContent).toBe('$1,200.00')
+    expect(tile('Net cash').querySelector('.stat-value')?.textContent).toBe('$9,200.00')
+    const loss = tile('After-tax loss')
+    expect(loss.querySelector('.stat-value')?.textContent).toBe('$2,800.00')
+    expect(loss.querySelector('.stat-delta')?.textContent).toContain('$4,000.00 loss before tax')
+    expect(loss.querySelector('.stat-delta')?.className).toContain('stat-delta-negative')
+    // The overrides note names the tile it is about.
+    expect(
+      screen.getByText('Tax saved counts the sales only; the overrides change the total below.'),
+    ).toBeTruthy()
+  })
+
   it('with overrides beside the sales, says tax due counts the sales only', async () => {
     vi.mocked(runWhatIf).mockResolvedValue(resultFixture({ sale_summary: SALE_SUMMARY }))
     mount('/taxes?whatif=sale%3A7%3A40&whatif=annual_salary%3A210000', { definitions: DEFS, inputs: INPUTS })
