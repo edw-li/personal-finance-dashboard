@@ -384,15 +384,16 @@ async def test_the_fingerprint_covers_the_joint_return_and_safe_harbor_reads_too
     assert seen == set(read_cache.WITHHOLDING_TABLES)
 
 
-async def test_the_narrowed_cells_cover_every_setting_and_quote_the_get_reads(
+async def test_the_narrowed_cells_cover_every_setting_quote_and_bar_the_get_reads(
     db, engine, frozen_today
 ):
     """What makes the narrowing provably complete, over the heaviest paths — a joint return with
     a simulated partner, last year on file (the safe harbor's reads) and a lot sold this year
-    (the discount's read) — with a second security quoted and the refresh's bookkeeping stored
-    beside the employer's rows: every app_settings read is a keyed read of one of the narrowed
-    keys, and the only latest_prices row read is the employer's. (The table list is the capture
-    tests' above; this is the rows within the two narrowed tables.)"""
+    (the discount's read) — with a second security quoted and barred and the refresh's
+    bookkeeping stored beside the employer's rows: every app_settings read is a keyed read of one
+    of the narrowed keys, and the only latest_prices and price_history rows read are the
+    employer's. (The table list is the capture tests' above; this is the rows within the three
+    narrowed tables.)"""
     await seed_tax_definitions(db)
     await db.commit()
     me_id, partner_id = await seed_household(db)
@@ -402,9 +403,10 @@ async def test_the_narrowed_cells_cover_every_setting_and_quote_the_get_reads(
     await seed_partner_profile(db, partner_id)
     employer = await seed_employer(db)
     await seed_grants(db)
-    await _quote_other(db)
+    other = await _quote_other(db)
     db.add_all(
         [
+            PriceHistory(security_id=other.id, price_date=date(2026, 6, 30), close=Decimal("400")),
             AppSetting(key="last_refresh", value={"value": "2026-07-01T20:15:00+00:00"}),
             AppSetting(key="swr_pct", value={"value": "0.04"}),
             ContributionLimit(year=YEAR, key="limit_401k_elective", value=Decimal("24500")),
@@ -422,13 +424,13 @@ async def test_the_narrowed_cells_cover_every_setting_and_quote_the_get_reads(
     )
     await db.commit()
     db.expunge_all()  # every keyed read must reach the database to be seen
-    keyed: dict[str, set] = {"app_settings": set(), "latest_prices": set()}
+    keyed: dict[str, set] = {"app_settings": set(), "latest_prices": set(), "price_history": set()}
 
     def record(conn, cursor, statement, parameters, context, executemany):
         for table in keyed:
             if re.search(rf'\b(?:FROM|JOIN)\s+"?{table}"?\b', statement):
-                # A keyed point read (db.get) or nothing: an unkeyed read of either table is
-                # exactly what a narrowed cell could miss.
+                # A read keyed on one row (db.get) or one security's rows, or nothing: an
+                # unkeyed read of any of them is exactly what a narrowed cell could miss.
                 assert re.search(rf"WHERE {table}\.(key|security_id) = \$1", statement), statement
                 keyed[table].add(parameters[0])
 
@@ -443,6 +445,7 @@ async def test_the_narrowed_cells_cover_every_setting_and_quote_the_get_reads(
     assert out.reconciliation is not None
     assert keyed["app_settings"] == set(read_cache.WITHHOLDING_SETTING_KEYS)
     assert keyed["latest_prices"] == {employer.id}
+    assert keyed["price_history"] == {employer.id}
 
 
 async def test_the_cached_bytes_are_an_uncached_runs_bytes(auth_client, db, world, frozen_today):
