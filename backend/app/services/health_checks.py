@@ -17,7 +17,6 @@ from app.models import (
     AppSetting,
     LatestPrice,
     MonthlySpending,
-    NetWorthSnapshot,
     Security,
 )
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
@@ -169,9 +168,9 @@ async def check_coverage_gaps(
     def in_window(month: date) -> bool:
         return floor <= month < current
 
-    balances = {
-        m for m in (await db.execute(select(NetWorthSnapshot.month))).scalars() if in_window(m)
-    }
+    # The snapshot months the status already holds (review minor 9); the spending query stays —
+    # "no spending row" counts a month saved as all $0.00, which the status's months do not.
+    balances = {state.month for state in status.snapshots if in_window(state.month)}
     spending = {
         m
         for m in (await db.execute(select(MonthlySpending.month).distinct())).scalars()

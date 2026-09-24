@@ -19,7 +19,6 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Res
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.app_settings import read_update_due_day
 from app.api.deps import get_current_user
 from app.api.espp import _espp_quote
 from app.api.taxes import withholding_estimate
@@ -514,11 +513,11 @@ async def _load_sources(
     cards, card_health = await _card_facts(db)
     health.append(card_health)
 
-    due_day = await read_update_due_day(db)
     # The monthly update's two parts on the SAME product day this router read once (2026-09-23
     # spec §T6): the reminder lists what is pending from the month status coverage computes —
-    # K3's rule, never re-derived here.
+    # K3's rule, never re-derived here — and on the reminder day that status already read.
     month_status = (await load_coverage(db, today=today)).status
+    due_day = month_status.reminder_day
     health.append(_health("ritual", "ok", f"reminder on day {due_day} of each month"))
 
     custom_rows = await _custom_rows(db, window, names)

@@ -335,6 +335,21 @@ async def test_calendar_omits_paydays_for_other_cadences(auth_client, db, monkey
     assert [e for e in resp.json()["events"] if e["type"] == "payday"] == []
 
 
+async def test_calendar_reminder_honours_the_saved_reminder_day(auth_client, db, monkeypatch):
+    """The reminder day comes from the month status the router already loads (review minor 9):
+    day 5 puts the Sep reminder on Sep 5 under its day-5 key, and the source line says so."""
+    freeze_today(monkeypatch)  # Aug 24
+    db.add(AppSetting(key="calendar_update_due_day", value={"value": 5}))
+    db.add(NetWorthSnapshot(month=date(2026, 8, 1), recorded_on=date(2026, 8, 1)))
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    assert [(e["date"], e["key"]) for e in body["events"] if e["type"] == "update_due"] == [
+        ("2026-09-05", "ritual:2026-08:2026-09-05")
+    ]
+    ritual = next(s for s in body["sources"] if s["source"] == "ritual")
+    assert ritual["note"] == "reminder on day 5 of each month"
+
+
 async def test_calendar_reminder_lists_the_pending_parts(auth_client, db, monkeypatch):
     """T6 (2026-09-23 spec): one reminder per month on the reminder day, listing that day's
     balances and the previous month's spending & take-home while they are pending — read from
