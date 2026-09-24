@@ -176,6 +176,119 @@ async def test_projection_echoes_the_base_snapshot_it_started_from(auth_client, 
     assert body["base_provisional"] is False
 
 
+SEP_23 = date(2026, 9, 23)
+
+
+async def _seed_snapshots(db, *rows: tuple[date, date | None, str]) -> Account:
+    """One taxable account, and a snapshot per (month, recorded_on, balance)."""
+    taxable = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(taxable)
+    await db.flush()
+    for month, recorded_on, balance in rows:
+        snap = NetWorthSnapshot(month=month, recorded_on=recorded_on)
+        db.add(snap)
+        await db.flush()
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=taxable.id, balance=Decimal(balance)))
+    await db.commit()
+    return taxable
+
+
+async def test_the_base_is_the_current_snapshot_a_provisional_next_month_one_included(
+    auth_client, db, monkeypatch
+):
+    # 2026-09-23 spec §R5 on K2's rule: Oct 1 recorded on Sep 22 IS the current snapshot — the
+    # starting balance stands on it, dated Sep 22 and provisional, while the axis still starts in
+    # today's month (a base as-of is never after today).
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_snapshots(
+        db,
+        (date(2026, 9, 1), date(2026, 9, 1), "100000.00"),
+        (date(2026, 10, 1), date(2026, 9, 22), "120000.00"),
+    )
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["starting_balance"] == "120000.00"
+    assert body["base_month"] == "2026-10-01"
+    assert body["base_as_of"] == "2026-09-22"
+    assert body["base_recorded_on"] == "2026-09-22"
+    assert body["base_provisional"] is True
+    assert body["start_month"] == "2026-09-01"
+    assert body["months"][0] == "2026-09-01"
+    assert body["projected"][0] == "120000.00"
+
+
+async def test_a_snapshot_two_months_ahead_is_never_the_base(auth_client, db, monkeypatch):
+    # Only an API client or an import can store one (K2); it stays in the charts, never "now".
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_snapshots(
+        db,
+        (date(2026, 9, 1), date(2026, 9, 1), "100000.00"),
+        (date(2026, 11, 1), None, "999999.00"),
+    )
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["base_month"] == "2026-09-01"
+    assert body["starting_balance"] == "100000.00"
+    assert body["base_as_of"] == "2026-09-01"
+    assert body["base_provisional"] is False
+
+
+async def test_the_vest_cut_is_the_bases_as_of_date(auth_client, db, monkeypatch):
+    # A Sep 16 vest (spec §R4, §R5) is not in Sep 1's balances, so it counts; balances recorded
+    # on Sep 22 already hold its shares, so with that base it is left out.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    taxable = await _seed_snapshots(db, (date(2026, 9, 1), date(2026, 9, 1), "100000.00"))
+    grant = await _seed_vests(db, first=date(2026, 9, 16))
+    sep_base = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    kept = _kept(grant, after=date(2026, 9, 1))
+    assert kept[0] == (date(2026, 9, 16), 400)
+    year_2026 = next(row for row in sep_base["vests"]["by_year"] if row["year"] == 2026)
+    assert Decimal(year_2026["after_withholding"]) == sum(
+        (_net(s) for d, s in kept if d.year == 2026), Decimal("0.00")
+    )
+
+    oct_snap = NetWorthSnapshot(month=date(2026, 10, 1), recorded_on=date(2026, 9, 22))
+    db.add(oct_snap)
+    await db.flush()
+    db.add(
+        AccountBalance(snapshot_id=oct_snap.id, account_id=taxable.id, balance=Decimal("140000.00"))
+    )
+    await db.commit()
+    oct_base = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert oct_base["base_as_of"] == "2026-09-22"
+    later = _kept(grant, after=date(2026, 9, 22))
+    assert all(day > date(2026, 9, 22) for day, _ in later)
+    year_2026 = next(row for row in oct_base["vests"]["by_year"] if row["year"] == 2026)
+    assert Decimal(year_2026["after_withholding"]) == sum(
+        (_net(s) for d, s in later if d.year == 2026), Decimal("0.00")
+    )
+    assert Decimal(year_2026["after_withholding"]) < Decimal(
+        next(row for row in sep_base["vests"]["by_year"] if row["year"] == 2026)[
+            "after_withholding"
+        ]
+    )
+
+
+async def test_a_base_with_no_usable_date_cuts_vests_at_today(auth_client, db, monkeypatch):
+    # Oct 1 stored with no recorded date is provisional with no as-of ("date unknown", K2): the
+    # cut falls back to today — a Sep 28 vest counts (after Sep 23), a Sep 16 one does not.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_snapshots(
+        db,
+        (date(2026, 9, 1), date(2026, 9, 1), "100000.00"),
+        (date(2026, 10, 1), None, "120000.00"),
+    )
+    grant = await _seed_vests(db, first=date(2026, 9, 28))
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert body["base_month"] == "2026-10-01"
+    assert body["base_as_of"] is None
+    assert body["base_provisional"] is True
+    kept = _kept(grant, after=SEP_23)
+    assert kept[0] == (date(2026, 9, 28), 400)
+    year_2026 = next(row for row in body["vests"]["by_year"] if row["year"] == 2026)
+    assert Decimal(year_2026["after_withholding"]) == sum(
+        (_net(s) for d, s in kept if d.year == 2026), Decimal("0.00")
+    )
+
+
 async def test_run_projection_is_the_routes_answer_as_a_model_of_its_own(db):
     # Direct callers (the assistant) get the SAME answer the route serves, validated into a
     # model of their own: mutating one can never reach the next caller (spec §R9).

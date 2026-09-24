@@ -879,7 +879,9 @@ input overrides through the inputs editor's PUT, Projection has no Apply. Up to 
 per page can be pinned in the browser (`localStorage`, knobs only — pins re-run against live data
 on every visit and are never part of a link).
 
-**Projection — moved by design (2026-09-23 correctness batch; do not "fix" these).** Scheduled RSU
+**Projection — moved by design (2026-09-23 correctness batch; do not "fix" these).** The starting
+balance is the current snapshot's — the one the Overview shows, so next month's balances recorded
+early count, named on the tile "as of Sep 22 · provisional". Scheduled RSU
 vests are included by default — each vest after the starting balance's date, at today's employer
 quote less the calendar's ≈ 32.23 % sell-to-cover, stopping at the primary's retirement
 (`vests:0` leaves them out) — so the FI date moves earlier. A retirement month now splits the plan

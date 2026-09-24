@@ -1,8 +1,9 @@
 """Projection API — the FIRE module (post-roadmap feature; nothing here is stored).
 
 One computed GET in the ESPP-modeler shape: what-if knobs arrive as query params, every
-knob NOT provided is seeded from the data the app already holds — the latest investable
-balance (net_worth_calc's own rule, the 4%-line's base), the mean cash savings of the
+knob NOT provided is seeded from the data the app already holds — the investable balance of
+the CURRENT snapshot (lane K's rule in services/snapshot_state.py, a provisional next-month
+one included, spec §R5; net_worth_calc's groups), the mean cash savings of the
 MATCHED window PLUS every earner's payroll-deducted savings as the contribution
 (2026-09-03: 401(k), ESPP and HSA money never reaches net pay, so the cash-only derivation
 understated the stream by thousands a month and called FI unreachable), that same window's
@@ -65,7 +66,6 @@ from app.limit_keys import LIMIT_401K_ELECTIVE
 from app.models import (
     Account,
     AccountBalance,
-    NetWorthSnapshot,
     PaycheckProfile,
     Person,
     RsuGrant,
@@ -117,6 +117,7 @@ from app.services.read_cache import (
     cached_review_book,
 )
 from app.services.savings import payroll_monthly
+from app.services.snapshot_state import SnapshotState, current_and_previous, load_snapshot_states
 
 router = APIRouter(
     prefix="/projection", tags=["projection"], dependencies=[Depends(get_current_user)]
@@ -800,35 +801,14 @@ async def _resolve_plan_until(
     return year, source, years
 
 
-@dataclass(frozen=True)
-class BaseSnapshot:
-    """The snapshot the starting balance stands on (2026-09-23 spec §R5): its key, the date
-    its balances describe, the stored recorded date and whether it is provisional."""
-
-    id: int
-    month: date
-    as_of: date | None
-    recorded_on: date | None
-    provisional: bool
-
-
-async def _base_snapshot(db: AsyncSession, today: date) -> BaseSnapshot | None:
-    """THE one read of "which snapshot is now" (spec §R5) — the seam lane K's
-    `snapshot_state.current_and_previous` replaces. Until then: the latest snapshot whose
-    month is on or before today, its balances describing that month's 1st."""
-    row = (
-        await db.execute(
-            select(NetWorthSnapshot.id, NetWorthSnapshot.month, NetWorthSnapshot.recorded_on)
-            .where(NetWorthSnapshot.month <= today)
-            .order_by(NetWorthSnapshot.month.desc())
-            .limit(1)
-        )
-    ).first()
-    if row is None:
-        return None
-    return BaseSnapshot(
-        id=row.id, month=row.month, as_of=row.month, recorded_on=row.recorded_on, provisional=False
-    )
+async def _base_snapshot(db: AsyncSession, today: date) -> SnapshotState | None:
+    """THE one read of "which snapshot is now" (2026-09-23 spec §R5): the CURRENT snapshot by
+    lane K's rule (services/snapshot_state.py, its one owner) — the latest whose month is at
+    most the month after today's. So Oct 1's balances typed on Sep 22 are the starting point,
+    as of Sep 22 and provisional, while a snapshot further ahead never is. Its as-of date is
+    also where the vests are cut (spec §R4)."""
+    current, _previous = current_and_previous(await load_snapshot_states(db, today), today)
+    return current
 
 
 async def _investable_total(db: AsyncSession, snapshot_id: int) -> Decimal:
