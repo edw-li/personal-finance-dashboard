@@ -1056,4 +1056,22 @@ describe('SpendingPage — a partly entered month (2026-09-23 spec §T12)', () =
     renderPage('/spending?section=history')
     expect(await screen.findByText('* Spending partly entered')).toBeTruthy()
   })
+
+  it('reads it as partly entered on the Budgets view, never as a complete month under budget', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        series: [
+          { category_id: 1, values: ['2000.00', '2000.00'], budgets: ['2100.00', '2100.00'] },
+          { category_id: 2, values: ['600.00', '580.00'], budgets: ['550.00', '550.00'] },
+          { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
+        ],
+        total_budget: ['2650.00', '2650.00'],
+      }),
+    )
+    renderPage('/spending?section=budgets')
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026 Partly entered/ })).toBeTruthy()
+    expect(
+      await screen.findByText(/over so far in Jul 2026 — its spending is partly entered \(due by Aug 15\)$/),
+    ).toBeTruthy()
+  })
 })

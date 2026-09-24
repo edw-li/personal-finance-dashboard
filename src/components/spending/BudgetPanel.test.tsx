@@ -23,8 +23,10 @@ import type {
   BudgetSeedOut,
   BudgetSuggestion,
   BudgetSuggestionsOut,
+  FlowsPartOut,
   SpendingMatrix,
 } from '../../types/api'
+import { flowsPart } from '../../testing/timeFixtures'
 
 const matrix: SpendingMatrix = {
   months: ['2026-01-01', '2026-02-01'],
@@ -578,6 +580,58 @@ describe('the month the card reads (spec §B5)', () => {
     renderBook(BLANK_BOOK, null, -1)
     expect(screen.getByText('Select an entered month in the ribbon to review its budgets.')).toBeDefined()
     expect(screen.queryByRole('meter')).toBeNull()
+  })
+
+  // 2026-09-23 spec §T12 (controller): from Oct 1 September's spending — its rent, saved on Sep 7
+  // — is PARTLY ENTERED. The card must not read it as a complete month ("0 of 13 over").
+  describe('a month whose spending is not complete (2026-09-23 spec §T12)', () => {
+    const partial = [flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16' })]
+    const renderWith = (flowsDue: FlowsPartOut[], onShownMonth?: (month: string) => void) =>
+      render(
+        <BudgetPanel
+          matrix={SEP_BOOK}
+          monthIndex={null}
+          defaultIndex={1}
+          onViewMonth={onViewMonth}
+          onBudgetsChanged={onBudgetsChanged}
+          flowsDue={flowsDue}
+          onShownMonth={onShownMonth}
+        />,
+      )
+
+    it('reads a partly entered month as partly entered, with its due date — never as a complete month', () => {
+      pinToday('2026-10-05')
+      renderWith(partial)
+      expect(within(heading()).getByText('Partly entered')).toBeDefined()
+      expect(screen.getByRole('heading', { level: 2, name: /^Budgets — Sep 2026 Partly entered/ })).toBeDefined()
+      expect(
+        screen.getByText('0 of 2 budgeted categories over so far in Sep 2026 — its spending is partly entered (due by Oct 15)'),
+      ).toBeDefined()
+      expect(screen.queryByText('0 of 2 budgeted categories over in Sep 2026')).toBeNull()
+    })
+
+    it('reads a month with no spending as not entered yet, rather than as zero spent', () => {
+      pinToday('2026-10-05')
+      renderWith([flowsPart('2026-09-01', { take_home_entered: true, overdue_from: '2026-10-16' })])
+      expect(within(heading()).getByText('Not entered yet')).toBeDefined()
+      expect(
+        screen.getByText('Sep 2026 spending is not entered yet (due by Oct 15) — the meters read only what is on file.'),
+      ).toBeDefined()
+    })
+
+    it('reads an entered month exactly as before', () => {
+      pinToday('2026-10-05')
+      renderWith([])
+      expect(screen.queryByText('Partly entered')).toBeNull()
+      expect(screen.getByText('0 of 2 budgeted categories over in Sep 2026')).toBeDefined()
+    })
+
+    it('tells the page which month it resolved, so the scope row can name it (T8)', () => {
+      pinToday('2026-10-05')
+      const onShownMonth = vi.fn()
+      renderWith([], onShownMonth)
+      expect(onShownMonth).toHaveBeenLastCalledWith('2026-09-01')
+    })
   })
 })
 

@@ -11,11 +11,13 @@ import type {
   BudgetSuggestionsOut,
   CategoryBudgetEntry,
   CategoryOut,
+  FlowsPartOut,
   SpendingMatrix,
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatMonth } from '../../utils/format'
 import { currentMonthIso, todayIso } from '../../utils/months'
+import { dueByName } from '../../utils/timeWords'
 import { budgetProgress } from '../../utils/spending'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
@@ -84,6 +86,8 @@ export default function BudgetPanel({
   defaultIndex = -1,
   onViewMonth,
   onBudgetsChanged,
+  flowsDue,
+  onShownMonth,
 }: {
   matrix: SpendingMatrix
   /** The month the URL names (a ribbon pick or a deep link), as an index — it always wins.
@@ -94,6 +98,12 @@ export default function BudgetPanel({
   /** Moves the page to a month (the aware empty state's "View Sep 2026"). */
   onViewMonth?: (month: string) => void
   onBudgetsChanged: () => void
+  /** `GET /coverage` `time.flows_due` (2026-09-23 spec §T12): an ended month listed with its
+   *  spending partly entered or missing reads so — never as a complete month under budget. */
+  flowsDue?: readonly FlowsPartOut[]
+  /** Hears the month the card resolved (null when it has none): the page's scope row names it
+   *  as the Budgets view's default month (2026-09-23 spec §T8). */
+  onShownMonth?: (month: string | null) => void
 }) {
   const toast = useToast()
   const [editors, setEditors] = useState<Record<number, EditorState>>({})
@@ -160,13 +170,28 @@ export default function BudgetPanel({
       ? pinnedIndex
       : (budgetsOpeningIndex(activeBook, currentMonthIso()) ?? defaultIndex))
 
-  if (monthIndexShown < 0 || monthIndexShown >= matrix.months.length) {
+  const shownMonth =
+    monthIndexShown >= 0 && monthIndexShown < matrix.months.length ? matrix.months[monthIndexShown] : null
+  // The month on screen is the Budgets view's default for the scope row's Back and Edit (§T8) —
+  // it lives here (the pin after a write included), so the card says it rather than the page
+  // re-deriving it.
+  useEffect(() => {
+    onShownMonth?.(shownMonth)
+  }, [onShownMonth, shownMonth])
+
+  if (shownMonth === null) {
     return <p className="empty-note">Select an entered month in the ribbon to review its budgets.</p>
   }
 
-  const month = matrix.months[monthIndexShown]
+  const month = shownMonth
   // Rent entered on the 1st and nothing else yet must read as partial, not as under budget.
   const inProgress = isPartialMonth(month, todayIso())
+  // …and after the month has ended too, while its spending is only partly entered or not entered
+  // at all (2026-09-23 spec §T12): September's rent saved on Sep 7 read "0 of 13 over" on Oct 3.
+  const flows = inProgress ? undefined : flowsDue?.find((part) => part.month === `${month.slice(0, 7)}-01`)
+  const partlyEntered = flows?.spending === 'partial'
+  const notEntered = flows?.spending === 'missing'
+  const badge = inProgress ? 'Month to date' : partlyEntered ? 'Partly entered' : notEntered ? 'Not entered yet' : null
   // A5 (2026-08-31 tier-1): default to the FOCUSED month — the month the meters read.
   // The old next-calendar-month default made a first budget save successfully and
   // visibly do nothing (the meters were reading a month the budget hadn't reached).
@@ -426,13 +451,13 @@ export default function BudgetPanel({
         Budgets — {formatMonth(month)}
         {/* JSX drops the line break: without the space the heading's text reads "Sep 2026Month
             to date" to a screen reader, whatever the badge's margin shows (SourceHealth's note). */}
-        {inProgress && (
+        {badge !== null && (
           <>
             {' '}
-            <span className="badge">Month to date</span>
+            <span className="badge">{badge}</span>
           </>
         )}
-        <InfoHint text="Each budgeted category's spend against its budget for the month shown: the month picked in the ribbon, or else this month when a budget is in force, else the latest month that has one. Budgets are effective-dated: a change applies from its month forward and never rewrites history — each row says since when. With no transaction feed there is no mid-month pacing: a month still in progress reads month to date. Start from my averages writes every living category's typical spend as an editable budget; the editor's chips offer the same figures one at a time." />
+        <InfoHint text="Each budgeted category's spend against its budget for the month shown: the month picked in the ribbon, or else this month when a budget is in force, else the latest month that has one. Budgets are effective-dated: a change applies from its month forward and never rewrites history — each row says since when. With no transaction feed there is no mid-month pacing: a month still in progress reads month to date, and a month whose spending was saved while it was running reads partly entered until it is saved again after it ends or confirmed complete. Start from my averages writes every living category's typical spend as an editable budget; the editor's chips offer the same figures one at a time." />
       </h2>
       <FeedBanner error={error} />
       {seedStatus !== null && (
@@ -444,7 +469,11 @@ export default function BudgetPanel({
         <>
           <div className="budget-summary-row">
             <p className="drill-hint" role="status">
-              {`${overCount} of ${budgeted.length} budgeted categories over ${inProgress ? 'so far ' : ''}in ${formatMonth(month)}`}
+              {notEntered && flows !== undefined
+                ? `${formatMonth(month)} spending is not entered yet (due by ${dueByName(flows)}) — the meters read only what is on file.`
+                : `${overCount} of ${budgeted.length} budgeted categories over ${inProgress || partlyEntered ? 'so far ' : ''}in ${formatMonth(month)}${
+                    partlyEntered && flows !== undefined ? ` — its spending is partly entered (due by ${dueByName(flows)})` : ''
+                  }`}
             </p>
             {canSeed && !confirmReseed && (
               <button

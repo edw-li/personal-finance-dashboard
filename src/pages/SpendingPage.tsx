@@ -715,6 +715,9 @@ export default function SpendingPage() {
               defaultIndex={focusIndex}
               onViewMonth={setDetailMonth}
               onBudgetsChanged={load}
+              // A partly entered or missing month reads as such, never as a complete month under
+              // budget (2026-09-23 spec §T12).
+              flowsDue={flowsDue}
             />
           )}
         </LocalSectionPanel>
