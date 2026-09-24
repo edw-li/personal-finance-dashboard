@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { tooltipRows } from '../../testing/tooltipRows'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { CATEGORY_HUES, ENTITY } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
 import { ESTIMATE_DECAL, GRID_VARIANTS, compactMoney, partialItemStyle, percentLabel } from '../../charts/grammar'
 import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
+import { flowsPart } from '../../testing/timeFixtures'
 import type { SpendingMatrix } from '../../types/api'
+import { setServerToday } from '../../utils/productToday'
 import {
   HEATMAP_MODES,
   SUSTAINABLE_SPEND,
@@ -824,5 +826,103 @@ describe('heatmapOption: the month in progress (2026-09-23 spec §C5)', () => {
       '100% of this category’s busiest month',
     ])
     expect(tooltipRows(option.tooltip.formatter({ value: [6, 0, 1] })).label).toBe('Rent · Jul 2026')
+  })
+})
+
+
+// 2026-09-23 spec §T12 (review I2): on Oct 3 September has ENDED, but its spending was saved during
+// it — listed in `time.flows_due` as partial, it keeps the in-progress look on the bars (every
+// segment, the net-pay marker, the marked label) and in the heatmap, and says why: partly entered,
+// due by the 15th. Without the listing — spending entered — it is a plain month.
+describe('Spending charts: a partly entered month (2026-09-23 spec §T12)', () => {
+  beforeEach(() => setServerToday('2026-10-03'))
+  const partly = [flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16' })]
+  const september = () =>
+    matrixFixture({
+      months: ['2026-08-01', '2026-09-01'],
+      series: [
+        { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, null] },
+        { category_id: 2, values: ['600.00', '72.23'], budgets: [null, null] },
+        { category_id: 3, values: ['150.00', null], budgets: [null, null] },
+      ],
+      totals: ['2750.00', '2072.23'],
+      net_pay: ['6000.00', '3000.00'],
+    })
+  const input = (over: Record<string, unknown> = {}) => ({
+    ...barsInput(september()),
+    monthLabels: ['Aug 2026', 'Sep 2026'],
+    todayIso: '2026-10-03',
+    flowsDue: partly,
+    ...over,
+  })
+
+  it('draws every September segment partial after the month ended, its net pay as the lone marker', () => {
+    const option = read(spendingBarsOption(input()))
+    const [rent, groceries] = option.series
+    expect(rent.data).toEqual([2000, { value: 2000, itemStyle: partialItemStyle(CATEGORY_HUES[0], false) }])
+    expect(groceries.data).toEqual([600, { value: 72.23, itemStyle: partialItemStyle(CATEGORY_HUES[1], false) }])
+    expect(option.series.map((s) => s.id)).toContain('net-pay-partial')
+    const formatter = (option.xAxis.axisLabel as { formatter: (value: string, index: number) => string }).formatter
+    expect(formatter('Sep 2026', 1)).toBe('Sep 2026*')
+  })
+
+  it('names it partly entered in the tooltip head, with the day it is due by', () => {
+    const option = read(spendingBarsOption(input()))
+    const parsed = tooltipRows(option.tooltip.formatter([
+      { seriesName: 'Rent', seriesType: 'bar', axisValueLabel: 'Sep 2026', dataIndex: 1, value: 2000, color: CATEGORY_HUES[0] },
+    ]))
+    expect(parsed.head).toBe('Sep 2026 — spending partly entered (due by Oct 15)')
+  })
+
+  it('draws the month plainly once its spending is entered — nothing listed, nothing marked', () => {
+    const option = read(spendingBarsOption(input({ flowsDue: [] })))
+    expect(option.series[0].data).toEqual([2000, 2000])
+    expect(option.series.map((s) => s.id)).not.toContain('net-pay-partial')
+    // …and a MISSING month is not partial either: it stays whatever its rows are (hollow on the
+    // Overview, a gap here).
+    const missing = read(spendingBarsOption(input({ flowsDue: [flowsPart('2026-09-01')] })))
+    expect(missing.series[0].data).toEqual([2000, 2000])
+  })
+
+  it('names it in the CSV twin', () => {
+    const table = spendingCsv(september(), [1], new Map([[1, 'Rent']]), { todayIso: '2026-10-03', flowsDue: partly })
+    expect(table.headers.at(-1)).toBe('Period')
+    expect(table.rows.map((row) => row.at(-1))).toEqual(['Whole month', 'Spending partly entered (due by Oct 15)'])
+  })
+
+  // The heatmap: longMatrix's eight months end in August; on Sep 3 August has ended with its
+  // spending saved during it.
+  const heatInput = {
+    matrix: longMatrix(),
+    order: [1, 2],
+    nameById: NAMES,
+    monthLabels: ['Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026', 'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026'],
+    todayIso: '2026-09-03',
+    flowsDue: [flowsPart('2026-08-01', { spending: 'partial', overdue_from: '2026-09-16' })],
+  }
+
+  it('moves the partly entered column to the partial series and says why on hover', () => {
+    setServerToday('2026-09-03')
+    const option = heatmapOption({ ...heatInput, mode: 'absolute' }) as unknown as {
+      series: { id?: string; data: unknown[] }[]
+      tooltip: { formatter: (p: unknown) => string }
+    }
+    expect(option.series[1]).toMatchObject({ id: 'in-progress' })
+    expect(option.series[1].data).toEqual([
+      { value: [7, 1, 50], itemStyle: { borderColor: MUTED, borderWidth: 1, borderType: 'dashed' } },
+    ])
+    expect(tooltipRows(option.tooltip.formatter({ value: [7, 1, 50] })).label).toBe(
+      'Groceries &lt;b&gt;&amp; more&lt;/b&gt; · Aug 2026 — spending partly entered (due by Sep 15)',
+    )
+    const versus = heatmapOption({ ...heatInput, mode: 'vsAverage' }) as unknown as {
+      tooltip: { formatter: (p: unknown) => string }
+    }
+    expect(tooltipRows(versus.tooltip.formatter({ value: [7, 1, 50] })).sub).toBe('spending partly entered — not compared')
+  })
+
+  it('names the column in the heatmap CSV header', () => {
+    setServerToday('2026-09-03')
+    const csv = heatmapCsv(longMatrix(), [1, 2, 3], NAMES, { todayIso: '2026-09-03', flowsDue: heatInput.flowsDue })
+    expect(csv.headers.at(-1)).toBe('2026-08-01 (partly entered)')
   })
 })

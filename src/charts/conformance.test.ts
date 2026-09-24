@@ -52,11 +52,15 @@ const ROSTER = [
   // …and with the month in progress under Chart patterns (2026-09-23 spec §C5): hatched
   // segments and the detached net-pay marker series.
   'spendingBarsPartial',
+  // …and a month partly entered after it ended (2026-09-23 spec §T12): the same look, faded.
+  'spendingBarsPartlyEntered',
   'spendingMonthPie',
   'spendingHeatmapRow',
   'spendingHeatmapVsAverage',
   // …and the heatmap's in-progress column (§C5): partial cells and the marked rotated label.
   'spendingHeatmapPartial',
+  // …and a partly entered column after its month ended (§T12).
+  'spendingHeatmapPartlyEntered',
   // …and that column in the vs-average reading: a neutral hatched series the scale skips.
   'spendingHeatmapVsAveragePartial',
   'spendingSavings',

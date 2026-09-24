@@ -4,11 +4,12 @@
 // React, no fetching, only the grammar in src/charts.
 import type { EChartsOption } from '../../charts/echarts'
 import { compactMoney, grid, monthAxis } from '../../charts/grammar'
-import { ESTIMATE_DECAL, markedLabels, PARTIAL_FILL_ALPHA, partialMonths, partialNote, periodHeader } from '../../charts/partial'
+import { ESTIMATE_DECAL, isPartialMonth, markedLabels, PARTIAL_FILL_ALPHA } from '../../charts/partial'
+import { drawnPartial, partlyEnteredMonths, periodHeaderFor, periodNote } from '../../charts/partlyEntered'
 import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from '../../charts/scales'
 import { INK, MUTED, SURFACE } from '../../charts/theme'
 import { itemTooltip } from '../../charts/tooltip'
-import type { SpendingMatrix } from '../../types/api'
+import type { FlowsPartOut, SpendingMatrix } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatPct } from '../../utils/format'
 
@@ -72,6 +73,9 @@ export interface HeatmapInput {
   todayIso?: string | null
   /** Appearance › Chart patterns: that column hatched, not faded. */
   patterns?: boolean
+  /** `GET /coverage` `time.flows_due` (2026-09-23 spec §T12): a month listed with spending
+   *  PARTIAL keeps the in-progress column look after it has ended. */
+  flowsDue?: readonly FlowsPartOut[] | null
 }
 
 /**
@@ -81,15 +85,17 @@ export interface HeatmapInput {
  * exist. Hover keeps the RAW dollars in the lead; the mode's reading is the sub-line.
  */
 export function heatmapOption({
-  matrix, order, nameById, monthLabels, mode, todayIso = null, patterns = false,
+  matrix, order, nameById, monthLabels, mode, todayIso = null, patterns = false, flowsDue = null,
 }: HeatmapInput): EChartsOption | null {
   if (matrix.months.length === 0 || order.length === 0) return null
   const raw = heatmapMatrix(matrix, order)
   // 2026-09-23 spec §C5: the month in progress's column wears the partial look (the cell's
   // colour is the scale's, so the dashed outline is the neutral one). In the vs-average reading
   // it is not compared: a month to date against a whole month's average would read as a false
-  // "below average" — the same reason the averages leave it out.
-  const partial = partialMonths(matrix.months, todayIso)
+  // "below average" — the same reason the averages leave it out. A month whose spending is only
+  // partly entered keeps that column look after it has ended (2026-09-23 spec §T12).
+  const partly = partlyEnteredMonths(flowsDue)
+  const partial = drawnPartial(matrix.months, todayIso, partly)
   const legacyAverage = mode === 'vsAverage' ? vsAverage(raw) : []
   const comparison = mode === 'vsAverage' ? order.map((categoryId, row) => {
     const source = matrix.series.find(series => series.category_id === categoryId)
@@ -154,9 +160,12 @@ export function heatmapOption({
         const cell = `${name(r)} · ${monthLabels[c] ?? ''}`
         // The in-progress column in the vs-average reading: the dollars, and why there is no
         // comparison (audit F1).
-        if (mode === 'vsAverage' && partial[c]) return { value: dollars, label: cell, sub: 'month to date — not compared' }
-        // The in-progress words ride the month, as on the bars' tooltip head (spec §C5).
-        const note = typeof todayIso === 'string' && partial[c] ? partialNote(matrix.months[c], todayIso) : null
+        if (mode === 'vsAverage' && partial[c]) {
+          const running = typeof todayIso === 'string' && isPartialMonth(matrix.months[c], todayIso)
+          return { value: dollars, label: cell, sub: running ? 'month to date — not compared' : 'spending partly entered — not compared' }
+        }
+        // The in-progress (or partly entered) words ride the month, as on the bars' tooltip head.
+        const note = partial[c] ? periodNote(matrix.months[c], todayIso, partly) : null
         const label = `${cell}${note === null ? '' : ` — ${note}`}`
         if (mode === 'absolute') return { value: dollars, label }
         if (mode === 'row') return { value: dollars, label, sub: `${Math.round(v * 100)}% of this category’s busiest month` }
@@ -208,16 +217,17 @@ export function heatmapOption({
 
 /** The whole matrix (F12, addendum S7): every category in order × every month, verbatim. With
  *  a today, the header of a month in progress says so (the 2026-09-23 code review, 13: the
- *  axis's '*' in words, for the table twin and the CSV). */
+ *  axis's '*' in words, for the table twin and the CSV) — and a partly entered one's (§T12). */
 export function heatmapCsv(
   matrix: Pick<SpendingMatrix, 'months' | 'series'>,
   order: number[],
   nameById: Map<number, string>,
-  { todayIso = null }: { todayIso?: string | null } = {},
+  { todayIso = null, flowsDue = null }: { todayIso?: string | null; flowsDue?: readonly FlowsPartOut[] | null } = {},
 ): ExportTable {
   const byId = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+  const partly = partlyEnteredMonths(flowsDue)
   return {
-    headers: ['Category', ...matrix.months.map((month) => periodHeader(month, todayIso))],
+    headers: ['Category', ...matrix.months.map((month) => periodHeaderFor(month, todayIso, partly))],
     rows: order.map((id) => [nameById.get(id) ?? String(id), ...matrix.months.map((_, c) => byId.get(id)?.[c] ?? '')]),
   }
 }
