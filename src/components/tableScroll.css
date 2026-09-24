@@ -20,6 +20,20 @@
   scroll-margin-bottom: calc(var(--table-foot-h, 0px) + 4px);
 }
 
+/* The pinned rows' own controls never need a margin inside the box. localSections.css's
+   `.local-section-panel [id]` (0,2,0) hands an id'd control the page's scope-row margin (69–83px),
+   which counted the rewards matrix's card-col-<id> buttons as hidden and moved the box ~62px on
+   their focus; (0,2,2) outranks it whatever order the sheets load in. An id'd control in the body
+   keeps the table's insets for the same reason. */
+.table-scroll > table > :is(thead, tfoot) [id] {
+  scroll-margin: 0;
+}
+
+.table-scroll > table > tbody [id] {
+  scroll-margin-top: calc(var(--table-head-h, 0px) + 4px);
+  scroll-margin-bottom: calc(var(--table-foot-h, 0px) + 4px);
+}
+
 /* The box's own focus ring over its edge mask: a mask clips everything outside the border box, the
    outline included, so the ring vanished whenever a sideways edge was masked (panels.css) — a tab
    stop with no visible focus (WCAG 2.4.7). The fade is only a hint, worth less than the ring while

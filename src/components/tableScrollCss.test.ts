@@ -28,6 +28,16 @@ describe('the capped table box (tableScroll.css)', () => {
     expect(CSS).not.toContain('scroll-padding')
   })
 
+  // localSections.css's `.local-section-panel [id]` (0,2,0) hands an id'd control the page's
+  // scope-row margin (69–83px): the rewards matrix's card-col-<id> buttons moved a scrolled box ~62px
+  // on focus (Task 3 re-review). At (0,2,2) these win whatever order the sheets load in.
+  it("keeps the local-section panel's page margin off an id'd control: none pinned, the insets in the body", () => {
+    expect(CSS).toContain('.table-scroll > table > :is(thead, tfoot) [id] { scroll-margin: 0; }')
+    expect(CSS).toContain(
+      '.table-scroll > table > tbody [id] { scroll-margin-top: calc(var(--table-head-h, 0px) + 4px); scroll-margin-bottom: calc(var(--table-foot-h, 0px) + 4px); }',
+    )
+  })
+
   it('drops the edge mask while the box has keyboard focus, so its own ring shows', () => {
     expect(CSS).toContain('.table-scroll:focus-visible { mask-image: none !important; }')
   })
