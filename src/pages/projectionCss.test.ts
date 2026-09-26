@@ -57,5 +57,8 @@ describe('ProjectionPage.css — the outcomes band (2026-09-25 polish spec §4.2
     const body = css.slice(block, css.indexOf('\n}', block))
     expect(body).toMatch(/\.projection-outcomes\.kpi-row \{[^}]*padding-bottom: 0;[^}]*margin-bottom: 1rem;/)
     expect(body).toMatch(/\.projection-outcomes\.kpi-row > \* \{[^}]*margin-bottom: 8px;/)
+    // Pinned, its deltas run two lines (the FI date's two clauses, Money lasts' sentence): two are
+    // reserved, so the ghost band stands as tall as the band that lands (19px short before).
+    expect(body).toMatch(/\.projection-outcomes \.stat-delta \{[^}]*min-height: 2lh;/)
   })
 })

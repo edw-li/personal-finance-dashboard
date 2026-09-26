@@ -27,6 +27,10 @@
 @container page (width >= 1000px) {
   .projection-outcomes.kpi-row { padding-bottom: 0; margin-bottom: 1rem; }
   .projection-outcomes.kpi-row > * { margin-bottom: 8px; }
+  /* Five across, the deltas run two lines (the FI date's two clauses, Money lasts' sentence), so two
+     are reserved: the ghost band (PageSkeleton, same class) stands as tall as the band that lands,
+     and a scenario whose words run shorter does not shrink the pinned band under the chart. */
+  .projection-outcomes .stat-delta { min-height: 2lh; }
 }
 
 .projection-workspace { display: grid; grid-template-columns: minmax(480px, 1fr) 350px; align-items: start; gap: 18px; }

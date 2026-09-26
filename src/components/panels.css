@@ -187,6 +187,14 @@
   white-space: nowrap;
 }
 
+/* The evidence (i) never grows its label line: its 24px target is pulled back to its 13px glyph, as the
+   eyebrow's InfoHint is (panels.css .info-hint). Pulled back only 4px (details.css) it made the label
+   line 17.1px against a text line's 15 — every row with a receipt stood 2px taller than its ghost. */
+.stat-label .metric-info-button {
+  margin-top: -5.5px;
+  margin-bottom: -5.5px;
+}
+
 /* Line 2, the badge's own line: beside the label a badge wrapped under it in a narrow tile and dropped
    that one value off the row's baseline (OU-03). Empty, it is 0px — a line where no tile has a badge
    costs nothing. A flex row, so the line is the badge's own height and not a text strut's. */

@@ -133,3 +133,12 @@ describe('the delta glyph (spec §4.3)', () => {
     expect(CSS).toContain('.stat-delta-glyph { word-spacing: -0.1em; }')
   })
 })
+
+// The evidence (i)'s 24px box, pulled back only 4px each side, grew the label line from 15 to 17.1px
+// in Edge — so a ghost's label line stood 2px short of a real one. Pulled back like the eyebrow's
+// InfoHint (to its 13px glyph), every label line is its text's height, ghost or real.
+describe('the label line (spec §4.1, §4.6)', () => {
+  it('keeps the metric (i) from growing its label line', () => {
+    expect(CSS).toContain('.stat-label .metric-info-button { margin-top: -5.5px; margin-bottom: -5.5px; }')
+  })
+})
