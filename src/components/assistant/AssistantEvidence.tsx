@@ -76,14 +76,17 @@ export function SavedFindings({ revision }: { revision: number }) {
   const [findings, setFindings] = useState<AssistantFinding[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [retry, setRetry] = useState(0)
-  const [deleting, setDeleting] = useState<number | null>(null)
+  const [deleting, setDeleting] = useState<Set<number>>(new Set())
+  const deletingRef = useLatest(deleting)
   const ask = useConfirm()
   const toast = useToast()
   const regionRef = useRef<HTMLDivElement>(null)
   const findingsRef = useLatest(findings)
   const remove = async (finding: AssistantFinding, anchor: HTMLButtonElement) => {
+    if (deletingRef.current.has(finding.id)) return
     if (!(await ask({ anchor, title: `Remove ${finding.title}?`, body: "This can't be undone.", confirmLabel: 'Remove saved finding' }))) return
-    setDeleting(finding.id)
+    if (deletingRef.current.has(finding.id)) return
+    setDeleting(current => new Set(current).add(finding.id))
     try {
       await deleteFinding(finding.id)
       const rows = findingsRef.current ?? []
@@ -95,7 +98,7 @@ export function SavedFindings({ revision }: { revision: number }) {
     } catch (err) {
       toast.error(errorDetail(err))
     } finally {
-      setDeleting(null)
+      setDeleting(current => { const next = new Set(current); next.delete(finding.id); return next })
     }
   }
   useEffect(() => {
@@ -114,7 +117,7 @@ export function SavedFindings({ revision }: { revision: number }) {
       <AssistantMessageBody text={finding.content} metrics={finding.evidence} />
       {finding.evidence.length > 0 && <dl>{finding.evidence.map((metric) => <div key={metric.id}><dt>{metric.label}</dt><dd><EvidenceReference metric={metric} /></dd></div>)}</dl>}
       <p className="assistant-meta">Saved {new Date(finding.created_at).toLocaleString()}{finding.model_used ? ` · ${finding.model_used}` : ''}</p>
-      <BusyButton type="button" className="button" busy={deleting === finding.id} onClick={(event) => void remove(finding, event.currentTarget)}>
+      <BusyButton type="button" className="button" busy={deleting.has(finding.id)} onClick={(event) => void remove(finding, event.currentTarget)}>
         Remove saved finding
       </BusyButton>
     </Disclosure>)}
