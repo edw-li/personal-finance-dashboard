@@ -6,7 +6,7 @@ is and the X-Change-Batch header, and the Activity card undoes a delete exactly.
 import pytest
 
 from app.models import PaycheckProfile, Person
-from tests.changelog_asserts import label_of, logged, ops, table_rows, undo
+from tests.exact_undo import images, label_of, logged, shape, undo
 
 PROFILES = "/api/v1/paycheck/profiles"
 
@@ -39,7 +39,7 @@ async def test_profile_create_edit_delete_each_log_one_labelled_batch(auth_clien
     assert created.status_code == 201, created.text
     assert created.json()["in_force"] is True  # the transient flag still answers
     rows = await logged(db, created)
-    assert ops(rows) == [("insert", "paycheck_profiles")]
+    assert shape(rows) == [("insert", "paycheck_profiles")]
     assert label_of(rows) == "Added Edward's paycheck profile effective Aug 17, 2026"
     assert rows[0].after["withholding_pct"] == "0.334009167"
     assert "in_force" not in rows[0].after  # unmapped: never imaged
@@ -48,7 +48,7 @@ async def test_profile_create_edit_delete_each_log_one_labelled_batch(auth_clien
     edited = await auth_client.patch(f"{PROFILES}/{profile_id}", json={"annual_salary": "195000"})
     assert edited.status_code == 200, edited.text
     rows = await logged(db, edited)
-    assert ops(rows) == [("update", "paycheck_profiles")]
+    assert shape(rows) == [("update", "paycheck_profiles")]
     assert label_of(rows) == "Edited Edward's paycheck profile effective Aug 17, 2026"
     assert (rows[0].before["annual_salary"], rows[0].after["annual_salary"]) == (
         "188930.00",
@@ -59,7 +59,7 @@ async def test_profile_create_edit_delete_each_log_one_labelled_batch(auth_clien
     deleted = await auth_client.delete(f"{PROFILES}/{profile_id}")
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
-    assert ops(rows) == [("delete", "paycheck_profiles")]
+    assert shape(rows) == [("delete", "paycheck_profiles")]
     assert label_of(rows) == "Deleted Edward's paycheck profile effective Aug 17, 2026"
 
 
@@ -82,14 +82,14 @@ async def test_the_label_names_whose_profile_when_two_share_a_date(auth_client, 
 
 async def test_undo_restores_a_deleted_profile_exactly(auth_client, db, me):
     profile_id = (await auth_client.post(PROFILES, json=PROFILE)).json()["id"]
-    before = await table_rows(db, PaycheckProfile)
+    before = await images(db, PaycheckProfile)
     deleted = await auth_client.delete(f"{PROFILES}/{profile_id}")
-    assert await table_rows(db, PaycheckProfile) == {"paycheck_profiles": []}
+    assert await images(db, PaycheckProfile) == []
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
     assert resp.json()["label"] == (
         "Undid: Deleted Edward's paycheck profile effective Aug 17, 2026"
     )
-    assert await table_rows(db, PaycheckProfile) == before
+    assert await images(db, PaycheckProfile) == before
     listed = (await auth_client.get(PROFILES)).json()
     assert [(profile["id"], profile["in_force"]) for profile in listed] == [(profile_id, True)]

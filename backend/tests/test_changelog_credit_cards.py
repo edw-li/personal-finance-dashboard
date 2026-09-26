@@ -23,7 +23,7 @@ from app.services.changelog import (
     undo_batch,
 )
 from app.services.ordering import order_lock, order_locks_for
-from tests.changelog_asserts import label_of, logged, ops, table_rows, undo
+from tests.exact_undo import images, label_of, logged, shape, table_images, undo
 from tests.ordering_helpers import first_position, recorded_sql
 
 CARDS = "/api/v1/credit-cards"
@@ -65,7 +65,7 @@ async def test_reward_category_create_edit_hide_show_delete_each_log_one_batch(a
     created = await auth_client.post(CATEGORIES, json={"name": "Groceries"})
     assert created.status_code == 201, created.text
     rows = await logged(db, created)
-    assert ops(rows) == [("insert", "reward_categories")]
+    assert shape(rows) == [("insert", "reward_categories")]
     assert label_of(rows) == "Added reward category Groceries"
     assert rows[0].after["is_active"] is True  # the column default, imaged after the flush
     url = f"{CATEGORIES}/{created.json()['id']}"
@@ -73,7 +73,7 @@ async def test_reward_category_create_edit_hide_show_delete_each_log_one_batch(a
     edited = await auth_client.patch(url, json={"annual_spend": "6000"})
     assert edited.status_code == 200, edited.text
     rows = await logged(db, edited)
-    assert ops(rows) == [("update", "reward_categories")]
+    assert shape(rows) == [("update", "reward_categories")]
     assert label_of(rows) == "Edited reward category Groceries"
     # The one-click toggle is named with its button's own verb (the Hide / Show column).
     hidden = await auth_client.patch(url, json={"is_active": False})
@@ -86,7 +86,7 @@ async def test_reward_category_create_edit_hide_show_delete_each_log_one_batch(a
     deleted = await auth_client.delete(url)
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
-    assert ops(rows) == [("delete", "reward_categories")]  # no cells: nothing else to image
+    assert shape(rows) == [("delete", "reward_categories")]  # no cells: nothing else to image
     assert label_of(rows) == "Deleted reward category Groceries"
 
 
@@ -114,14 +114,14 @@ async def test_undo_restores_a_deleted_reward_category_with_its_cells(auth_clien
     )
     await db.commit()
     venture_id, groceries_id, dining_id = venture.id, groceries.id, dining.id
-    before = await table_rows(db, RewardCategory, RewardRate)
+    before = await table_images(db, RewardCategory, RewardRate)
     with recorded_sql(db) as statements:
         deleted = await auth_client.delete(f"{CATEGORIES}/{groceries_id}")
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
     # Its two cells, then the row LAST: the undo replays in reverse, so the row comes back
     # before the cells that point at it.
-    assert ops(rows) == [
+    assert shape(rows) == [
         ("delete", "reward_rates"),
         ("delete", "reward_rates"),
         ("delete", "reward_categories"),
@@ -131,12 +131,12 @@ async def test_undo_restores_a_deleted_reward_category_with_its_cells(auth_clien
     assert first_position(statements, "DELETE FROM reward_rates") < first_position(
         statements, "DELETE FROM reward_categories"
     )
-    left = (await table_rows(db, RewardRate))["reward_rates"]
+    left = await images(db, RewardRate)
     assert [(row["card_id"], row["category_id"]) for row in left] == [(venture_id, dining_id)]
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
     assert resp.json()["rows"] == 3
-    assert await table_rows(db, RewardCategory, RewardRate) == before
+    assert await table_images(db, RewardCategory, RewardRate) == before
 
 
 async def test_a_matrix_save_that_adds_changes_and_clears_is_one_batch_undone_whole(
@@ -154,7 +154,7 @@ async def test_a_matrix_save_that_adds_changes_and_clears_is_one_batch_undone_wh
     )
     await db.commit()
     v, t, d, g = venture.id, travel.id, dining.id, groceries.id
-    before = await table_rows(db, RewardRate)
+    before = await images(db, RewardRate)
     saved = await auth_client.put(
         RATES, json=[cell(v, t, "5"), cell(v, d, None), cell(v, g, "4", cap="500")]
     )
@@ -162,7 +162,7 @@ async def test_a_matrix_save_that_adds_changes_and_clears_is_one_batch_undone_wh
     rows = await logged(db, saved)
     # Every cell that changed is a row of ONE batch: the edit and the clear in the order sent,
     # the new cell once the flush has given it an id.
-    assert ops(rows) == [
+    assert shape(rows) == [
         ("update", "reward_rates"),
         ("delete", "reward_rates"),
         ("insert", "reward_rates"),
@@ -172,7 +172,7 @@ async def test_a_matrix_save_that_adds_changes_and_clears_is_one_batch_undone_wh
     assert rows[2].after["monthly_cap"] == "500.00"
     resp = await undo(auth_client, saved)
     assert resp.status_code == 200, resp.text
-    assert await table_rows(db, RewardRate) == before
+    assert await images(db, RewardRate) == before
 
 
 async def test_a_one_cell_save_is_singular_and_an_unchanged_save_names_no_batch(auth_client, db):
@@ -214,7 +214,7 @@ async def test_card_create_edit_archive_delete_each_log_one_batch(auth_client, d
     created = await auth_client.post(CARDS, json=card_body())
     assert created.status_code == 201, created.text
     rows = await logged(db, created)
-    assert ops(rows) == [("insert", "credit_cards")]
+    assert shape(rows) == [("insert", "credit_cards")]
     assert label_of(rows) == "Added card Capital One Venture X"
     assert rows[0].after["point_value_cents"] == "1.7000"
     url = f"{CARDS}/{created.json()['id']}"
@@ -222,7 +222,7 @@ async def test_card_create_edit_archive_delete_each_log_one_batch(auth_client, d
     edited = await auth_client.patch(url, json=card_body(annual_fee="0"))
     assert edited.status_code == 200, edited.text
     rows = await logged(db, edited)
-    assert ops(rows) == [("update", "credit_cards")]
+    assert shape(rows) == [("update", "credit_cards")]
     assert label_of(rows) == "Edited card Capital One Venture X"
     assert (rows[0].before["annual_fee"], rows[0].after["annual_fee"]) == ("395.00", "0.00")
     # The roster's one-click toggle (a full PATCH with is_active flipped), named as the button.
@@ -236,7 +236,7 @@ async def test_card_create_edit_archive_delete_each_log_one_batch(auth_client, d
     deleted = await auth_client.delete(url)
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
-    assert ops(rows) == [("delete", "credit_cards")]  # a bare card: nothing else to image
+    assert shape(rows) == [("delete", "credit_cards")]  # a bare card: nothing else to image
     assert label_of(rows) == "Deleted card Capital One Venture X"
 
 
@@ -291,14 +291,14 @@ async def test_undo_restores_a_deleted_card_with_its_credits_cells_limits_and_pi
     await db.commit()
     venture_id, savor_id, travel_id = venture.id, savor.id, travel.id
     tables = (CreditCard, CardCredit, RewardRate, CreditLimitEvent, RewardCategory)
-    before = await table_rows(db, *tables)
+    before = await table_images(db, *tables)
     with recorded_sql(db) as statements:
         deleted = await auth_client.delete(f"{CARDS}/{venture_id}")
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
     # The pin first (an UPDATE to NULL), then every child, then the card LAST — the undo
     # replays in reverse, so the card is back before anything that points at it.
-    assert ops(rows) == [
+    assert shape(rows) == [
         ("update", "reward_categories"),
         ("delete", "card_credits"),
         ("delete", "card_credits"),
@@ -321,14 +321,14 @@ async def test_undo_restores_a_deleted_card_with_its_credits_cells_limits_and_pi
     ):
         assert first_position(statements, fragment) < card_delete, fragment
     # SavorOne keeps everything of its own, and its pin.
-    gone = await table_rows(db, *tables)
+    gone = await table_images(db, *tables)
     children = gone["card_credits"] + gone["reward_rates"] + gone["credit_limit_events"]
     assert {row["card_id"] for row in children} == {savor_id}
     assert [row["pinned_card_id"] for row in gone["reward_categories"]] == [None, savor_id, None]
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
     assert resp.json()["label"] == "Undid: Deleted card Capital One Venture X"
-    assert await table_rows(db, *tables) == before
+    assert await table_images(db, *tables) == before
 
 
 async def test_undoing_a_card_delete_after_its_name_was_taken_again_refuses(auth_client, db):
@@ -346,7 +346,7 @@ async def test_undoing_a_card_delete_after_its_name_was_taken_again_refuses(auth
     refused = await undo(auth_client, deleted)
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == REPLAY_REFUSAL
-    rows = await table_rows(db, CreditCard, CardCredit)
+    rows = await table_images(db, CreditCard, CardCredit)
     assert [row["id"] for row in rows["credit_cards"]] == [again_id]
     assert rows["card_credits"] == []
 
@@ -363,7 +363,7 @@ async def test_undoing_a_card_create_while_rows_point_at_it_refuses(auth_client,
     refused = await undo(auth_client, created)
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == DEPENDENT_REFUSAL
-    assert len((await table_rows(db, CardCredit))["card_credits"]) == 1
+    assert len(await images(db, CardCredit)) == 1
 
 
 async def test_card_credit_writes_each_log_one_batch_and_a_delete_undoes(auth_client, db):
@@ -373,7 +373,7 @@ async def test_card_credit_writes_each_log_one_batch_and_a_delete_undoes(auth_cl
     )
     assert created.status_code == 201, created.text
     rows = await logged(db, created)
-    assert ops(rows) == [("insert", "card_credits")]
+    assert shape(rows) == [("insert", "card_credits")]
     assert label_of(rows) == "Added the $300 Travel credit to Venture X"
     credit_url = f"{CARDS}/credits/{created.json()['id']}"
 
@@ -382,19 +382,19 @@ async def test_card_credit_writes_each_log_one_batch_and_a_delete_undoes(auth_cl
     )
     assert edited.status_code == 200, edited.text
     rows = await logged(db, edited)
-    assert ops(rows) == [("update", "card_credits")]
+    assert shape(rows) == [("update", "card_credits")]
     assert label_of(rows) == "Edited the Travel credit on Venture X"
     assert (rows[0].before["counts"], rows[0].after["counts"]) == (True, False)
 
-    before = await table_rows(db, CardCredit)
+    before = await images(db, CardCredit)
     deleted = await auth_client.delete(credit_url)
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
-    assert ops(rows) == [("delete", "card_credits")]
+    assert shape(rows) == [("delete", "card_credits")]
     assert label_of(rows) == "Deleted the $300 Travel credit from Venture X"
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
-    assert await table_rows(db, CardCredit) == before
+    assert await images(db, CardCredit) == before
 
 
 async def test_a_credit_label_that_already_says_credit_is_not_doubled(auth_client, db):
@@ -415,19 +415,19 @@ async def test_limit_add_and_delete_each_log_one_batch_and_a_delete_undoes(auth_
     assert added.status_code == 201, added.text
     assert [event["limit_amount"] for event in added.json()] == ["20000.00"]  # the history
     rows = await logged(db, added)
-    assert ops(rows) == [("insert", "credit_limit_events")]
+    assert shape(rows) == [("insert", "credit_limit_events")]
     assert label_of(rows) == "Added Venture X's $20,000 limit from May 12, 2023"
     event_id = added.json()[0]["id"]
 
-    before = await table_rows(db, CreditLimitEvent)
+    before = await images(db, CreditLimitEvent)
     deleted = await auth_client.delete(f"{CARDS}/{card_id}/limits/{event_id}")
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
-    assert ops(rows) == [("delete", "credit_limit_events")]
+    assert shape(rows) == [("delete", "credit_limit_events")]
     assert label_of(rows) == "Deleted Venture X's $20,000 limit from May 12, 2023"
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
-    assert await table_rows(db, CreditLimitEvent) == before
+    assert await images(db, CreditLimitEvent) == before
 
 
 # ── the two list reorders ────────────────────────────────────────────────────────────
@@ -449,7 +449,7 @@ async def test_a_card_reorder_is_one_batch_named_for_what_moved(auth_client, db)
     moved = await auth_client.put(CARD_ORDER, json={"ids": [c, a, b]})
     assert moved.status_code == 200, moved.text
     rows = await logged(db, moved)
-    assert ops(rows) == [("update", "credit_cards")] * 3
+    assert shape(rows) == [("update", "credit_cards")] * 3
     assert label_of(rows) == "Moved card C"
     assert [(r.pk["id"], r.before["sort_order"], r.after["sort_order"]) for r in rows] == [
         (c, 2, 0),
@@ -491,7 +491,7 @@ async def test_a_reward_category_reorder_is_one_batch_named_for_what_moved(auth_
     moved = await auth_client.put(CATEGORY_ORDER, json={"ids": [t, d, g]})
     assert moved.status_code == 200, moved.text
     rows = await logged(db, moved)
-    assert ops(rows) == [("update", "reward_categories")] * 3
+    assert shape(rows) == [("update", "reward_categories")] * 3
     assert label_of(rows) == "Moved reward category Travel"
     swapped = await auth_client.put(CATEGORY_ORDER, json={"ids": [g, d, t]})
     assert label_of(await logged(db, swapped)) == "Reordered 2 reward categories"
