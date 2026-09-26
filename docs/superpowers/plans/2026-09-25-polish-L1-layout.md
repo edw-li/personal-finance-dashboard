@@ -2512,8 +2512,8 @@ git commit -m "docs(plan): polish L1 as built — measurements, gates, deviation
 
 ## As built (2026-09-25)
 
-All eighteen tasks done, TDD throughout (every test was run red before its code). Branch `feat/polish-layout`, 22 commits on
-657e3d62 — not pushed, not merged.
+All eighteen tasks done, TDD throughout (every test was run red before its code). Branch `feat/polish-layout` on 657e3d62,
+one commit per task plus three browser-pass fixes (tax split calibration, guide sentence, FLIP clamp) — not pushed, not merged.
 
 ### What changed against the plan, and why
 
