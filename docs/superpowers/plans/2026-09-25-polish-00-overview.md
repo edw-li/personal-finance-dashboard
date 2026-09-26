@@ -211,8 +211,10 @@ export function revealRow(row: HTMLElement | null): void
 export function flashElement(el: HTMLElement | null): void      // data-flash for MOTION_MS.flash
 export function useEscapeCancel(ref: RefObject<HTMLElement | null>, onCancel: () => void, enabled?: boolean): void
 ```
-- **`revealEditor`:** `scrollIntoView({ block: 'nearest', behavior: reduced ? 'instant' : 'smooth' })`, then focus +
-  `select()` the first `input, select, textarea` (or the selector) with `preventScroll`.
+- **`revealEditor`:** focus + `select()` the first `input, select, textarea` (or the selector) with `preventScroll`,
+  then `scrollIntoView({ block: 'nearest', behavior: reduced ? 'instant' : 'smooth' })`. Integrated Edge verification
+  found that focusing a native date input can cancel an already-started smooth scroll, even with `preventScroll`;
+  the final order keeps the field below the sticky header (`b2b07a8e`).
 - **`revealRow`:** a TableScroll box → `revealInBox`; `.settings-scroll` / `.categories-scroll` / any other scroll parent →
   `ensureVisible` (reorderDom.ts); else `scrollIntoView({ block: 'nearest' })`.
 
@@ -275,3 +277,38 @@ Motion uses tokens only and is zeroed under reduced motion.
 
 **Commits:** one per task, conventional prefix (`feat(...)`, `fix(...)`, `test(...)`, `docs(plan): ...`), a body saying
 what and why. No push. No merge: the coordinator merges.
+
+## Coordinator recovery record — 2026-09-26
+
+The interrupted Claude session left local main at `204ef73d`, with wave 1 and the undo-engine follow-up merged.
+The four wave-2 branches had their assignments but no product implementation. At the user's request, implementation
+resumed with parallel agents, preserving the original scope and local-main-only rollout.
+
+All four implementation lanes have been independently reviewed and merged:
+
+| Lane | Final lane commit | Local main merge |
+|---|---|---|
+| L5 Settings | `de839ed8` | `660d3f35` |
+| L6 Portfolio, ESPP, Comp, Paycheck | `17556eb5` | `23b34ea3` |
+| L7 Cards, Calendar, Budgets, Projection, Assistant | `23d929d1` | `1dd441b9` |
+| L8 Taxes, Monthly update | `6d1cda1a` | `d075a9c8` |
+
+Integration fixed an ESPP test that clicked Edit before the preceding reload finished (`350b91a8`), the real
+native-date reveal issue above, and Monthly update announcing a deletion before retiring its controls (`c30c76bc`).
+The Monthly correction also removes the obsolete empty-month repair action while refresh is pending. Four deferred
+refresh regressions failed before that correction, then all 190 Monthly tests passed; independent review confirmed
+focus and month-scope behavior.
+
+Final code gates at product commit `c30c76bcc7c8808f642788e7b5f41c8db8550bd3`:
+
+- App and node `tsc -p --noEmit`: clean.
+- ESLint: 0 errors, 26 existing warnings.
+- Full Vitest: 324 files / 4,872 tests passed in 271.54 seconds.
+- Production build: passed in 17.92 seconds, with the existing chunk-size advisory.
+- Backend: 2,845 passed / 4 skipped in 90.14 seconds. Backend tree
+  `9dcde78043e5d9dbb13e1ed53de82c1e601919c6` is unchanged by the frontend integration fixes.
+
+Gate logs and interrupted/failed attempts are preserved in ignored `scratchpad/codex-takeover-*` files. Lane V's
+fresh-copy browser acceptance and final report remain the last step; its plan records source provenance, measured
+before/after results, corrected probe attempts, cleanup and the precise product commit for each run. Nothing has
+been pushed or deployed.
