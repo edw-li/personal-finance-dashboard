@@ -1400,6 +1400,12 @@ describe('PaycheckPage — the flow card', () => {
     // ChartCard mounts through ChartSurface: the grid child is its span-6 slot, the card inside.
     expect(children[1].classList.contains('span-6')).toBe(true)
     expect(children[1].querySelector('.chart-card')?.textContent).toContain('Where each check goes')
+    // The flow's plot FLOOR sits under the breakdown (2026-09-25 polish review): the list is 456px at
+    // 1440 and the flow card 173px of chrome plus its plot, so at 320 the pair stood at the flow's 493
+    // and left a 37px blank band under NET PAY. At 280 (453) the breakdown sets the row and the plot
+    // fills what is left (spec §3.1's fill).
+    expect((children[1].querySelector('.chart-card') as HTMLElement).style.getPropertyValue('--chart-h')).toBe('280px')
+    expect(children[1].querySelector('.chart-card')?.classList.contains('chart-card-fill')).toBe(true)
     // The pace strip is NOT in the grid: it keeps the full width under the pair.
     const pace = screen.getByRole('region', { name: 'Contribution pace' })
     expect(grid.contains(pace)).toBe(false)

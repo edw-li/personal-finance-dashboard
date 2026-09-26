@@ -67,8 +67,11 @@ export function chartCardBox(
 /** Feed ghosts per call site (spec §7), each a BODY height — a block that is NOT a card (comp's bare
  *  tile row) takes the chrome SkeletonCard adds back off. */
 export const FEED_SKELETON = {
-  // 3-line hint, 11 waterfall lines + total — the tile row stands outside the feed now (2026-09-25 polish §4.5)
-  paycheckBreakdown: 3 * HINT_LINE + 12 * TABLE_ROW,
+  // The breakdown card, measured at 1440 in Edge (2026-09-25 polish review): its header's 7px over the ghost
+  // label CARD_CHROME counts, a two-line hint (32) + 8, and the list — ten 30.2px lines and NET PAY's 46.8
+  // (349). The tile row stands outside the feed now (§4.5), and the flow beside the list fills to its height
+  // (PaycheckPage's FlowPanel), so this is the pair's box too. It was 3 × 18 + 12 × 33 — 54px tall.
+  paycheckBreakdown: 7 + 32 + 8 + 349,
   // VestingTiles is a bare .kpi-row, not a card: the ghost card's own margin is the 1rem the row leaves
   // under its tiles, so the box is the tile alone (counting the 1rem as well stood the ghost 16px tall).
   compVesting: ghostCardBody(STAT_TILE),

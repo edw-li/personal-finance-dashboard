@@ -256,7 +256,10 @@ function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
       empty="This profile's deductions exceed pay — see the table."
       exportName="paycheck-flow"
       csv={() => paycheckSankeyCsv(data)}
-      height={320}
+      // The plot's FLOOR, under the breakdown's own height (2026-09-25 polish review): the pair's row is
+      // then the list's, and the plot fills what is left (283px at 1440) instead of the list's card
+      // standing a blank band under NET PAY beside a taller flow.
+      height={280}
       // Half the summary grid, beside the waterfall it draws (2026-09-13 polish spec §12).
       span={6}
       // The legend describes the CHART, so it goes when the chart does: under the empty
