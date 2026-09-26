@@ -63,7 +63,7 @@ import type {
   SparklinesResponse,
   TransactionOut,
 } from '../types/api'
-import { formatCurrency, formatDate, formatDateTime, formatPct } from '../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatDate, formatDateTime, formatPct } from '../utils/format'
 import { isStaleQuote } from '../utils/staleness'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
@@ -697,8 +697,10 @@ export default function PortfolioPage() {
             reload()
           },
         }}
+        // The ghost follows the arriving tab (PE-09): the five dense tiles, hero first, only where the
+        // page shows them — Income and Manage have none.
         skeleton={{
-          tiles: 5,
+          tiles: TILE_VIEWS.has(views.section) ? { count: 5, row: 'dense', hero: true } : 0,
           cards: [
             { span: 12, height: 340 },
             { span: 12, height: 300 },
@@ -726,7 +728,7 @@ export default function PortfolioPage() {
                   }
                   delta={
                     totals.day_change_amount !== null || totals.day_change_pct !== null
-                      ? `${formatCurrency(totals.day_change_amount)} today (${formatPct(totals.day_change_pct)})`
+                      ? `${formatCurrencyWhole(totals.day_change_amount)} today (${formatPct(totals.day_change_pct)})`
                       : undefined
                   }
                   tone={toneOf(totals.day_change_amount)}
@@ -758,6 +760,9 @@ export default function PortfolioPage() {
                   evidence={metricReceipt({ id: 'portfolio_cost_basis', label: 'Cost basis', value: totals.cost_basis,
                     definition: 'Remaining acquisition cost of current holdings, including recorded fees, using the existing average-cost calculation.',
                     scope: owner ?? 'Household', source_link: `/portfolio?section=manage${owner === null ? '' : `&owner=${owner}`}` })}
+                  // Its second line (2026-09-25 polish spec §4.4): how many holdings the basis covers.
+                  delta={`${holdings.holdings.length} ${holdings.holdings.length === 1 ? 'holding' : 'holdings'}`}
+                  tone="neutral"
                   hint="What the current holdings cost to acquire, fees included, average-cost method."
                 />
                 <StatTile
@@ -768,7 +773,7 @@ export default function PortfolioPage() {
                     scope: owner ?? 'Household', source_link: `/portfolio?section=income${owner === null ? '' : `&owner=${owner}`}`,
                     completeness: 'mixed', components: [{ label: 'Expected annual income at current rates', value: totals.annual_income, unit: 'USD' }],
                     warnings: ['Expected annual income is a forward estimate and is separate from the total of recorded entries.'] })}
-                  delta={`${formatCurrency(totals.annual_income)}/yr expected`}
+                  delta={`${formatCurrencyWhole(totals.annual_income)}/yr expected`}
                   tone="neutral"
                   hint="Every dividend logged — auto-ingested and manual — with the expected annual income at current rates."
                 />
