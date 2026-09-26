@@ -78,7 +78,7 @@ colour outside `src/theme/tokens.ts`. Copy names the noun. Money shown is never 
    - Settings pairs are re-paired so partners are close in height, then stretched with their action rows pinned to the bottom.
      The 2026-09-13 "short card ends where its content ends" rule is superseded by re-pairing, not by empty cards.
 7. **D7 — Tile rows share one grid (item 5).**
-   - Each tile is a four-row subgrid of its row: label · badge · value · delta. Values sit on one baseline and deltas on one
+   - Each tile is a three-row subgrid: header (title + optional badge) · value · delta. Values sit on one baseline and deltas on one
      line.
    - Row height is stable as months change.
    - Five-tile rows wrap 3 + 2, both rows filled; never 4 + 1.
@@ -227,10 +227,11 @@ The user's 2026-09-26 preview feedback replaces the original separate badge row 
   2. the value;
   3. the delta (empty when none).
 
-  Implicit rows are `auto`; the row gap between tile lines stays the row's `gap`.
+  Implicit rows are `auto`. The grid keeps its column gap; tile margins separate visual rows without a subgrid row gap.
 - **Badge:** it stays at the header's top right, beside the title. There is no separate badge track or placeholder
   between title and value on unbadged cards. Long titles can wrap while the badge stays at the top right.
-- **Value row:** `align-items: last baseline`, so a hero and normal tiles share a baseline.
+- **Value row:** `align-self: baseline`, so the first figure line of hero and normal tiles shares a baseline, even when
+  the value has a unit line below it.
 - **Wrapped tiles** (`CashflowStrip`'s `role="group"` wrappers): the wrapper spans 3 rows as a subgrid, and the tile inside does
   the same.
 - **Spacing:** the tile's own padding and the 0.45 rem / 0.35 rem label and delta spacing are kept as margins inside the rows.
@@ -294,9 +295,10 @@ The user's 2026-09-26 preview feedback replaces the original separate badge row 
 ### 5.1 Shared helpers (lane L4)
 
 - **`revealEditor(form, focusSelector?)`:**
-  - scrolls the form into view (`block: 'nearest'`, honouring the section's `scroll-margin-top` / `--sticky-inset`; instant
-    under reduced motion, else smooth);
-  - then focuses and selects its first field (or `focusSelector`) with `preventScroll`.
+  - focuses and selects its first field (or `focusSelector`) with `preventScroll`;
+  - then scrolls the form into view (`block: 'nearest'`, honouring the section's `scroll-margin-top` / `--sticky-inset`;
+    instant under reduced motion, else smooth). Integrated Edge checks found that a native date field could cancel an
+    already-started scroll; focus must come first (`b2b07a8e`).
 - **`revealRow(row)`:**
   - inside a `TableScroll` box → `revealInBox`;
   - inside the older caps (`.settings-scroll`, `.categories-scroll`) → `ensureVisible` from `reorderDom.ts`;
@@ -538,7 +540,7 @@ Hunks are disjoint by construction; merges resolve by keeping both.
   - each primitive: ConfirmPopover focus/Esc/outside/trigger return; BusyButton keeps focus and width; useSaveState's
     transitions and 2.5 s expiry; useDeleteWithUndo's optimistic remove, failure put-back, Undo and focus destinations;
     revealEditor/revealRow/flash; useEscapeCancel;
-  - StatTile's four-row structure and badge row;
+  - StatTile's three-track structure and title-adjacent badge;
   - the kpi-row 3 + 2 rule (CSS text test beside the existing `*Css.test.ts`);
   - every converted surface (delete → toast → Undo calls `undoBatch` with the header's id; Edit → focus in the form; errors
     rendered beside Save);
