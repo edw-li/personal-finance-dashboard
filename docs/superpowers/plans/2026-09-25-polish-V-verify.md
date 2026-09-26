@@ -8,24 +8,24 @@
 
 - [x] Read the approved spec, overview and L1/L2 as-built records; recover the original audit harness and L1/L2/L5 measurement scripts.
 - [x] Inspect for an existing verification worktree. None existed. Create `.worktrees/polish-verify`, branch `feat/polish-verify`, from main `204ef73d`; attach a junction to root `node_modules`.
-- [ ] Before final acceptance, update this branch to the coordinator's merged L5–L8 main. Record the exact product commit in every report. A preparation run cannot produce a final acceptance verdict.
-- [ ] Take one read-only production `pg_dump` through the established SSH/container procedure; record UTC acquisition time, source revision/schema, archive SHA-256 and size. Never call a production mutation, trigger a production backup job, or alter production credentials.
-- [ ] Restore that same dump into **new**, private `finance_polish_v_read` and `finance_polish_v_write` databases on Docker Postgres `127.0.0.1:5433`. Refuse an existing destination; do not drop or overwrite a database. Record matching table counts before local auth setup.
-- [ ] Run the read copy on `127.0.0.1:8089`, writable twin on `127.0.0.1:8091`; scheduler and snapshots disabled, `PRODUCT_TODAY=2026-09-25` for comparison with the audit. Port 8090 belongs to `WsToastNotification.exe` and is not used.
-- [ ] Run worktree Vites on 5279/5280 with separate private caches, explicit API targets and strict ports. The browser fence forwards real API reads directly to the matching loopback backend (established table-scroll/L6 workaround for intermittent Vite proxy truncation); report this transport choice.
-- [ ] Keep authentication secrets in ignored token files, never logs or tracked manifests. Local auth setup is allowed only on the two V copies. The default probe fences mutations; writable mode additionally requires an explicit twin URL and local source manifest.
+- [x] Before final acceptance, update this branch to the coordinator's merged L5–L8 main. Record the exact product commit in every report. A preparation run cannot produce a final acceptance verdict.
+- [x] Take one read-only production `pg_dump` through the established SSH/container procedure; record UTC acquisition time, source schema, archive SHA-256 and size. Never call a production mutation, trigger a production backup job, or alter production credentials.
+- [x] Restore that same dump into **new**, private `finance_polish_v_read` and `finance_polish_v_write` databases on Docker Postgres `127.0.0.1:5433`. Refuse an existing destination; do not drop or overwrite a database. Record matching table counts before local auth setup.
+- [x] Run the read copy on `127.0.0.1:8089`, writable twin on `127.0.0.1:8091`; scheduler and snapshots disabled, `PRODUCT_TODAY=2026-09-25` for comparison with the audit. Port 8090 belongs to `WsToastNotification.exe` and is not used.
+- [x] Run worktree Vites on 5279/5280 with separate private caches, explicit API targets and strict ports. The browser fence forwards real API reads directly to the matching loopback backend (established table-scroll/L6 workaround for intermittent Vite proxy truncation); report this transport choice.
+- [x] Keep authentication secrets in ignored token files, never logs or tracked manifests. Local auth setup is allowed only on the two V copies. The default probe fences mutations; writable mode additionally requires an explicit twin URL and local source manifest.
 - [ ] Verify `/auth/me`, schema and local database identity before opening a browser. Close each context/browser in `finally`; stop only V-owned servers on completion.
 
-The current older audit copy (`finance_polish_audit`) and lane copies (`finance_polish_w5`–`w8`) supply historical evidence, never the final fresh-copy verdict. The coordinator is locating the existing production dump invocation; independent probe preparation continues meanwhile.
+The older audit copy (`finance_polish_audit`) and lane copies (`finance_polish_w5`–`w8`) supply historical evidence, never the final fresh-copy verdict. The original read-only dump invocation was recovered by the Settings agent; V executed it once and restored identical bytes into both private databases.
 
 ## 2. Reusable driver and report
 
 - [ ] Implement `tools/probes/polish-v/smoke.mjs`, a loopback-only Edge driver with classic scrollbars, one browser/context at a time, a mutation fence, native-dialog/console/page/network error collection, screenshots, per-check evidence and nonzero exit on failed or absent coverage.
-- [ ] Recover tile baseline instrumentation from L2 (temporary zero-size inline marker removed within the same evaluation), chart selectors/measurements from L1, and Settings natural-height/action-gap measurements from L5.
-- [ ] Put the audit's before-numbers and source references in a tracked baseline manifest. Keep observations separate from passes: missing elements, absent rows, driver errors and unexercised branches cannot silently pass.
-- [ ] Add filters for groups, routes, dimensions and theme that reject unknown values. Reports name applied filters; only the unfiltered matrix plus required flow evidence can be called complete.
-- [ ] Require an explicit merged product SHA and fresh-source manifest for final runs. `PREPARE=1` allows a labelled smoke while authoring; it never claims acceptance.
-- [ ] Write progressive JSON after each case so interrupted work is reviewable. Redact secrets and do not store API payloads containing the private book in tracked files.
+- [x] Recover tile baseline instrumentation from L2 (temporary zero-size inline marker removed within the same evaluation), chart selectors/measurements from L1, and Settings natural-height/action-gap measurements from L5.
+- [x] Put the audit's before-numbers and source references in a tracked baseline manifest. Keep observations separate from passes: missing elements, absent rows, driver errors and unexercised branches cannot silently pass.
+- [x] Add filters for groups, routes, dimensions and theme that reject unknown values. Reports name applied filters; only the unfiltered matrix plus required flow evidence can be called complete.
+- [x] Require an explicit merged product SHA and fresh-source manifest for final runs. `PREPARE=1` allows a labelled smoke while authoring; it never claims acceptance.
+- [x] Write progressive JSON after each case so interrupted work is reviewable. Redact secrets and do not store API payloads containing the private book in tracked files.
 
 ## 3. Matrix: both themes at every viewport
 
@@ -72,4 +72,12 @@ For each fresh mutation case record: initiating control/idle width; pending cont
 
 ## Preparation record
 
-2026-09-26: worktree created at `204ef73d`; no final acceptance run yet. Original harness recovered from the 2026-09-24 audit scratchpad. L1/L2 before/after measurement scripts and JSON are present, along with L5 layout/mutation evidence. L6 supplied its external scratch path and documented transparent direct-API GET workaround. Production-source acquisition is coordinated with root; V does not use an older copy as fresh evidence.
+2026-09-26: worktree created at `204ef73d`, then rebased to merged product `350b91a8b4fed2fa107da5bcc370682ecaceef60` (all four lanes plus the final ESPP test wait). Original audit/L1/L2/L5 helpers recovered; no product code changed here.
+
+Fresh source acquired **07:33:31Z**, completed07:33:35Z: **1,017,604 bytes**, SHA-256 `bb765dd3c70f20cc16f9d741936dcc6db1d0b36f83d55b58805bc1b084e210a8`. Both copies contain **45 tables /27,244 rows**, identical per-table counts, schema `f12026092301`. The production host received only its established read-only `pg_dump` command. A fresh local JWT was signed for the existing copied user; no password or copied user row changed. Both private `/auth/me` checks returned200. Read database default transactions are read-only.
+
+Preparation artifacts live in ignored `scratchpad/polish-v/`: `source.json`, dump, token, private runtime/config/log files, `lane-evidence.json`, `prep-sidebar/`, `prep-pairs/`, `prep-layout/`. Initial sidebar smoke exposed an obsolete probe selector (`.sidebar-footer-row`); it now measures the actual footer children's common center. Sidebar plus five chart-pair/Table cycles at1440dark passed **35 checks**. Main layout selectors at1440dark passed **56 checks**. These are instrument preparation records, not final acceptance, and later instrumentation additions require the final run.
+
+The historical importer attributes **11 artifacts /62 observations** to L5–L8 and explicitly retains L5's injected failure and L7's original last-locator timeout as partial records. It rejects zero/unrecognized records, false exact-Undo/flash/focus flags, nested native-dialog/transport/fenced-write errors and cleanup failures claimed as green. Six deliberately bad fixture artifacts were refused as expected. Independent coverage review also added active-month proof, required observed cold skeleton geometry, explicit mixed-tile sites/What-if results, actual Table appearance/reveal/disappearance, Settings section selection and the tax-container/dock breakpoint. Syntax checks and `git diff --check` pass.
+
+Coordinator's integrated code gates at `350b91a8`: **324 frontend files /4,867 tests passed (245.65s)**; backend **2,845 passed /4 skipped (90.14s)** with unchanged backend tree; app/node noEmit clean, lint0errors/26baseline warnings, production build14.11s. The first combined run's one ESPP test race (second Edit clicked before prior reload ended) was fixed with an actionable wait, then the whole frontend reran green. Final browser acceptance remains separate. Fresh writable runs are serialized L6 → L8 → L5 → L7, then the read-only matrix. A fresh L6 sticky-header focus finding is under coordinator investigation before the final matrix.
