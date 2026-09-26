@@ -486,6 +486,12 @@ async def reorder_transactions(
     logged, that Undo meets the overlap refusal instead. The client's own Undo still re-sends
     the previous order through this route.
 
+    Accepted: undoing a reorder puts back the renumbered rows' old numbers and nothing else, so
+    a row APPENDED since keeps the number it was given after the reorder's max — and where the
+    old numbers ran higher (a ledger's first renumbering), it lands mid-ledger. Rare in
+    practice: once renumbered the ledger is contiguous (10, 20, …), and an append then sorts
+    after any number an Undo can restore.
+
     Serialized per ledger (decision 16): the order lock is the first statement, so two tabs'
     replay orders never blend into one neither sent — the later request wins whole, with fresh
     before-images.
@@ -737,6 +743,10 @@ async def update_dividend(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> DividendPayment:
+    """Accepted (spec §6.1, the security-refresh class): the refresh's ingest owns source='auto'
+    rows inside its window and rewrites them unlogged, so undoing an edit of an auto dividend
+    writes the edit's before-image over whatever the ingest wrote since — until the next
+    refresh writes it again. The overlap refusal cannot see the ingest."""
     dividend = await _get_dividend(db, dividend_id)
     provided = body.model_dump(exclude_unset=True)
     # Validate EVERY field before touching the ORM object (update_security posture): a 422
