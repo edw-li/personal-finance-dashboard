@@ -336,6 +336,11 @@ async def test_a_reorder_logs_every_row_it_renumbers_and_undoes_to_the_old_order
         ("update", last, 30, 10),
         ("update", first, 10, 30),
     ]
+    # Whole-row images, the way every change-log update is kept, differing in sort_index alone.
+    columns = {column.key for column in PositionTransaction.__table__.columns}
+    for entry in rows:
+        assert entry.before.keys() == entry.after.keys() == columns
+        assert {**entry.before, "sort_index": 0} == {**entry.after, "sort_index": 0}
     assert {row.label for row in rows} == {"Reordered 2 transactions"}
     assert (await undo(auth_client, batch_id)).status_code == 200
     assert await replay(db) == [(first, 10), (middle, 20), (last, 30)]

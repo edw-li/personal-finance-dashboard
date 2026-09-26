@@ -512,7 +512,6 @@ async def reorder_transactions(
         for security_id, ticker in await db.execute(select(Security.id, Security.ticker))
     }
     by_id = {txn.id: txn for txn in ledger}
-    images = {txn.id: row_image(txn) for txn in ledger}  # BEFORE renumber touches a row
     before = fold_transactions(ledger)  # folded BEFORE renumber touches a row
     new_order = subset_in_slots([txn.id for txn in ledger], body.ids)
     renumbered = renumber(
@@ -522,8 +521,10 @@ async def reorder_transactions(
         step=SORT_INDEX_STEP,
     )
     changed = position_changes(before, fold_transactions(ledger), tickers)
-    for txn, _old, _new in renumbered:
-        batch.record_update(txn, images[txn.id])
+    for txn, old, _new in renumbered:
+        # renumber set sort_index and nothing else, so the row's image with its OLD number is
+        # exactly what the row held — no need to image the whole ledger up front.
+        batch.record_update(txn, {**row_image(txn), "sort_index": old})
     moved = moved_ids(visible_ids, body.ids)
     if len(moved) == 1:
         mover = by_id[moved[0]]
