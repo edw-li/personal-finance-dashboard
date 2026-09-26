@@ -284,6 +284,9 @@
    lines with its tiles' margins, 2026-09-25 polish §4.1). (0,2,0), so the load order cannot drop it. */
 .kpi-row.review-kpis { --kpi-row-after: 1.25rem; }
 .review-changes-head { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; flex-wrap: wrap; margin-top: 1.25rem; }
+/* Straight under the tiles the row's 1.25rem is the space: the tiles' margins no longer collapse with
+   this one (panels.css .kpi-row), which would stack it on top — 36px where the step had 20. */
+.kpi-row.review-kpis + .review-changes > .review-changes-head:first-child { margin-top: 0; }
 .review-changes-head .eyebrow { margin: 0; }
 .review-changes-count { color: var(--muted); font-size: .85rem; }
 .review-changes-footer { margin: .75rem 0 0; padding-top: .6rem; border-top: 1px solid var(--border); }

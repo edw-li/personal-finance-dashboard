@@ -125,6 +125,22 @@ describe("the calendar strip's own five-across (CalendarPage.css)", () => {
   })
 })
 
+// The tiles' bottom margins sit inside the grid, so a follower's own top margin no longer collapses into
+// the row's space — it stacks on it (2026-09-25 review: 17.6 → 33.6px under the Taxes totals, 20 → 36px
+// under the Review tiles). The two followers that carry one keep only what exceeds the grid gap.
+describe('the space under a row with a margined follower', () => {
+  it('lets the Taxes jurisdiction detail add only the rest of its 1.1rem', () => {
+    const TAX = flat('taxes/taxes.css')
+    expect(TAX).toContain('.kpi-row + .tax-jurisdiction-detail { margin-top: calc(1.1rem - var(--density-grid-gap)); }')
+  })
+
+  it('leaves the space under the Review tiles to the row alone', () => {
+    const REVIEW = flat('../pages/MonthlyUpdatePage.css')
+    expect(REVIEW).toContain('.kpi-row.review-kpis { --kpi-row-after: 1.25rem; }')
+    expect(REVIEW).toContain('.kpi-row.review-kpis + .review-changes > .review-changes-head:first-child { margin-top: 0; }')
+  })
+})
+
 // The hero's "▲ $126,583 (+15.7%) since Sep 1 · 21 days" measured 239.14px against a 238.56px delta box
 // at 1440 (Edge): the glyph's own space closes by 0.1em so the arrow binds to its figure and the
 // spec's example fits its one line (§4.3). The words are unchanged.
