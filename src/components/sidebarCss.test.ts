@@ -48,3 +48,32 @@ describe('the sidebar on a short screen (Layout.css)', () => {
     expect(LAYOUT).toMatch(/\.sidebar \{[^}]*overflow-y: auto;/)
   })
 })
+
+const SHELL = flat('shell/shell.css')
+
+describe('the one-row account footer (shell.css)', () => {
+  it('lays the footer out as one row, the email taking the slack and ellipsising', () => {
+    expect(SHELL).toMatch(/\.sidebar-footer \{[^}]*display: flex;[^}]*align-items: center;/)
+    expect(SHELL).not.toMatch(/\.sidebar-footer \{[^}]*flex-direction: column;/)
+    expect(SHELL).toMatch(
+      /\.sidebar-footer-email \{[^}]*flex: 1;[^}]*min-width: 0;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/,
+    )
+  })
+
+  it('draws the theme toggle and Log out as 28px icon buttons that never shrink', () => {
+    expect(SHELL).toMatch(/\.sidebar-footer-icon \{[^}]*flex: none;[^}]*width: 28px;[^}]*height: 28px;[^}]*padding: 0;/)
+    // With no email yet the buttons keep the row's end.
+    expect(SHELL).toContain('.sidebar-footer-icon:first-of-type { margin-left: auto; }')
+  })
+
+  it('keeps the house hover and focus ring on the icon buttons', () => {
+    expect(SHELL).toContain('.sidebar-footer-icon:hover { background: var(--surface-2); color: var(--text); }')
+    expect(SHELL).toContain('.sidebar-footer-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }')
+  })
+
+  it('retires the stacked rows, the environment pill and the hash', () => {
+    for (const gone of ['.sidebar-footer-row', '.sidebar-footer-pill', '.sidebar-footer-hash']) {
+      expect(SHELL).not.toContain(gone)
+    }
+  })
+})

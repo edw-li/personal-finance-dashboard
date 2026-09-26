@@ -215,63 +215,50 @@
   font-size: 0.75rem;
 }
 
-/* ── Sidebar footer (rendered by Plan 1c's SidebarFooter) ─────────────────── */
+/* ── Sidebar footer (rendered by SidebarFooter) ─────────────────────────── */
 
+/* ONE row (2026-09-25 polish spec §2): the email takes the slack and ellipsises; the theme toggle
+   and Log out are 28px icon buttons at the row's end. The four stacked rows before it (email, the
+   environment pill with the build hash, two labelled buttons) cost ~90px — enough, with the nav, to
+   push both buttons below the sidebar's fold on a 768–864px laptop. */
 .sidebar-footer {
   margin-top: auto;
   padding: 0.5rem 0.25rem 0;
   border-top: 1px solid var(--border);
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  align-items: center;
+  gap: 0.15rem;
   font-size: 0.72rem;
   color: var(--muted);
 }
 
-.sidebar-footer-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0 0.5rem;
-  min-width: 0;
-}
-
 .sidebar-footer-email {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0.35rem 0 0.5rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar-footer-pill {
-  padding: 0.05rem 0.45rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  font-size: 0.62rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.sidebar-footer-pill.is-dev {
-  color: var(--warn);
-  border-color: var(--warn);
-}
-
-.sidebar-footer-hash {
-  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
-}
-
 .sidebar-footer-icon {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.45rem 0.5rem;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: none;
   border-radius: 6px;
   background: none;
   color: var(--muted);
   cursor: pointer;
-  width: 100%;
-  text-align: left;
+}
+
+/* With no email yet (the session still loading) the buttons keep the row's end; beside an email,
+   which already takes the slack, this changes nothing. */
+.sidebar-footer-icon:first-of-type {
+  margin-left: auto;
 }
 
 .sidebar-footer-icon:hover {

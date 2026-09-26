@@ -23,13 +23,34 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 describe('SidebarFooter', () => {
-  it('shows email, environment pill, build hash, and logs out', async () => {
+  // ONE row (2026-09-25 polish spec §2): the four stacked rows cost the sidebar ~90px, which on a
+  // 768–864px laptop pushed theme and Log out below its fold.
+  it('is one row — the email, then the theme and log-out icon buttons — and logs out', () => {
     render(<ThemeProvider><SidebarFooter buildHash="abc123" /></ThemeProvider>)
+    const footer = document.querySelector('.sidebar-footer') as HTMLElement
+    expect(Array.from(footer.children).map((child) => child.className)).toEqual([
+      'sidebar-footer-email',
+      'sidebar-footer-icon',
+      'sidebar-footer-icon',
+    ])
     expect(screen.getByText('me@example.com')).toBeTruthy()
-    expect(screen.getByText('abc123')).toBeTruthy()
-    expect(await screen.findByText('prod')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /log out/i }))
+    // Icons only: the name is for a screen reader, the title for a pointer.
+    const theme = screen.getByRole('button', { name: 'Switch to light theme' })
+    expect(theme.textContent).toBe('')
+    expect(theme.getAttribute('title')).toBe('Switch to light theme')
+    const logOut = screen.getByRole('button', { name: 'Log out' })
+    expect(logOut.textContent).toBe('')
+    expect(logOut.getAttribute('title')).toBe('Log out')
+    fireEvent.click(logOut)
     expect(logout).toHaveBeenCalled()
+  })
+
+  it("names the environment and the build in the email's tooltip, not on screen", async () => {
+    render(<ThemeProvider><SidebarFooter buildHash="abc123" /></ThemeProvider>)
+    const email = screen.getByText('me@example.com')
+    await waitFor(() => expect(email.getAttribute('title')).toBe('me@example.com · prod · build abc123'))
+    expect(screen.queryByText('prod')).toBeNull()
+    expect(screen.queryByText('abc123')).toBeNull()
   })
 
   it('toggles the theme explicitly', async () => {
@@ -80,24 +101,27 @@ describe('SidebarFooter', () => {
     expect(screen.queryByText(/no longer following your system/)).toBeNull()
   })
 
-  it('hides the pill until the status answers, and survives a failed status', async () => {
+  it('leaves the environment out of the tooltip when the status never answers', async () => {
     vi.mocked(fetchSystemStatus).mockRejectedValue(new Error('offline'))
     render(<ThemeProvider><SidebarFooter buildHash="abc123" /></ThemeProvider>)
     await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalled())
-    expect(screen.queryByText('prod')).toBeNull()
-    expect(screen.getByText('me@example.com')).toBeTruthy()
+    // An unlabeled environment is honest; a stale or guessed one is not.
+    expect(screen.getByText('me@example.com').getAttribute('title')).toBe('me@example.com · build abc123')
   })
 
-  it('drops the whole row when there is no email yet', () => {
+  it('keeps both buttons, and only them, while there is no email yet', () => {
     vi.mocked(useAuth).mockReturnValue({ email: null, isAuthenticated: true, isLoading: false, login: vi.fn(), logout, authError: null, retry: vi.fn() } as never)
     render(<ThemeProvider><SidebarFooter buildHash="abc123" /></ThemeProvider>)
-    // The row, not just the address: an empty one would still spend the footer's gap.
-    expect(document.querySelectorAll('.sidebar-footer-row')).toHaveLength(1)
+    expect(document.querySelector('.sidebar-footer-email')).toBeNull()
+    expect(screen.getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Switch to light theme',
+      'Log out',
+    ])
   })
 
   it('keeps the diagnostics status where a mutation cannot wipe it', async () => {
     render(<ThemeProvider><SidebarFooter buildHash="abc123" /></ThemeProvider>)
-    expect(await screen.findByText('prod')).toBeTruthy()
+    await waitFor(() => expect(screen.getByText('me@example.com').getAttribute('title')).toContain('prod'))
     // api() clears every snapshot after any non-GET. A boundary reading the cache would lose
     // the environment and the alembic head the first time the user saved anything — exactly
     // the session in which they are most likely to need Copy details.

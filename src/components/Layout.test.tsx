@@ -420,9 +420,9 @@ describe('Layout — shell boundary', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
     renderShell()
-    // The footer's status has landed — the pill proves it — and then a save wipes the page
-    // snapshots, which is what api() does after ANY non-GET.
-    expect(await screen.findByText('dev')).toBeTruthy()
+    // The footer's status has landed — the email's tooltip names the environment once it has — and
+    // then a save wipes the page snapshots, which is what api() does after ANY non-GET.
+    expect(await screen.findByTitle(/ · dev · /)).toBeTruthy()
     clearSnapshots()
     sidebarThrows = true
     fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
@@ -441,7 +441,7 @@ describe('Layout — shell boundary', () => {
       database: { alembic_head: null, size_bytes: 1 },
     } as never)
     renderShell()
-    expect(await screen.findByText('dev')).toBeTruthy()
+    expect(await screen.findByTitle(/ · dev · /)).toBeTruthy()
     sidebarThrows = true
     fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
     fireEvent.click(screen.getByRole('button', { name: 'Copy details' }))
@@ -451,7 +451,7 @@ describe('Layout — shell boundary', () => {
   it('clears the fallback on the next navigation', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     renderProbeShell()
-    expect(await screen.findByText('dev')).toBeTruthy()
+    expect(await screen.findByTitle(/ · dev · /)).toBeTruthy()
     sidebarThrows = true
     fireEvent.click(screen.getByRole('button', { name: 'to spending' }))
     expect(screen.getByRole('alert')).toBeTruthy()

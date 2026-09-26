@@ -25,9 +25,11 @@ export function getLastSystemStatus(): SystemStatus | null {
   return last
 }
 
-// Identity and environment at the bottom of the sidebar (2026-09-03 shell spec §12): who is
-// signed in, which deployment this is, which build — so two tabs (dev vs prod) can never be
-// confused — plus a one-click theme toggle and Log out.
+// Identity at the bottom of the sidebar (2026-09-03 shell spec §12) — who is signed in, which
+// deployment and which build, so two tabs (dev vs prod) can never be confused — plus a one-click
+// theme toggle and Log out. ONE row since 2026-09-25 (polish spec §2): the four stacked rows cost
+// ~90px, which on a 768–864px laptop pushed both buttons below the sidebar's fold. The environment
+// and the build now ride the email's tooltip (Settings › Data › System states them too).
 export default function SidebarFooter({ buildHash }: { buildHash: string }) {
   const { email, logout } = useAuth()
   const { theme, resolved, setTheme } = useTheme()
@@ -76,37 +78,23 @@ export default function SidebarFooter({ buildHash }: { buildHash: string }) {
     }
   }
 
+  // `{email} · {environment} · build {hash}`; the environment only once the status answered — an
+  // unlabeled footer is honest, a stale or guessed environment is not.
+  const identity = [email, status?.environment, `build ${buildHash}`].filter(Boolean).join(' · ')
+  const themeLabel = `Switch to ${next} theme`
   return (
     <div className="sidebar-footer">
-      {/* The row, not just the address, is conditional: an email-less footer (the context
-          still loading) would otherwise keep an empty row's gap above the pill. */}
       {email && (
-        <div className="sidebar-footer-row">
-          <span className="sidebar-footer-email" title={email}>{email}</span>
-        </div>
-      )}
-      <div className="sidebar-footer-row">
-        {status !== null && (
-          <span className={`sidebar-footer-pill${status.environment === 'dev' ? ' is-dev' : ''}`}>
-            {status.environment}
-          </span>
-        )}
-        {/* alembic_head is nullable (a create_all-built schema has none) — no tooltip at
-            all beats a tooltip that reads "alembic null". */}
-        <span
-          className="sidebar-footer-hash"
-          title={status?.database.alembic_head ? `alembic ${status.database.alembic_head}` : undefined}
-        >
-          {buildHash}
+        <span className="sidebar-footer-email" title={identity}>
+          {email}
         </span>
-      </div>
-      <button type="button" className="sidebar-footer-icon" onClick={onToggleTheme} aria-label={`Switch to ${next} theme`}>
+      )}
+      {/* Icons, each named for a screen reader and titled for a pointer. */}
+      <button type="button" className="sidebar-footer-icon" onClick={onToggleTheme} aria-label={themeLabel} title={themeLabel}>
         {resolved === 'dark' ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
-        <span>{resolved === 'dark' ? 'Light theme' : 'Dark theme'}</span>
       </button>
-      <button type="button" className="sidebar-footer-icon" onClick={logout}>
+      <button type="button" className="sidebar-footer-icon" onClick={logout} aria-label="Log out" title="Log out">
         <LogOut size={16} aria-hidden="true" />
-        <span>Log out</span>
       </button>
     </div>
   )
