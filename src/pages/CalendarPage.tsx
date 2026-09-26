@@ -119,7 +119,7 @@ export default function CalendarPage() {
   const [formTick, setFormTick] = useState(0)
   const formDateRef = useRef<HTMLInputElement | null>(null)
   const formTitleRef = useRef<HTMLInputElement | null>(null)
-  const landingRef = useRef<{ id: number; day: string } | null>(null)
+  const landingRef = useRef<{ id: number; day: string; focus?: boolean } | null>(null)
   const formReturnRef = useRef<{ key: string; day: string } | null>(null)
   const deleteWithUndo = useDeleteWithUndo()
   const [form, setForm] = useState<FormState>(null)
@@ -259,6 +259,7 @@ export default function CalendarPage() {
       const chip = eventElement(event.key)
       if (!chip) return
       flashElement(chip)
+      if (pending.focus) chip.focus()
       landingRef.current = null
     })
     return () => cancelAnimationFrame(frame)
@@ -489,10 +490,12 @@ export default function CalendarPage() {
     const amountText = fields.amount.trim()
     if (amountText !== '' && !isAmount(amountText, { expressions: false })) {
       setFormError('Amount must be a plain number.')
+      document.getElementById('cal-event-amount')?.focus()
       return
     }
     if (fields.recurrence !== 'none' && fields.until !== '' && fields.until < fields.date) {
       setFormError('Until must be on or after the date.')
+      document.getElementById('cal-event-until')?.focus()
       return
     }
     const detail = fields.detail.trim()
@@ -557,7 +560,10 @@ export default function CalendarPage() {
       },
       focusAfter: () => dayElement(event.date) ?? addEventBtnRef.current,
       onRestored: async () => {
+        landingRef.current = { id, day: event.date, focus: true }
         await landOn(event.date)
+        // Let the refreshed grid commit before deciding that this day needs its drawer.
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
         // A crowded day may not show this chip in its first three slots. Its drawer does.
         if (viewRef.current === 'grid' && !eventElement(event.key)) setDrawerDay(event.date)
       },

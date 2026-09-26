@@ -235,5 +235,5 @@
   border-color: var(--negative);
   box-shadow: 0 0 0 1px var(--negative);
 }
-.budget-field-error { color: var(--negative); font-size: 0.8rem; }
+.budget-field-error { color: var(--negative); font-size: 0.8rem; text-transform: none; letter-spacing: normal; }
 .budget-editor .save-status { align-self: center; }

@@ -2172,6 +2172,20 @@ describe('CreditCardsPage — loads that overtake each other (lane R5 review)', 
 
 describe('Polish L7 — roster feedback', () => {
   it.each([
+    ['RH Gold', 'Annual fee', 'Save card', '-1'],
+    ['Rent', 'Annual spend override', 'Save category', '-1'],
+  ])('focuses the named invalid field in the %s editor', async (name, label, save, invalid) => {
+    renderManage()
+    fireEvent.click(await screen.findByRole('button', { name: `Edit ${name}` }))
+    const field = screen.getByLabelText(label)
+    fireEvent.change(field, { target: { value: invalid } })
+    const button = screen.getByRole('button', { name: save })
+    button.focus()
+    fireEvent.click(button)
+    expect(document.activeElement).toBe(field)
+  })
+
+  it.each([
     ['RH Gold', 'Card name', 'Save card'],
     ['Rent', 'Category name', 'Save category'],
   ])('reveals the %s editor and returns focus on Escape', async (name, label, save) => {

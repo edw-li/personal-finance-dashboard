@@ -302,7 +302,10 @@ export default function BudgetPanel({
                         toast.success(`Undone — the ${formatMonth(month)} seed is gone.`)
                         void reloadRef.current()
                       })
-                      .catch((err: unknown) => toast.error(failMessage(err, 'Undo failed')))
+                      .catch((err: unknown) => {
+                        toast.error(failMessage(err, 'Undo failed'))
+                        headingRef.current?.focus()
+                      })
                   },
                 },
               },

@@ -196,6 +196,7 @@ export default function CategoriesPanel({
     const name = form.name.trim()
     if (!name) {
       setError('Category name is required')
+      revealEditor(formRef.current, '#reward-category-name')
       return
     }
     const spend = form.annual_spend.trim()
@@ -205,6 +206,7 @@ export default function CategoriesPanel({
         Number(canonicalAmount(spend, { expressions: false })) < 0)
     ) {
       setError('annual_spend must be non-negative')
+      revealEditor(formRef.current, '#reward-category-spend')
       return
     }
     // ALL FOUR keys, every time: a blank box must CLEAR the column, and PATCH treats an
@@ -455,6 +457,7 @@ export default function CategoriesPanel({
         <label>
           Annual spend override
           <AmountInput
+            id="reward-category-spend"
             kind="money"
             value={form.annual_spend}
             onValueChange={set('annual_spend')}

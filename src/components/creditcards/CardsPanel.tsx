@@ -201,6 +201,7 @@ export default function CardsPanel({
       // An empty string reaches the API as `""` and 422s as an opaque message about a
       // field the user never saw named.
       setError('Card name is required')
+      revealEditor(formRef.current, '#card-name')
       return null
     }
     const fee = form.annual_fee.trim()
@@ -208,6 +209,7 @@ export default function CardsPanel({
       // The server's own sentence. The CANONICAL value is what's compared: Number('$95')
       // is NaN, and NaN < 0 is false — a tolerant entry would slip past a raw comparison.
       setError('annual_fee must be non-negative')
+      revealEditor(formRef.current, '#card-annual-fee')
       return null
     }
     const pointValue = form.point_value_cents.trim()
@@ -219,6 +221,7 @@ export default function CardsPanel({
       // Zero would divide the whole optimizer's valuation by nothing — the router refuses
       // it, and so does this, in the router's words.
       setError('point_value_cents must be positive')
+      revealEditor(formRef.current, '#card-point-value')
       return null
     }
     const body: CreditCardIn = {
@@ -457,6 +460,7 @@ export default function CardsPanel({
         <label>
           Annual fee
           <AmountInput
+            id="card-annual-fee"
             kind="money"
             value={form.annual_fee}
             onValueChange={set('annual_fee')}
@@ -484,6 +488,7 @@ export default function CardsPanel({
           Point value (¢)
           {/* kind="plain": Numeric(6,4) — a 2dp money echo over 1.7000 would lie. */}
           <AmountInput
+            id="card-point-value"
             kind="plain"
             value={form.point_value_cents}
             onValueChange={set('point_value_cents')}

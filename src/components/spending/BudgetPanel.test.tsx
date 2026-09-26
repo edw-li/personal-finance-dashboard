@@ -290,6 +290,20 @@ it('a seed that changed nothing offers no Undo', async () => {
   )
 })
 
+it('a refused seed Undo reports locally and hands focus back to the budget card', async () => {
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  const seedButton = await seedWhenReady()
+  fireEvent.click(seedButton)
+  const heading = screen.getByRole('heading', { name: /Budgets/ })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+  seedButton.focus()
+  vi.mocked(undoBatch).mockRejectedValueOnce(new Error('Undo refused'))
+  const options = vi.mocked(toast.success).mock.calls[0][1] as { action: { onAction: () => void } }
+  options.action.onAction()
+  await waitFor(() => expect(toast.error).toHaveBeenCalled())
+  expect(document.activeElement).toBe(heading)
+})
+
 it('disables the seed with the reason under three complete months', async () => {
   vi.mocked(fetchBudgetSuggestions).mockResolvedValue({
     ...suggestions,

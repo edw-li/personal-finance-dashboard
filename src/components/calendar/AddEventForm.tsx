@@ -108,6 +108,7 @@ export default function AddEventForm({
         <label className="cal-form-field">
           Amount (optional)
           <AmountInput
+            id="cal-event-amount"
             kind="money"
             className="cal-form-input"
             value={fields.amount}
@@ -145,6 +146,7 @@ export default function AddEventForm({
           <label className="cal-form-field">
             Until (optional)
             <input
+              id="cal-event-until"
               type="date"
               className="field-input cal-form-input"
               value={fields.until}
