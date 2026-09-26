@@ -178,7 +178,8 @@ describe('TransactionsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete this buy' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     // Back to create mode: a stale editingId would PATCH the deleted id on the next save.
-    expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
+    // onChanged is invoked before React commits the reset, so wait for its visible result.
+    expect(await screen.findByRole('button', { name: /add transaction/i })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
   })
 
