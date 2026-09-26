@@ -3599,9 +3599,11 @@ matches are comments in DividendsPanel.tsx and TransactionsPanel.tsx). The allow
 
 ---
 
-## As built (2026-09-25)
+## As built (2026-09-25; review round applied)
 
-**Branch:** `feat/polish-feedback`, cut from main @ `657e3d62`; one commit per task (Tasks 1–12). Not pushed, not merged.
+**Branch:** `feat/polish-feedback`, cut from main @ `657e3d62`. Tasks 1–12 landed one commit each (through `427b077e`); the
+independent review ("ready with fixes", contracts matched exactly) then landed as seven fix commits and this record. Not
+pushed, not merged.
 
 ### Gates (final tree)
 
@@ -3610,20 +3612,46 @@ matches are comments in DividendsPanel.tsx and TransactionsPanel.tsx). The allow
 | `npx tsc -p tsconfig.app.json --noEmit` | clean |
 | `npx tsc -p tsconfig.node.json --noEmit` | clean |
 | `npx eslint .` | 0 errors, **26 warnings** (the baseline; all `react-refresh/only-export-components`, none new) |
-| `npx vitest run --maxWorkers=4` | **309 files, 4,619 tests passed**, exit 0, no unhandled errors, no act warnings |
-| `vite build` (extra; private cacheDir and outDir in the scratchpad) | built in 13 s; only the pre-existing tooltip-chunk size advisory |
+| `npx vitest run --maxWorkers=4` | **310 files, 4,640 tests passed**, exit 0, no unhandled errors, no act warnings |
+| `vite build` (extra; private cacheDir and outDir in the scratchpad) | built in 12 s; only the pre-existing tooltip-chunk size advisory |
 | headless Edge 153 probe of `feedback.css` (extra; static markup) | dark + light × motion + reduced: all checks pass (below) |
 
-**New tests: 141** — client.test.ts +5, loggedClients 46, feedbackCss 9, reveal 18, BusyButton 13, save 17,
-confirmPlacement 5, confirm 13, App.test +1, useDeleteWithUndo 9, noNativeConfirm 5. The useDeleteWithUndo file ran green
-five times in a row; a mutation (dropping the Undo path's commit wait) fails its Undo test, so the wait is guarded. The
-fence was proved on a planted call in a new file and a hidden extra call in an allowlisted one.
+**New tests: 162** — client.test.ts +5, loggedClients 46, feedbackCss 10, reveal 18, BusyButton 14, save 18,
+confirmPlacement 6, confirm 20, focusable 3, App.test +2, useDeleteWithUndo 15, noNativeConfirm 5. useDeleteWithUndo ran
+green five times in a row after each round. Mutation checks: dropping the Undo path's commit wait fails its Undo test;
+dropping the row-owned frame retry fails its review #4 test. The fence was proved on a planted call in a new file and a
+hidden extra call in an allowlisted one.
 
 **Edge probe (`sheet.mjs`, scratchpad):** aria-disabled `.button` at opacity 0.5 / `not-allowed`; a busy primary keeps its
-accent at opacity 1; `.danger-button` drops its negative ink when aria-disabled; the confirm popover is `fixed` at z 25; a
-leaving `<li>` folds 42 → 24.7 → 0 px (instant under reduced motion), a leaving `<tr>` keeps its height and fades to 0; a
-flashed row's cells run `flash-wash` (pinned cells `flash-wash-pinned`) for 0.7 s, 0 s under reduced motion; the spinner
-spins only with motion. The minified build keeps `@supports (…) { :not(tr)[data-leaving] … }` intact.
+accent at opacity 1; a BusyButton without `.button` dims when quiet and keeps its face (and a 6.4 px spinner gap) when
+busy; `.danger-button` drops its negative ink when aria-disabled; the confirm popover is `fixed` at z 25; a leaving `<li>`
+folds 42 → 24.7 → 0 px (instant under reduced motion), a leaving `<tr>` keeps its height and fades to 0; a flashed row's
+cells run `flash-wash` (pinned cells `flash-wash-pinned`) for 0.7 s, 0 s under reduced motion; the spinner spins only
+with motion. The minified build keeps `@supports (…) { :not(tr)[data-leaving] … }` intact.
+
+### Commits
+
+| Task | Commit |
+|---|---|
+| 1 plan | `e14a6fad` |
+| 2 `apiLogged`, `apiDeleteLogged` | `6baf6dd4` |
+| 3 the 17 deletes, the 6 `…Logged` siblings, 15 type-only mock lines | `5d81cdae` |
+| 4 `feedback.css` | `b9d61140` |
+| 5 `reveal.ts` | `9112a75f` |
+| 6 `BusyButton` | `9b6b2261` |
+| 7 `useSaveState`, `SaveStatus`, `SaveButton` | `c7ee9ce5` |
+| 8 `ConfirmProvider`, `useConfirm` | `ee285cff` |
+| 9 mount in `App.tsx` | `0c07e2cb` |
+| 10 `useDeleteWithUndo` | `9612b871` |
+| 11 the native-confirm fence | `1af36a76` |
+| 12 first "As built" | `427b077e` |
+| review #9 `placeConfirm` clamp | `396fe5e7` |
+| review #1, #2, #8, #11 confirm (+ `focusable.ts`) | `a877990a` |
+| review #3 provider inside the router | `b5821c2f` |
+| review #4, #5 `useDeleteWithUndo` | `a8e6896c` |
+| review #6 fence | `89f03d5e` |
+| review #7 BusyButton | `15f2d0f8` |
+| review #10 `useSaveState` | `781af813` |
 
 ### Exported API as built — names and signatures identical to C2 / C3
 
@@ -3659,6 +3687,9 @@ export function useConfirm(): (options: ConfirmOptions) => Promise<boolean>
 // src/components/feedback/confirmPlacement.ts (helper)
 export const CONFIRM_GAP_PX = 6, CONFIRM_MARGIN_PX = 8
 export function placeConfirm(anchor: Pick<DOMRect, 'top' | 'bottom' | 'right'>, size, viewport): ConfirmSpot
+// src/components/feedback/focusable.ts (helper, review round)
+export const FOCUSABLE: string                        // links, enabled controls, summaries, tabindex ≥ 0
+export function focusablesIn(root: ParentNode): HTMLElement[]
 
 // src/components/feedback/BusyButton.tsx
 export type BusyButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; busyLabel?: string;
@@ -3688,6 +3719,9 @@ export function flashElement(el: HTMLElement | null): void
 export function useEscapeCancel(ref: RefObject<HTMLElement | null>, onCancel: () => void, enabled = true): void
 ```
 
+The review round changed no name and no signature: it added `focusable.ts`, and changed behaviour behind the same
+contracts (below).
+
 ### Refinements to the contract (additive — no C2/C3 name or signature changed)
 
 1. **`apiDeleteLogged(path)`** — the DELETE shape the seventeen clients share (a 204 has no body, so it answers the batch
@@ -3699,35 +3733,57 @@ export function useEscapeCancel(ref: RefObject<HTMLElement | null>, onCancel: ()
    - a quiet click is swallowed with `preventDefault` AND `stopPropagation`, as a disabled button's would be (no clickable
      row behind it fires);
    - busy keeps its own face (`cursor: progress`, full opacity, a primary keeps its accent) — only the quiet siblings wear
-     the `:disabled` look;
+     the `:disabled` look; a BusyButton without `.button` gets the same two looks (review #7);
    - children render inside `<span class="busy-button-label">` (inline-flex, `gap: inherit`, `nowrap`);
-   - width: `min-width` = the idle width while busy (the contract), plus `max-width` = the idle width when the spinner's
-     extra fits inside the button's own padding (centred spill) — so an unchanged label keeps the button's idle width to
-     the pixel (spec D3 "at its idle width"); a longer busy label grows the button rather than clip. The idle width is
-     the ResizeObserver border box (untouched by the `:active` press scale), measured once at mount where there is no
-     ResizeObserver (jsdom).
+   - width: `min-width` = the idle width while busy (the contract), plus `max-width` = the idle width when the button is a
+     flex row (`.button`) and the spinner's extra fits inside its own padding (centred spill) — so an unchanged label
+     keeps the idle width to the pixel (spec D3 "at its idle width"); a longer busy label grows the button rather than
+     clip, and a button that is not a flex row keeps only the min-width (review #7: the JSDoc says to pass `.button`).
+     The idle width is the ResizeObserver border box (untouched by the `:active` press scale), measured once at mount
+     where there is no ResizeObserver (jsdom).
 3. **useSaveState** — `'saved'` shows only while the form is not dirty (an edit inside the 2.5 s reads "Unsaved changes"
    at once); `run` is single-flight (a second call while saving saves nothing, answers `undefined`); an `AbortError` is no
-   save, not an error; no timer is armed after unmount. Callers must update what `dirty` compares against INSIDE `save`.
+   save, not an error; a form that has gone takes no news from success, failure or abort, and no timer is armed after
+   unmount (review #10). Callers must update what `dirty` compares against INSIDE `save`.
 4. **SaveStatus** — during `'saving'` it renders the same `role="status"` span (with a visually-hidden "Saving…") that then
    says "Saved ✓", because a live region must exist before its news; the ✓ is `aria-hidden`; the error is a separately
    keyed `role="alert"` (announced on insertion).
 5. **SaveButton** — quiet with "No changes to save" for `'saved'` as well as `'clean'` (spec D3: nothing differs from what
    is stored in either); a caller's own `aria-disabled` still stands while dirty.
 6. **useDeleteWithUndo**
-   - waits for React to COMMIT what `onDeleted` / `onRestored` scheduled (a same-lane state tick; its layout effect
-     releases the wait) before evaluating `focusAfter()` / `restoredRow()`, so both read the list as it now stands; an
-     unmounted owner resolves at once (an Undo pressed after leaving the page still restores and says so);
+   - waits for React to COMMIT what `onDeleted` / `onRestored` scheduled (a same-lane state tick; its layout effect — or
+     the owner's own unmount, itself part of that commit — releases the wait) before evaluating `focusAfter()` /
+     `restoredRow()`, so both read the list as it now stands;
+   - when the hook's owner had already gone (a row that owned it unmounted with its delete, or the page left), nothing can
+     wait for the Undo's reload: `restoredRow()` is looked for again over up to ten frames (review #4), and the Undo still
+     restores and says so;
    - `restoredRow()` returns the ROW: it is revealed, flashed and focused — the row itself if focusable, else the control
      at the same place in it as the one that asked for the delete (normally its Delete), else its first control;
+   - the caret never falls to `<body>` (spec §6.3, review #5): the row beside the deleted one (next, else previous) is
+     remembered before the request; with no `focusAfter` — or one that answers null — a caret that fell with the row lands
+     on that neighbour, on the control at the same place as the one that asked; a caret the user moved elsewhere stays;
+     a refused Undo hands the caret back to the list (`focusAfter`, else that neighbour);
    - a second press on a row already leaving answers `false` without a second request;
    - a rejected `onDeleted` / `onRestored` does not cancel the toast (the delete or undo happened; the caller's load path
      reports its own failure);
    - a row still in the tree after the reload (a reused element, a list that kept it) has `data-leaving` removed.
 7. **Confirm**
+   - mounted `ToastProvider > BrowserRouter > ConfirmProvider > Routes` (review #3): a question's body may hold a router
+     `<Link>` (outside the router it threw above every error boundary);
+   - Escape is taken by a `window` capture listener, ahead of every document listener — an outer menu's
+     `usePopoverDismiss` (TaxYearMenu, FilingStatusMenu, the wizard's kebab) sees the key claimed and stays open, as does
+     the detail panel; a pointerdown inside the portaled popover is stopped at `<body>` (`onPointerDown` →
+     `stopPropagation`), so it is not "outside" for such a menu; the caret returns to the still-connected asker (review #1);
+   - an orphaned question never answers yes: a `MutationObserver` on `<body>` answers no once the anchor leaves the tree
+     (no scroll or resize needed), and a Confirm pressed on a detached anchor answers no (review #2); an anchor that leaves
+     is also caught at the next scroll or resize;
+   - the surface is `tabIndex={-1}` (a click on its text keeps the caret inside), and the Tab loop walks the shared
+     `focusablesIn` (links included), the surface itself counting as an edge both ways (review #8);
+   - `aria-describedby` — and the body block — only for a body that says something (not `''`, `null`, a boolean)
+     (review #11);
    - `aria-modal="true"`; z-index 25 (over the detail panel 16 and the palette 20, under the toasts 30 — pinned by test);
-   - `data-placement` on the surface, and a rise-from-below entrance when it opens above;
-   - an anchor that leaves the page answers `false` at the next scroll or resize;
+     `data-placement` on the surface, and a rise-from-below entrance when it opens above; the placement is clamped inside
+     the window top to bottom (review #9);
    - the typed arm compares the TRIMMED text (RestoreCard's rule); Enter in it confirms once armed;
    - `useConfirm()` outside a provider renders and throws only when asked.
 8. **One eslint directive** — `react-refresh/only-export-components` on `useConfirm`: C3 names one module for the provider
@@ -3740,6 +3796,10 @@ export function useEscapeCancel(ref: RefObject<HTMLElement | null>, onCancel: ()
     is kept. **revealRow** finds the scroller with `scrollParentOf`, so a TableScroll box that does not overflow falls
     through to the page; rows sit 4 px clear of a box edge (tableScroll.css's row margin).
 11. **Spec §5.1's `useRowFlash()` / `flash(key)`** is C3's `flashElement(el)` (the overview's contract wins).
+12. **The fence** (review #6) groups its allowlist under `L5 Settings` / `L6 Portfolio·ESPP·Comp·Paycheck` /
+    `L7 Cards·Calendar·Budgets·Projection·Assistant` (empty today) / `L8 Taxes·Monthly update` headings — Taxes moved to
+    L8 — and counts a bare `confirm(…)` whose first argument is not an object literal even where the file binds
+    `const confirm = useConfirm()`; an unbound `confirm({ … })` still counts as the global.
 
 ### Plan corrections made while executing
 
@@ -3747,6 +3807,23 @@ export function useEscapeCancel(ref: RefObject<HTMLElement | null>, onCancel: ()
   matched; it now matches the animation NAME (`/busy-spin(?![\w-])/`).
 - Task 4's `[data-leaving]` rules gained `!important` after the Edge probe (refinement 9); the plan's CSS and test blocks
   were updated to match the files.
+- The review round's code is not re-inlined in Tasks 1–12: the files and the fix commits above are its record.
+
+### Review fixes, one line each
+
+| # | Fix | Test that pins it |
+|---|---|---|
+| 1 | confirm inside a menu: window-capture Escape; pointerdown stopped at the surface; caret to the asker | confirm.test: "asked from inside another popover" ×3 |
+| 2 | orphaned question: MutationObserver; Confirm on a detached anchor answers no; comment corrected | confirm.test: "an orphaned question never answers yes" ×2 |
+| 3 | `ConfirmProvider` inside `BrowserRouter` | App.test: "renders a router Link in a question's body, and the Link navigates" |
+| 4 | row-owned hook: frame retry for `restoredRow()`; JSDoc on where to call it | useDeleteWithUndo.test: "a hook owned by the row it deletes" |
+| 5 | caret fallback to the neighbour; refused Undo hands it back | useDeleteWithUndo.test: "the caret never falls to <body>" ×5 |
+| 6 | fence grouped by lane; binding hole shut | noNativeConfirm.test: the matcher's probes |
+| 7 | quiet/busy looks for non-`.button`; `.button` in the JSDoc; hold needs a flex row | feedbackCss.test + BusyButton.test (one each) |
+| 8 | surface `tabIndex -1`; the Tab loop walks `focusablesIn` | confirm.test: "holds the caret…"; focusable.test ×3 |
+| 9 | `placeConfirm` clamps top | confirmPlacement.test: the short-window case |
+| 10 | `useSaveState` alive guard on failure and abort | save.test: "lets a failed or aborted save of a form that has gone end quietly" (a regression net: React 19 ignores the update, so no red state exists) |
+| 11 | `aria-describedby` only for a body that says something | confirm.test: "is described only by a body that says something" |
 
 ### Call sites touched outside `src/components/feedback/`, `src/api/*.ts` and `App.tsx`
 
@@ -3754,20 +3831,26 @@ Type-only, forced by C2 — `vi.mocked(deleteX).mockResolvedValue(undefined)` �
 fifteen lines: `TransactionsPanel.test.tsx:1103`, `AccountsCard.test.tsx:202`, `CategoriesCard.test.tsx:95`,
 `BudgetPanel.test.tsx:105`, `CalendarPage.test.tsx:483, 518`, `CompPage.test.tsx:308, 312`,
 `CreditCardsPage.test.tsx:985, 1486, 1966`, `EsppPage.test.tsx:339, 342, 345`, `PaycheckPage.test.tsx:327`. No production
-call site needed a change: every one awaits with `.then(() => …)` and ignores the value. `App.test.tsx` gained a mocked
-"Ask a question" button and one test.
+call site needed a change: every one awaits with `.then(() => …)` and ignores the value. `App.test.tsx` gained two mocked
+buttons ("Ask a question", "Ask with a link") and two tests.
 
-### Notes for wave 2 (L5–L7) and lane V
+### Notes for wave 2 (L5–L8) and lane V
 
-- **Tests of a host that asks:** render it inside `<ConfirmProvider>`; `useConfirm()` throws when asked without one.
-- **Tests of a host that deletes:** drive `useDeleteWithUndo` with a click and wait with `findBy`/`waitFor`. Awaiting its
-  promise INSIDE `act(async …)` deadlocks (it waits for a React commit that act holds until its callback settles).
-- `onDeleted` / `onRestored` must return the reload's promise (resolve after its `setState`); a reload inside
-  `startTransition` would commit after the wait and defeat it. Pass `focusAfter` — without it focus falls to `<body>` when
-  the deleted row's own button held it.
+- **Tests of a host that asks:** render it inside `<ConfirmProvider>` (and inside a router if its body holds a `<Link>`);
+  `useConfirm()` throws when asked without a provider.
+- **Call the hook with its options written in place** — `confirm({ anchor, title, … })`: the fence counts a `confirm(…)`
+  handed anything else (a variable included), and any local helper named `confirm`.
+- **A confirm from inside a menu** (TaxYearMenu, FilingStatusMenu, the wizard's kebab) now works as is: Escape and presses
+  inside the question leave the menu open, and the caret returns to the asker.
+- **`useDeleteWithUndo`:** call it in the component that renders the LIST, not in a row, and always pass `restoredRow`
+  (a row-owned hook falls back to looking for the restored row over a few frames). Drive tests with a click and wait with
+  `findBy`/`waitFor`; awaiting its promise INSIDE `act(async …)` deadlocks. `onDeleted` / `onRestored` must return the
+  reload's promise (resolve after its `setState`); a reload inside `startTransition` would commit after the wait. Pass
+  `focusAfter` where the next stop is not simply the neighbouring row's same control — that is the fallback.
 - `useEscapeCancel(ref, onCancel, editing)`: pass the editing flag so the listener binds when the editor mounts.
 - `flashElement` is for rows and chips, not a `.card` (removing the attribute would replay the card's entrance).
+- `BusyButton`: pass `.button` for the pixel-exact width hold.
 - The `.danger-button` copies in `MonthlyUpdatePage.css` and `settings.css` still stand — wave 2 deletes them.
-- **The fence:** strike an allowlist entry (or lower its count) in the commit that converts the call. Lane V adds
-  `expect(ALLOWLIST).toEqual({})`. The real baseline is **14 calls in 9 files**, not 15: the other two `confirm(` text
-  matches are comments (DividendsPanel.tsx, TransactionsPanel.tsx).
+- **The fence:** strike an allowlist entry (or lower its count) in the commit that converts the call, inside your lane's
+  block (L5 / L6 / L7 / L8). Lane V adds `expect(ALLOWLIST).toEqual({})`. The real baseline is **14 calls in 9 files**,
+  not 15: the other two `confirm(` text matches are comments (DividendsPanel.tsx, TransactionsPanel.tsx).
