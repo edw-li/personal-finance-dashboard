@@ -39,6 +39,24 @@ LOGGED: dict[str, set[str]] = {
     # joined on 2026-09-23 (spec §W8): it moves every figure the year computes, so it is a
     # deliberate setting with an Undo, not a toggle.
     "taxes.py": {"put_inputs", "update_year"},
+    # Exact undo everywhere (2026-09-25 polish spec §6.1, D1): every user-intent write in these
+    # records its rows, and a delete images what hangs off the row it removes. The two
+    # allocation routes have logged since 2026-09-13 and are pinned here now too.
+    "portfolio.py": {
+        "update_portfolio_account",
+        "create_security",
+        "update_security",
+        "delete_security",
+        "reorder_transactions",
+        "create_transaction",
+        "update_transaction",
+        "delete_transaction",
+        "create_dividend",
+        "update_dividend",
+        "delete_dividend",
+        "update_classification",
+        "save_allocation_targets",
+    },
 }
 # module -> {function: reason}. An exempt route still commits directly; the reason says
 # why that is the right answer for now, not that nobody looked.
