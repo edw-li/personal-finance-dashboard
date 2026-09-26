@@ -2512,6 +2512,16 @@ describe('OverviewPage chart cards (charts C2)', () => {
     expect(within(last).getByText('Future month (in progress)')).toBeTruthy()
   })
 
+  // 2026-09-25 polish spec §3.2: the elastic card of the wealth column is the trend, which grows its
+  // plot from 220px; "Changes" under it keeps its own height.
+  it('lets the Net worth trend fill the wealth column', async () => {
+    serve()
+    renderPage()
+    const trend = (await screen.findByRole('heading', { name: /Net worth trend/ })).closest('section.chart-card') as HTMLElement
+    expect(trend.classList.contains('chart-card-fill')).toBe(true)
+    expect(trend.style.getPropertyValue('--chart-h')).toBe('220px')
+  })
+
   it('has no footnote when no shown month is in progress', async () => {
     serve()
     renderPage()

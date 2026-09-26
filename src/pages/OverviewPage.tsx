@@ -797,6 +797,9 @@ export default function OverviewPage() {
                 exportName="net-worth-trend"
                 csv={data.ts ? () => netWorthTrendCsv(data.ts!) : undefined}
                 height={220}
+                // The wealth column's elastic card (2026-09-25 polish spec §3.2): the plot grows with
+                // the band from 220px, so "Changes" below keeps its own height.
+                fill
                 selectionAdapter={params => {
                   const index = params.dataIndex
                   if (!data.ts || typeof index !== 'number' || !data.ts.months[index]) return null

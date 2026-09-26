@@ -47,16 +47,27 @@ describe('OverviewPage.css', () => {
     expect(label).toContain('flex: none;')
   })
 
-  // Lane V measured the agenda column ending 66px below the wealth column at 1440 and 1920
-  // (the limit is 24px). jsdom computes no layout, so the rules that close that gap — stretch
-  // the columns to the taller one, then let each column's LAST row absorb the slack — can only
-  // be pinned here. The row counts are the cards themselves: trend + changes, and up next +
-  // needs attention + data status.
-  it('gives the two primary columns a shared bottom by stretching their last card', () => {
+  // Lane V measured the agenda column ending 66px below the wealth column (the limit is 24px); then
+  // the stretch landed as a 66–134px blank band inside "Changes" (OU-04). The columns still share a
+  // bottom, and the slack goes to something that can use it (2026-09-25 polish spec §3.2): on the left
+  // the Net worth trend's row is the 1fr (the trend fills it), "Changes" keeps its own height; on the
+  // right only the last card, Data status, takes slack — when the left column is the taller.
+  it('gives the two primary columns a shared bottom — the slack to the trend, and to the agenda’s last card', () => {
     expect(declarationsFor(overview, '.overview-primary')).toContain('align-items: stretch;')
-    expect(declarationsFor(overview, '.overview-wealth-column')).toContain('grid-template-rows: auto 1fr;')
+    expect(declarationsFor(overview, '.overview-wealth-column')).toContain('grid-template-rows: 1fr auto;')
     expect(declarationsFor(overview, '.overview-agenda-column')).toContain('grid-template-rows: auto auto 1fr;')
     // A stretched row must not reintroduce the margins the pair was built without.
     expect(declarationsFor(overview, '.overview-primary .card')).toContain('margin: 0;')
+  })
+
+  // With the trend's Table open the left column is the taller and Data status stretches (spec §3.2):
+  // its note rides the card's foot instead of hanging over a 242–310px blank band.
+  it("pins Data status's note to the card's foot, keeping its air when nothing stretches", () => {
+    const card = declarationsFor(overview, '.overview-data-status')
+    expect(card).toContain('display: flex;')
+    expect(card).toContain('flex-direction: column;')
+    const note = declarationsFor(overview, '.data-status-note')
+    expect(note).toContain('margin: auto 0 0;')
+    expect(note).toContain('padding-top: .6rem;')
   })
 })
