@@ -970,6 +970,8 @@ export default function TaxesPage() {
                     onVestApplied={onVestApplied}
                     goTo={goTo}
                     refreshKey={withholdingRefresh}
+                    // Projected tax's second line (2026-09-25 polish spec §4.4): the same engine total's rate.
+                    effectiveRate={d.summary.totals?.effective_rate ?? null}
                   />
                 )}
                 <MarginalPanel summary={d.summary} brackets={d.brackets} />

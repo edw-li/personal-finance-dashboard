@@ -393,6 +393,10 @@ describe('WhatIfPanel', () => {
     expect(tile('Δ total tax').querySelector('.stat-value')?.textContent).toBe('$4,321.00')
     expect(tile('Δ total tax').querySelector('.stat-delta')?.className).toContain('stat-delta-negative')
     expect(tile('Effective rate').querySelector('.stat-value')?.textContent).toBe('24.7% → 28.1%')
+    // The rate's second line (2026-09-25 polish spec §4.4): the points it moved, no glyph — a level,
+    // not a movement.
+    expect(tile('Effective rate').querySelector('.stat-delta')?.textContent).toBe('3.4 pts higher')
+    expect(tile('Effective rate').querySelector('.stat-delta')?.className).toContain('stat-delta-neutral')
     const niit = screen.getByText('NIIT').closest('tr') as HTMLElement
     expect(within(niit).getAllByRole('cell').map((c) => c.textContent)).toEqual(['NIIT', '$75.59', '$0.00', '-$75.59'])
     expect(within(niit).getByText('-$75.59').className).toContain('delta-chip-positive') // less NIIT reads green
@@ -434,8 +438,13 @@ describe('WhatIfPanel', () => {
     expect(tile('Net cash').querySelector('.stat-value')?.textContent).toBe('$47,849.00')
     const gain = tile('After-tax gain')
     expect(gain.querySelector('.stat-value')?.textContent).toBe('$26,599.00')
-    expect(gain.querySelector('.stat-delta')?.textContent).toContain('$38,250.00 gain before tax')
+    expect(gain.querySelector('.stat-delta')?.textContent).toContain('$38,250 gain before tax')
     expect(gain.querySelector('.stat-delta')?.className).toContain('stat-delta-positive')
+    // 2026-09-25 polish spec §4.4: the mixed row's three bare tiles get lines from the payload.
+    const line = (label: string) => tile(label).querySelector('.stat-delta')?.textContent
+    expect(line('Proceeds')).toBe('1 sale')
+    expect(line('Tax due')).toBe('30.5% of the gain')
+    expect(line('Net cash')).toBe('80.4% of proceeds')
     expect(screen.queryByText('Δ take-home')).toBeNull()
     // No overrides: tax due IS the whole Δ, so there is nothing to reconcile below.
     expect(screen.queryByText(/Tax due counts the sales only/)).toBeNull()
@@ -459,7 +468,7 @@ describe('WhatIfPanel', () => {
     expect(tile('Net cash').querySelector('.stat-value')?.textContent).toBe('$9,200.00')
     const loss = tile('After-tax loss')
     expect(loss.querySelector('.stat-value')?.textContent).toBe('$2,800.00')
-    expect(loss.querySelector('.stat-delta')?.textContent).toContain('$4,000.00 loss before tax')
+    expect(loss.querySelector('.stat-delta')?.textContent).toContain('$4,000 loss before tax')
     expect(loss.querySelector('.stat-delta')?.className).toContain('stat-delta-negative')
     // The overrides note names the tile it is about.
     expect(
