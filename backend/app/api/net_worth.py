@@ -30,6 +30,7 @@ from app.services.changelog import (
     ChangeBatch,
     batch_header,
     change_batch,
+    edit_label,
     lock_children,
     lock_parent,
     row_image,
@@ -311,7 +312,9 @@ async def update_account(
     for field, value in updates.items():
         setattr(account, field, value)
     batch.record_update(account, before)
-    batch.label = f"Edited account {account.name}"
+    batch.label = edit_label(
+        "account", account.name, before, row_image(account), off="Retired", on="Restored"
+    )
     response.headers.update(batch_header(await batch.commit()))
     return account
 

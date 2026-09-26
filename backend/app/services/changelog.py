@@ -85,6 +85,17 @@ def batch_header(batch_id: UUID | None) -> dict[str, str]:
     return {} if batch_id is None else {CHANGE_BATCH_HEADER: str(batch_id)}
 
 
+def edit_label(noun: str, name: str, before: dict, after: dict, *, off: str, on: str) -> str:
+    """A PATCH's Activity label, from its before- and after-images. When `is_active` is the only
+    column that moved, the edit was the row's one-click toggle, and the label says so in the
+    button's own verb — Settings' Retire / Restore, the card roster's Archive / Unarchive, the
+    reward categories' Hide / Show."""
+    moved = {key for key, value in after.items() if before.get(key) != value}
+    if moved == {"is_active"}:
+        return f"{on if after['is_active'] else off} {noun} {name}"
+    return f"Edited {noun} {name}"
+
+
 class ChangeBatch:
     def __init__(self, db: AsyncSession, *, source: str = "ui", actor: str | None = None) -> None:
         self.db = db

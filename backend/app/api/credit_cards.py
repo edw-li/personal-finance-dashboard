@@ -49,6 +49,7 @@ from app.services.changelog import (
     ChangeBatch,
     batch_header,
     change_batch,
+    edit_label,
     lock_children,
     lock_parent,
     row_image,
@@ -85,17 +86,7 @@ POINT_VALUE_MAX_ABS = Decimal(100)  # Numeric(6,4): 2 integer digits
 # int converter. Keep new static sub-paths above the cards section.
 
 
-# --- Activity labels (2026-09-25 polish spec §6.1) ----------------------------------------
-
-
-def _edit_label(noun: str, name: str, before: dict, after: dict, *, off: str, on: str) -> str:
-    """A PATCH's label. When `is_active` is the only column that moved, the edit was the
-    row's one-click toggle, and the label says so in the button's own verb — the roster's
-    Archive / Unarchive, the categories' Hide / Show."""
-    moved = {key for key, value in after.items() if before.get(key) != value}
-    if moved == {"is_active"}:
-        return f"{on if after['is_active'] else off} {noun} {name}"
-    return f"Edited {noun} {name}"
+# --- Activity labels (2026-09-25 polish spec §6.1; a PATCH's is changelog.edit_label) ------
 
 
 def _dollars(value: Decimal) -> str:
@@ -306,7 +297,7 @@ async def update_reward_category(
     for field, value in updates.items():
         setattr(category, field, value)
     batch.record_update(category, before)
-    batch.label = _edit_label(
+    batch.label = edit_label(
         "reward category", category.name, before, row_image(category), off="Hid", on="Showed"
     )
     response.headers.update(batch_header(await batch.commit()))
@@ -665,7 +656,7 @@ async def update_credit_card(
     for field, value in values.items():
         setattr(card, field, value)
     batch.record_update(card, before)
-    batch.label = _edit_label(
+    batch.label = edit_label(
         "card", card.name, before, row_image(card), off="Archived", on="Unarchived"
     )
     response.headers.update(batch_header(await batch.commit()))

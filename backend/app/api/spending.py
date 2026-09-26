@@ -44,6 +44,7 @@ from app.services.changelog import (
     ChangeBatch,
     batch_header,
     change_batch,
+    edit_label,
     lock_children,
     lock_parent,
     row_image,
@@ -216,7 +217,9 @@ async def update_category(
     for field, value in updates.items():
         setattr(category, field, value)
     batch.record_update(category, before)
-    batch.label = f"Edited category {category.name}"
+    batch.label = edit_label(
+        "category", category.name, before, row_image(category), off="Retired", on="Restored"
+    )
     response.headers.update(batch_header(await batch.commit()))
     return category
 
