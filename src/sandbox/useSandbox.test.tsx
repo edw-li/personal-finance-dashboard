@@ -442,7 +442,7 @@ describe('useSandbox', () => {
       expect(text('pins')).toBe('a 5,Named,Named')
       click('pin')
       expect(text('pins')).toBe('a 5,Named,Named')
-      expect(toast.info).toHaveBeenCalledWith('Unpin one first')
+      expect(toast.info).toHaveBeenCalledWith('Unpin one to pin another')
       click('unpin')
       expect(text('pins')).toBe('Named,Named')
     })
