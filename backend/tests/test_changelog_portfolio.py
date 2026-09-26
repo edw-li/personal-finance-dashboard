@@ -13,7 +13,9 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models import (
+    DividendPayment,
     LatestPrice,
+    Person,
     PortfolioAccount,
     PositionTransaction,
     PriceHistory,
@@ -29,6 +31,7 @@ PORTFOLIO = "/api/v1/portfolio"
 SECURITIES = f"{PORTFOLIO}/securities"
 TRANSACTIONS = f"{PORTFOLIO}/transactions"
 ORDER = f"{TRANSACTIONS}/order"
+DIVIDENDS = f"{PORTFOLIO}/dividends"
 VOO = {"ticker": "VOO", "name": "Vanguard S&P 500 ETF", "holding_type": "etf"}
 
 
@@ -377,3 +380,73 @@ async def test_an_undo_of_a_reorder_waits_for_the_ledger_lock(auth_client, db, e
     async with sessions() as undoing:  # the holder's transaction is over: the lock is free
         await undo_batch(undoing, batch_id, actor="tab 2")
     assert await replay(db) == [(first, 10), (middle, 20), (last, 30)]
+
+
+# ── dividends and label owners ───────────────────────────────────────────────────────
+
+
+async def test_dividend_writes_are_logged_and_a_delete_undoes_exactly(auth_client, db):
+    security_id = await stock(db)
+    created = await auth_client.post(
+        DIVIDENDS,
+        json={
+            "security_id": security_id,
+            "account": "RH Taxable",
+            "pay_date": "2026-08-31",
+            "amount": "4.12",
+            "notes": "Q3",
+        },
+    )
+    assert created.status_code == 201, created.text
+    dividend_id = created.json()["id"]
+    rows = await logged(db, created.headers["x-change-batch"])
+    assert shape(rows) == [("insert", "portfolio_accounts"), ("insert", "dividend_payments")]
+    assert {row.label for row in rows} == {"Added NVDA dividend of Aug 31, 2026"}
+
+    edited = await auth_client.patch(
+        f"{DIVIDENDS}/{dividend_id}", json={"amount": "4.20", "account": "Fidelity Taxable"}
+    )
+    assert edited.status_code == 200, edited.text
+    rows = await logged(db, edited.headers["x-change-batch"])
+    assert shape(rows) == [("insert", "portfolio_accounts"), ("update", "dividend_payments")]
+    assert rows[1].after["portfolio_account_id"] == rows[0].after["id"]  # imaged after the flush
+    assert (rows[1].before["amount"], rows[1].after["amount"]) == ("4.12", "4.20")
+    assert {row.label for row in rows} == {"Edited NVDA dividend of Aug 31, 2026"}
+
+    before = await images(db, DividendPayment)
+    deleted = await auth_client.delete(f"{DIVIDENDS}/{dividend_id}")
+    assert deleted.status_code == 204
+    batch_id = deleted.headers["x-change-batch"]
+    [row] = await logged(db, batch_id)
+    assert (row.op, row.label) == ("delete", "Deleted NVDA dividend of Aug 31, 2026")
+    assert await images(db, DividendPayment) == []
+    assert (await undo(auth_client, batch_id)).status_code == 200
+    assert await images(db, DividendPayment) == before
+
+
+async def test_changing_a_labels_owner_is_logged(auth_client, db):
+    me, sam = Person(name="Me", is_primary=True), Person(name="Sam")
+    db.add_all([me, sam])
+    await db.flush()
+    label = PortfolioAccount(label="RH Joint Taxable", person_id=me.id)
+    db.add(label)
+    await db.commit()
+    label_id, me_id = label.id, me.id
+    path = f"{PORTFOLIO}/accounts/{label_id}"
+    joint = await auth_client.patch(path, json={"person_id": None})
+    assert joint.status_code == 200, joint.text
+    batch_id = joint.headers["x-change-batch"]
+    [row] = await logged(db, batch_id)
+    assert (row.op, row.table_name, row.label) == (
+        "update",
+        "portfolio_accounts",
+        "Changed the owner of RH Joint Taxable",
+    )
+    assert (row.before["person_id"], row.after["person_id"]) == (me_id, None)
+    # The same owner again, or no owner key at all, changes nothing and names no batch.
+    for body in ({"person_id": None}, {}):
+        same = await auth_client.patch(path, json=body)
+        assert same.status_code == 200 and "x-change-batch" not in same.headers
+    assert (await undo(auth_client, batch_id)).status_code == 200
+    [owned] = (await auth_client.get(f"{PORTFOLIO}/accounts")).json()
+    assert owned["person_id"] == me_id

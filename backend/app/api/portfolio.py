@@ -190,7 +190,11 @@ async def list_portfolio_accounts(db: AsyncSession = Depends(get_db)) -> list[Po
 
 @router.patch("/accounts/{account_id}", response_model=PortfolioAccountOut)
 async def update_portfolio_account(
-    account_id: int, body: PortfolioAccountUpdate, db: AsyncSession = Depends(get_db)
+    account_id: int,
+    body: PortfolioAccountUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> PortfolioAccount:
     """Ownership only. `person_id: null` is a REAL write — it is how an account becomes
     joint (the net-worth NULLABLE_ACCOUNT_FIELDS posture) — while an absent key is a no-op
@@ -206,8 +210,11 @@ async def update_portfolio_account(
     # surfacing asyncpg's ForeignKeyViolationError as a 500 (_validate_links' rule).
     if person_id is not None and (await db.get(Person, person_id)) is None:
         raise HTTPException(status_code=422, detail=f"unknown person_id: {person_id}")
+    before = row_image(account)
     account.person_id = person_id
-    await db.commit()
+    batch.record_update(account, before)
+    batch.label = f"Changed the owner of {account.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return account
 
 
@@ -692,16 +699,20 @@ def _validated_dividend_amount(amount: Decimal) -> Decimal:
 
 @router.post("/dividends", response_model=DividendOut, status_code=201)
 async def create_dividend(
-    body: DividendCreate, db: AsyncSession = Depends(get_db)
+    body: DividendCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> DividendPayment:
-    if await db.get(Security, body.security_id) is None:
+    security = await db.get(Security, body.security_id)
+    if security is None:
         raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
     require_reasonable_date(body.pay_date, "pay_date")
     amount = _validated_dividend_amount(body.amount)
     # Blank/whitespace collapse to None — never persist '' as a second spelling of "no
     # account" (Task 9 review I1), and never mint a portfolio_accounts row for it.
     label = (body.account or "").strip() or None
-    account = None if label is None else await resolve_portfolio_account(db, label)
+    account = None if label is None else await _resolve_account(db, batch, label)
     dividend = DividendPayment(
         security_id=body.security_id,
         portfolio_account=account,
@@ -710,7 +721,10 @@ async def create_dividend(
         notes=body.notes,
     )
     db.add(dividend)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(dividend)
+    batch.label = f"Added {security.ticker} dividend of {long_day(dividend.pay_date)}"
+    response.headers.update(batch_header(await batch.commit()))
     return dividend
 
 
@@ -723,7 +737,11 @@ async def _get_dividend(db: AsyncSession, dividend_id: int) -> DividendPayment:
 
 @router.patch("/dividends/{dividend_id}", response_model=DividendOut)
 async def update_dividend(
-    dividend_id: int, body: DividendUpdate, db: AsyncSession = Depends(get_db)
+    dividend_id: int,
+    body: DividendUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> DividendPayment:
     dividend = await _get_dividend(db, dividend_id)
     provided = body.model_dump(exclude_unset=True)
@@ -743,21 +761,37 @@ async def update_dividend(
         validated.pop("account")  # not a column any more — it is the relationship below
         account_change = True
         label = (provided["account"] or "").strip() or None
-        new_account = None if label is None else await resolve_portfolio_account(db, label)
+        new_account = None if label is None else await _resolve_account(db, batch, label)
+    before = row_image(dividend)
     for field_name, value in validated.items():
         setattr(dividend, field_name, value)
     if account_change:
         dividend.portfolio_account = new_account
-    await db.commit()
+    # The relationship moves portfolio_account_id only at a flush: image after one.
+    await db.flush()
+    batch.record_update(dividend, before)
+    ticker = (await _get_security(db, dividend.security_id)).ticker
+    batch.label = f"Edited {ticker} dividend of {long_day(dividend.pay_date)}"
+    response.headers.update(batch_header(await batch.commit()))
     return dividend
 
 
 @router.delete("/dividends/{dividend_id}", status_code=204)
-async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_dividend(
+    dividend_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Imaged, so an Undo restores the row as it was. Accepted (spec §6.1): once a refresh has
+    written the same auto dividend again, that Undo refuses (REPLAY_REFUSAL) — the auto-event
+    key is taken."""
     dividend = await _get_dividend(db, dividend_id)
+    ticker = (await _get_security(db, dividend.security_id)).ticker
+    batch.record_delete(dividend)
+    batch.label = f"Deleted {ticker} dividend of {long_day(dividend.pay_date)}"
     await db.delete(dividend)
-    await db.commit()
-    return Response(status_code=204)
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 @router.get("/dividend-events", response_model=list[DividendEventOut])
