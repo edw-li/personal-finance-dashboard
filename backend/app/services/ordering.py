@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy import Select, TextClause, func, select, text
 from sqlalchemy.orm import InstrumentedAttribute
 
-from app.models import Account, PositionTransaction, SpendingCategory
+from app.models import Account, CreditCard, PositionTransaction, RewardCategory, SpendingCategory
 from app.schemas.portfolio import PositionChangeOut
 from app.services.portfolio_calc import MONEY_Q, SHARE_Q, Position, PositionKey
 
@@ -50,15 +50,19 @@ def order_lock(model: type) -> TextClause:
     )
 
 
-# The one order in which any path holding more than one list's order lock takes them —
-# the importer (all three lists) and an Activity-card Undo (the two logged lists) — so no
-# two such paths can each hold one lock while waiting for the other's (decision 16).
+# The one order in which any path holding more than one list's order lock takes them — the
+# importer (ORDERED_LISTS, the workbook's three lists) and an Activity-card Undo (LOGGED_LISTS,
+# every list whose rows a logged write can move) — so no two such paths can each hold one lock
+# while waiting for the other's (decision 16). The two card lists joined the change log on
+# 2026-09-25 (polish spec §6.1) and come LAST: they are dashboard-only, so the importer never
+# takes them, and after every lock it does take they can close no cycle with it.
 ORDERED_LISTS: tuple[type, ...] = (PositionTransaction, Account, SpendingCategory)
+LOGGED_LISTS: tuple[type, ...] = (*ORDERED_LISTS, CreditCard, RewardCategory)
 
 
 def order_locks_for(tables: Collection[str]) -> list[TextClause]:
-    """order_lock for each of the ORDERED_LISTS among `tables`, in that fixed order."""
-    return [order_lock(model) for model in ORDERED_LISTS if model.__tablename__ in tables]
+    """order_lock for each of the LOGGED_LISTS among `tables`, in that fixed order."""
+    return [order_lock(model) for model in LOGGED_LISTS if model.__tablename__ in tables]
 
 
 def check_permutation(current_ids: Sequence[int], ids: Sequence[int], *, stale_detail: str) -> None:

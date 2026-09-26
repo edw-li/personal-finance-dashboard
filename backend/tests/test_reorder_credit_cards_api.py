@@ -1,14 +1,16 @@
 """PUT /credit-cards/order, PUT /credit-cards/categories/order and their append/keep
-defaults (2026-09-23 drag-to-reorder spec §3.2, §3.3, §8.3). Both routes are unlogged like
-the rest of the credit-cards router; the client's Undo re-sends the previous order."""
+defaults (2026-09-23 drag-to-reorder spec §3.2, §3.3, §8.3). Both routes are change-logged
+since 2026-09-25 (polish spec §6.1): one batch, named in X-Change-Batch — its labels and the
+overlap refusal are pinned in test_changelog_credit_cards.py — and the client's own Undo still
+re-sends the previous order."""
 
 from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
 
-from app.models import ChangeLog, CreditCard, CreditLimitEvent, RewardCategory
+from app.models import CreditCard, CreditLimitEvent, RewardCategory
+from tests.changelog_asserts import logged
 from tests.ordering_helpers import flushed_updates
 
 CARDS = "/api/v1/credit-cards"
@@ -93,7 +95,7 @@ async def test_card_reorder_answers_exactly_as_the_list_get_does(auth_client, db
     ]
     assert resp.json()[1]["current_limit"] == "9000.00"  # children ride along, as in the GET
     assert resp.json() == (await auth_client.get(CARDS)).json()
-    assert (await db.execute(select(ChangeLog))).scalars().all() == []  # unlogged
+    assert {(r.op, r.table_name) for r in await logged(db, resp)} == {("update", "credit_cards")}
 
 
 async def test_an_unchanged_card_order_writes_nothing(auth_client, db):
@@ -183,7 +185,9 @@ async def test_reward_category_reorder_renumbers_and_matches_the_get(auth_client
         (category_id, index) for index, category_id in enumerate(new)
     ]
     assert resp.json() == (await auth_client.get(f"{CARDS}/categories")).json()
-    assert (await db.execute(select(ChangeLog))).scalars().all() == []  # unlogged
+    assert {(r.op, r.table_name) for r in await logged(db, resp)} == {
+        ("update", "reward_categories")
+    }
 
 
 async def test_an_unchanged_reward_category_order_writes_nothing(auth_client, db):

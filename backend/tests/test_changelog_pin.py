@@ -15,6 +15,47 @@ from pathlib import Path
 API = Path(__file__).resolve().parents[1] / "app" / "api"
 
 LOGGED: dict[str, set[str]] = {
+    # Exact undo everywhere (2026-09-25 polish spec §6.1, lane L3b): every user-intent write in
+    # these routers records through its ChangeBatch and answers X-Change-Batch. The card
+    # router's deletes image their dependents (pins, credits, cells, limit history) so the
+    # Activity card's Undo restores them with their ids, and its two list reorders are logged
+    # like the accounts' — unlogged, an older edit's Undo could silently move a row back.
+    "comp.py": {
+        "create_event",
+        "update_event",
+        "delete_event",
+        "create_grant",
+        "update_grant",
+        "delete_grant",
+    },
+    "credit_cards.py": {
+        "create_reward_category",
+        "reorder_reward_categories",
+        "update_reward_category",
+        "delete_reward_category",
+        "put_reward_rates",
+        "create_credit_card",
+        "reorder_credit_cards",
+        "update_credit_card",
+        "delete_credit_card",
+        "create_card_credit",
+        "update_card_credit",
+        "delete_card_credit",
+        "create_limit_event",
+        "delete_limit_event",
+    },
+    "espp.py": {
+        "create_lot",
+        "update_lot",
+        "delete_lot",
+        "create_period",
+        "update_period",
+        "delete_period",
+        "create_offering",
+        "update_offering",
+        "delete_offering",
+    },
+    "paycheck.py": {"create_profile", "update_profile", "delete_profile"},
     "net_worth.py": {
         "create_account",
         "update_account",

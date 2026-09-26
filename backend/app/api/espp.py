@@ -13,6 +13,12 @@ soft link degrades to null instead of raising (Plan 1 note: a clean seed has the
 but no matching securities row). The modeler's price params carry the LATEST_PRICES bound
 (Numeric(14,4), 10^10) rather than the lot family's 10^9 for the same reason: those params
 default to a stored quote, and no quote the price job could have written may 422 a GET.
+
+Every write is change-logged (2026-09-25 polish spec §6.1): one ChangeBatch per request, an
+Activity label, and the X-Change-Batch header, so the Activity card — and the page's own
+toast — can undo it exactly, id included. Undoing a delete after a new row took the same
+purchase date, period label or offering start refuses with the replay sentence: the unique
+index is the conflict, and an undo never overwrites the newer row.
 """
 
 from datetime import date, datetime
@@ -46,6 +52,8 @@ from app.schemas.espp import (
     SoldTotalsOut,
 )
 from app.services import clock
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.day_labels import long_day
 from app.services.employer_ticker import read_employer_ticker
 from app.services.espp_calc import (
     OfferingInfo,
@@ -298,7 +306,12 @@ async def list_lots(db: AsyncSession = Depends(get_db)) -> LotsOut:
 
 
 @router.post("/lots", response_model=LotOut, status_code=201)
-async def create_lot(body: LotIn, db: AsyncSession = Depends(get_db)) -> LotOut:
+async def create_lot(
+    body: LotIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> LotOut:
     fields = _validated_lot(
         purchase_date=body.purchase_date,
         qualifying_date=body.qualifying_date,
@@ -316,7 +329,10 @@ async def create_lot(body: LotIn, db: AsyncSession = Depends(get_db)) -> LotOut:
     await _require_free_purchase_date(db, fields["purchase_date"])
     lot = EsppLot(notes=body.notes, **fields)
     db.add(lot)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(lot)
+    batch.label = f"Added the lot purchased {long_day(lot.purchase_date)}"
+    response.headers.update(batch_header(await batch.commit()))
     _ticker, current_price, _quoted_at = await _espp_quote(db)
     return _lot_out(
         lot,
@@ -333,7 +349,13 @@ def _merged(provided: dict, key: str, current):
 
 
 @router.patch("/lots/{lot_id}", response_model=LotOut)
-async def update_lot(lot_id: IdPath, body: LotUpdate, db: AsyncSession = Depends(get_db)) -> LotOut:
+async def update_lot(
+    lot_id: IdPath,
+    body: LotUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> LotOut:
     lot = await _get_lot(db, lot_id)
     provided = body.model_dump(exclude_unset=True)
     fields = _validated_lot(
@@ -356,11 +378,14 @@ async def update_lot(lot_id: IdPath, body: LotUpdate, db: AsyncSession = Depends
         await _require_free_purchase_date(db, fields["purchase_date"])
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
+    before = row_image(lot)
     for name, value in fields.items():
         setattr(lot, name, value)
     if "notes" in provided:
         lot.notes = provided["notes"]
-    await db.commit()
+    batch.record_update(lot, before)
+    batch.label = f"Edited the lot purchased {long_day(lot.purchase_date)}"
+    response.headers.update(batch_header(await batch.commit()))
     _ticker, current_price, _quoted_at = await _espp_quote(db)
     return _lot_out(
         lot,
@@ -370,10 +395,16 @@ async def update_lot(lot_id: IdPath, body: LotUpdate, db: AsyncSession = Depends
 
 
 @router.delete("/lots/{lot_id}", status_code=204)
-async def delete_lot(lot_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
-    await db.delete(await _get_lot(db, lot_id))
-    await db.commit()
-    return Response(status_code=204)
+async def delete_lot(
+    lot_id: IdPath,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    lot = await _get_lot(db, lot_id)
+    batch.record_delete(lot)
+    batch.label = f"Deleted the lot purchased {long_day(lot.purchase_date)}"
+    await db.delete(lot)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- periods ---
@@ -431,7 +462,14 @@ async def list_periods(db: AsyncSession = Depends(get_db)) -> list[EsppPeriod]:
 
 
 @router.post("/periods", response_model=PeriodOut, status_code=201)
-async def create_period(body: PeriodIn, db: AsyncSession = Depends(get_db)) -> EsppPeriod:
+async def create_period(
+    body: PeriodIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> EsppPeriod:
+    """The modeler's Save on a derived row is what lands here — the row materializes — so the
+    Activity label says "Saved", not "Added"."""
     fields = _validated_period(
         label=body.label,
         period_start=body.period_start,
@@ -443,13 +481,20 @@ async def create_period(body: PeriodIn, db: AsyncSession = Depends(get_db)) -> E
     await _require_free_label(db, fields["label"])
     period = EsppPeriod(**fields)
     db.add(period)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(period)
+    batch.label = f"Saved the {period.label} purchase period"
+    response.headers.update(batch_header(await batch.commit()))
     return period
 
 
 @router.patch("/periods/{period_id}", response_model=PeriodOut)
 async def update_period(
-    period_id: IdPath, body: PeriodUpdate, db: AsyncSession = Depends(get_db)
+    period_id: IdPath,
+    body: PeriodUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> EsppPeriod:
     period = await _get_period(db, period_id)
     provided = body.model_dump(exclude_unset=True)
@@ -463,17 +508,28 @@ async def update_period(
     )
     if fields["label"] != period.label:
         await _require_free_label(db, fields["label"])
+    before = row_image(period)
     for name, value in fields.items():
         setattr(period, name, value)
-    await db.commit()
+    batch.record_update(period, before)
+    batch.label = f"Edited the {period.label} purchase period"
+    response.headers.update(batch_header(await batch.commit()))
     return period
 
 
 @router.delete("/periods/{period_id}", status_code=204)
-async def delete_period(period_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
-    await db.delete(await _get_period(db, period_id))
-    await db.commit()
-    return Response(status_code=204)
+async def delete_period(
+    period_id: IdPath,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """The modeler's "Reset … to its derived values": without its stored row the period is
+    planned from the chain again, so the Activity label says Reset."""
+    period = await _get_period(db, period_id)
+    batch.record_delete(period)
+    batch.label = f"Reset the {period.label} purchase period"
+    await db.delete(period)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- offerings ---
@@ -508,7 +564,12 @@ async def list_offerings(db: AsyncSession = Depends(get_db)) -> list[EsppOfferin
 
 
 @router.post("/offerings", response_model=OfferingOut, status_code=201)
-async def create_offering(body: OfferingIn, db: AsyncSession = Depends(get_db)) -> EsppOffering:
+async def create_offering(
+    body: OfferingIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> EsppOffering:
     require_reasonable_date(body.offering_start, "offering_start")
     price = _positive_price(body.subscription_price, "subscription_price")
     await _require_free_offering_start(db, body.offering_start)
@@ -516,13 +577,20 @@ async def create_offering(body: OfferingIn, db: AsyncSession = Depends(get_db)) 
         offering_start=body.offering_start, subscription_price=price, notes=body.notes
     )
     db.add(offering)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(offering)
+    batch.label = f"Added the offering starting {long_day(offering.offering_start)}"
+    response.headers.update(batch_header(await batch.commit()))
     return offering
 
 
 @router.patch("/offerings/{offering_id}", response_model=OfferingOut)
 async def update_offering(
-    offering_id: IdPath, body: OfferingUpdate, db: AsyncSession = Depends(get_db)
+    offering_id: IdPath,
+    body: OfferingUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> EsppOffering:
     offering = await _get_offering(db, offering_id)
     provided = body.model_dump(exclude_unset=True)
@@ -533,19 +601,28 @@ async def update_offering(
     if start != offering.offering_start:
         await _require_free_offering_start(db, start)
     # Every raise is behind us — mutate only now (update_lot's posture).
+    before = row_image(offering)
     offering.offering_start = start
     offering.subscription_price = price
     if "notes" in provided:
         offering.notes = provided["notes"]  # explicit null clears (nullable column)
-    await db.commit()
+    batch.record_update(offering, before)
+    batch.label = f"Edited the offering starting {long_day(offering.offering_start)}"
+    response.headers.update(batch_header(await batch.commit()))
     return offering
 
 
 @router.delete("/offerings/{offering_id}", status_code=204)
-async def delete_offering(offering_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
-    await db.delete(await _get_offering(db, offering_id))
-    await db.commit()
-    return Response(status_code=204)
+async def delete_offering(
+    offering_id: IdPath,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    offering = await _get_offering(db, offering_id)
+    batch.record_delete(offering)
+    batch.label = f"Deleted the offering starting {long_day(offering.offering_start)}"
+    await db.delete(offering)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- modeler ---

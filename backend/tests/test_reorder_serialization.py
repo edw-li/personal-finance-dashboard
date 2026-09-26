@@ -143,11 +143,13 @@ async def test_a_card_created_during_a_reorder_lands_after_it_not_on_its_numbers
     w, x, y, z = (row.id for row in rows)
 
     async def reverse(session):
-        return await reorder_credit_cards(OrderIn(ids=[z, y, x, w]), session)
+        batch = ChangeBatch(session, actor="tab 1")
+        return await reorder_credit_cards(OrderIn(ids=[z, y, x, w]), Response(), session, batch)
 
     async def create(session):
         body = CreditCardIn(name="New", rewards_currency="points")
-        return await create_credit_card(body, session)
+        batch = ChangeBatch(session, actor="tab 2")
+        return await create_credit_card(body, Response(), session, batch)
 
     _, created = await race(engine, reverse, create)
     stored = await orders(db, CreditCard, CreditCard.sort_order)

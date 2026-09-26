@@ -19,6 +19,12 @@ The third is /vesting-schedule (spec §4), the whole Comp card set in one comput
 It is a pure READ over stored rows, so it degrades where the CRUD half raises: an unpriced
 vest, an unconfigured ticker, even a hand-edited grant `_validated_grant` would refuse all
 come back 200 with a warning.
+
+Every write is change-logged (2026-09-25 polish spec §6.1): one ChangeBatch per request, an
+Activity label, and the X-Change-Batch header, so the Activity card — and the page's own
+toast — can undo a create, an edit or a delete exactly, id included. Undoing a delete after a
+new row took the same focal year or grant label refuses with the replay sentence: the unique
+index is the conflict, and an undo never overwrites the newer row.
 """
 
 from bisect import bisect_right
@@ -54,6 +60,7 @@ from app.schemas.comp import (
     VestOut,
 )
 from app.services import clock, rsu_vesting
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.comp_calc import metrics
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -204,7 +211,12 @@ async def list_events(db: AsyncSession = Depends(get_db)) -> list[CompEventOut]:
 
 
 @router.post("/events", response_model=CompEventOut, status_code=201)
-async def create_event(body: CompEventIn, db: AsyncSession = Depends(get_db)) -> CompEventOut:
+async def create_event(
+    body: CompEventIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> CompEventOut:
     fields = _validated_event(
         focal_year=body.focal_year,
         current_base=body.current_base,
@@ -217,13 +229,20 @@ async def create_event(body: CompEventIn, db: AsyncSession = Depends(get_db)) ->
     await _require_free_focal_year(db, fields["focal_year"])
     event = CompEvent(notes=body.notes, **fields)
     db.add(event)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(event)
+    batch.label = f"Added the {event.focal_year} comp event"
+    response.headers.update(batch_header(await batch.commit()))
     return _event_out(event)
 
 
 @router.patch("/events/{event_id}", response_model=CompEventOut)
 async def update_event(
-    event_id: IdPath, body: CompEventUpdate, db: AsyncSession = Depends(get_db)
+    event_id: IdPath,
+    body: CompEventUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CompEventOut:
     event = await _get_event(db, event_id)
     provided = body.model_dump(exclude_unset=True)
@@ -240,19 +259,28 @@ async def update_event(
         await _require_free_focal_year(db, fields["focal_year"])
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
+    before = row_image(event)
     for name, value in fields.items():
         setattr(event, name, value)
     if "notes" in provided:
         event.notes = provided["notes"]
-    await db.commit()
+    batch.record_update(event, before)
+    batch.label = f"Edited the {event.focal_year} comp event"
+    response.headers.update(batch_header(await batch.commit()))
     return _event_out(event)
 
 
 @router.delete("/events/{event_id}", status_code=204)
-async def delete_event(event_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
-    await db.delete(await _get_event(db, event_id))
-    await db.commit()
-    return Response(status_code=204)
+async def delete_event(
+    event_id: IdPath,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    event = await _get_event(db, event_id)
+    batch.record_delete(event)
+    batch.label = f"Deleted the {event.focal_year} comp event"
+    await db.delete(event)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- RSU grants: stored parameters in, computed vest schedule out (2026-08-21 spec §3).
@@ -373,7 +401,12 @@ async def list_grants(db: AsyncSession = Depends(get_db)) -> list[RsuGrantOut]:
 
 
 @router.post("/rsu-grants", response_model=RsuGrantOut, status_code=201)
-async def create_grant(body: RsuGrantIn, db: AsyncSession = Depends(get_db)) -> RsuGrantOut:
+async def create_grant(
+    body: RsuGrantIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> RsuGrantOut:
     fields = _validated_grant(
         kind=body.kind,
         label=body.label,
@@ -390,13 +423,20 @@ async def create_grant(body: RsuGrantIn, db: AsyncSession = Depends(get_db)) -> 
     await _require_free_label(db, fields["label"])
     grant = RsuGrant(notes=body.notes, **fields)
     db.add(grant)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(grant)
+    batch.label = f"Added RSU grant {grant.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return _grant_out(grant, clock.product_today())
 
 
 @router.patch("/rsu-grants/{grant_id}", response_model=RsuGrantOut)
 async def update_grant(
-    grant_id: IdPath, body: RsuGrantUpdate, db: AsyncSession = Depends(get_db)
+    grant_id: IdPath,
+    body: RsuGrantUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> RsuGrantOut:
     grant = await _get_grant(db, grant_id)
     provided = body.model_dump(exclude_unset=True)
@@ -414,19 +454,28 @@ async def update_grant(
     if fields["label"] != grant.label:
         await _require_free_label(db, fields["label"])
     # Every raise is behind us — mutate only now (see update_event).
+    before = row_image(grant)
     for name, value in fields.items():
         setattr(grant, name, value)
     if "notes" in provided:
         grant.notes = provided["notes"]
-    await db.commit()
+    batch.record_update(grant, before)
+    batch.label = f"Edited RSU grant {grant.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return _grant_out(grant, clock.product_today())
 
 
 @router.delete("/rsu-grants/{grant_id}", status_code=204)
-async def delete_grant(grant_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
-    await db.delete(await _get_grant(db, grant_id))
-    await db.commit()
-    return Response(status_code=204)
+async def delete_grant(
+    grant_id: IdPath,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    grant = await _get_grant(db, grant_id)
+    batch.record_delete(grant)
+    batch.label = f"Deleted RSU grant {grant.label}"
+    await db.delete(grant)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- the vest calendar: grants + focal history + prices, computed into one payload (spec §4).
