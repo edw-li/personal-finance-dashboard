@@ -116,6 +116,25 @@ export function judge(row) {
   })
 }
 
+/** The approved mixed-row exceptions are deliberately structural and named. A missing
+ * second line elsewhere must fail even when zero lines would satisfy a <=1 line limit. */
+export function secondLineCoverage(row) {
+  const real = row.tiles.filter(tile => !tile.ghost)
+  const bare = real.filter(tile => tile.deltaLines === 0)
+  const withDelta = real.filter(tile => tile.deltaLines > 0)
+  const walletBareLabels = ['Total credit line', 'Optimal rewards (est.)', 'Net after fees (est.)', 'Active cards']
+  const walletException = real.length === 5 && withDelta.length === 1 && withDelta[0].label === 'Household wallet advantage'
+    && bare.length === 4 && walletBareLabels.every(label => bare.some(tile => tile.label === label))
+  const unexpectedBare = withDelta.length === 0 || walletException ? [] : bare.filter(tile => tile.label !== 'Realized gains')
+  return {
+    ok: unexpectedBare.length === 0,
+    bare: bare.map(tile => tile.label), withDelta: withDelta.map(tile => tile.label),
+    unexpectedBare: unexpectedBare.map(tile => tile.label),
+    exception: walletException ? 'L2 retained household-wallet advantage beside four bare totals' : bare.some(tile => tile.label === 'Realized gains') && withDelta.length > 0 ? 'Spec §4.4 Realized gains' : null,
+    maxContentGap: Math.max(0, ...real.filter(tile => tile.label !== 'Realized gains').map(tile => tile.contentGap ?? 0)),
+  }
+}
+
 /** Open a real detail panel and request its supported dock mode. At <1290px the
  * shell deliberately uses an overlay; ESPP's hint-only tiles use the Assistant panel. */
 export async function openDock(page) {

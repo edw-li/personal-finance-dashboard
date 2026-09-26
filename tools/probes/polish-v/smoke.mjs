@@ -1,9 +1,9 @@
 // Real-browser acceptance for polish spec §2–§6/§9. See README.md for the fenced stack contract.
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { baseline, sizes, themes, routes, pairs } from './baseline.mjs'
+import { baseline, sizes, themes, routes, pairs, requiredSecondLines } from './baseline.mjs'
 import { configuration, launch, open, settle, sleep, api } from './harness.mjs'
-import { tileRows, judge, openDock, slowApi } from './tiles.mjs'
+import { tileRows, judge, secondLineCoverage, openDock, slowApi } from './tiles.mjs'
 import * as measure from './measurements.mjs'
 import { readEvidence } from './evidence.mjs'
 
@@ -88,6 +88,8 @@ async function runCase(group, options, action) {
 
 function assertTiles(id, rows, oneLine = false) {
   for (const [index, row] of rows.entries()) {
+    const secondLines = secondLineCoverage(row)
+    check(id, `Tile row ${index + 1}: mixed tiles have real second lines`, secondLines.ok, secondLines, { blankBand: baseline.mixedTileBlankBand, bareTilesBySurface: baseline.mixedBareTiles })
     const counts = row.layout.split('+').map(Number)
     const lastFull = row.tiles.length === 5 && counts.join('+') === '2+2+1' && row.tiles.at(-1).w >= row.w - 2
     check(id, `Tile row ${index + 1} has no orphan fifth tile`, row.tiles.length !== 5 || ['5', '3+2'].includes(row.layout) || lastFull, { layout: row.layout, width: row.w, lastTileWidth: row.tiles.at(-1)?.w })
@@ -289,6 +291,16 @@ async function walkGroup(options) {
     }
     const rows = await tileRows(page)
     assertTiles(id, rows, options.width === 1440 && ['overview', 'networth', 'spending'].includes(name))
+    const expectedSecondLines = name === 'taxes'
+      ? (rows.some(row => row.tiles.some(tile => tile.label === 'Projected tax'))
+          ? ['Projected tax'] : ['Federal balance', 'California balance', 'Payroll taxes'])
+      : requiredSecondLines[name]
+    if (expectedSecondLines) {
+      const tiles = rows.flatMap(row => row.tiles).filter(tile => expectedSecondLines.includes(tile.label))
+      check(id, 'Named §4.4 tiles render real second lines (or the current withholding split)', expectedSecondLines.every(label => tiles.some(tile => tile.label === label && tile.deltaLines > 0 && !!tile.delta?.trim())),
+        { expected: expectedSecondLines, tiles: tiles.map(({ label, delta, deltaLines, contentGap }) => ({ label, delta, deltaLines, contentGap })), withholdingVariant: name === 'taxes' ? expectedSecondLines.length === 1 ? 'combined' : 'jurisdiction split; Projected tax is not rendered' : undefined },
+        { bareTiles: baseline.mixedBareTiles[name === 'taxes' ? 'withholding' : name], blankBand: baseline.mixedTileBlankBand })
+    }
     const expectedRows = { overview: 1, networth: 1, spending: 1, projection: 1, calendar: 1, portfolio: 1, espp: 1, paycheck: 1, cards: 1, taxes: 1, 'tax-whatif': 1, 'tax-whatif-sale': 1, vesting: 1, income: 1, 'update-review': 1 }
     if (expectedRows[name]) check(id, 'Expected real tile row arrived (absence is a coverage failure)', rows.length >= expectedRows[name] && rows.every(row => row.tiles.every(tile => !tile.ghost)), rows.map(row => ({ layout: row.layout, height: row.h })))
     if (name.startsWith('tax-whatif')) check(id, 'Computed What-if result tiles are present', await page.locator('.whatif-result .kpi-row .stat-tile').count() >= (name === 'tax-whatif-sale' ? 4 : 3), { requested: url, tiles: await page.locator('.whatif-result .kpi-row .stat-tile').count() })
@@ -365,8 +377,12 @@ async function monthsGroup(options) {
         const row = (await tileRows(page))[0]
         const selected = await page.locator('.month-chip2[aria-pressed="true"]').getAttribute('aria-label')
         check(id, `${route}: requested ${month} is the selected ribbon month`, !!selected && selected.startsWith(expectedLabel + ' '), { requested: month, selected, url: page.url() })
-        observed.push({ month, selected, rendered, height: row?.h ?? null, lines: row ? judge(row) : null })
+        observed.push({ month, selected, rendered, height: row?.h ?? null, lines: row ? judge(row) : null,
+          secondLines: row ? secondLineCoverage(row) : null,
+          namedSecondLines: route !== '/spending' || requiredSecondLines.spending.every(label => row?.tiles.some(tile => tile.label === label && tile.deltaLines > 0 && !!tile.delta?.trim())),
+        })
       }
+      check(id, `${route}: every offered month's mixed and named second lines remain present`, observed.length > 1 && observed.every(month => month.secondLines?.ok && month.namedSecondLines), observed.map(({ month, secondLines, namedSecondLines }) => ({ month, secondLines, namedSecondLines })), { blankBand: baseline.mixedTileBlankBand, bareTiles: route === '/spending' ? baseline.mixedBareTiles.spending : undefined })
       if (options.width === 1440) check(id, `${route}: every offered month's deltas fit one line at 1440`, observed.length > 1 && observed.every(month => month.lines?.length > 0 && month.lines.every(line => line.maxDeltaLines <= 1)), observed.map(month => ({ month: month.month, lines: month.lines })))
       check(id, `${route}: every offered month has stable tile-row height`, observed.length > 1 && observed.every(o => o.height !== null) && measure.spread(observed.map(o => o.height)) <= 1, observed, route === '/net-worth' ? baseline.netWorthMonthHeights : undefined)
     }

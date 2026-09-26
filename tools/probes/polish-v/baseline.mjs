@@ -17,6 +17,10 @@ export const baseline = {
   paceMeterEndSpread: 27,
   netWorthMonthHeights: [145, 111, 128],
   badgeValueOffset: [17, 19],
+  mixedTileBlankBand: [35, 58],
+  // Measured-before table in the L2 as-built record, line2382; Portfolio includes
+  // Realized gains, which the approved scope explicitly leaves bare.
+  mixedBareTiles: { spending: 2, projection: 1, calendar: 2, espp: 2, portfolio: 2, withholding: 1, whatif: [3, 1], review: 1 },
   calendarTileBottomSpread: 22,
   settingsEditFormTop: [-54, -280],
   cardEditFormTop: -186,
@@ -28,6 +32,16 @@ export const baseline = {
     tiles: ['OU-03', 'NWSP-04', 'PCC-12', 'PE-02', 'PE-09', 'MOTION-01', 'TPC-18'],
     feedback: ['SGS-04', 'SGS-05', 'WF-04', 'WF-05', 'WF-06', 'PCC-19', 'TPC-06'],
   },
+}
+
+// Named §4.4 additions. Taxes uses a combined or jurisdiction-split withholding row;
+// smoke records and verifies the branch that the copied book actually renders.
+export const requiredSecondLines = {
+  spending: ['Savings rate — cash', 'Net pay'],
+  projection: ['FI ratio'],
+  calendar: ['Scheduled in', 'Scheduled out'],
+  espp: ['Market value', 'Cost basis'],
+  portfolio: ['Cost basis'],
 }
 
 export const sizes = [[1280, 800], [1366, 768], [1440, 900], [1536, 864], [1920, 1080]]
