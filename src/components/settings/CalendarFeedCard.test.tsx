@@ -12,6 +12,7 @@ import { createFeedToken, fetchFeedTokens, revokeFeedToken } from '../../api/cal
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import ToastProvider from '../ToastProvider'
 import CalendarFeedCard from './CalendarFeedCard'
+import { ConfirmProvider } from '../feedback/confirm'
 
 const SETTINGS = {
   swr_pct: '0.040000',
@@ -23,9 +24,9 @@ const SETTINGS = {
 
 function mount() {
   return render(
-    <ToastProvider>
+    <ToastProvider><ConfirmProvider>
         <CalendarFeedCard />
-    </ToastProvider>,
+    </ConfirmProvider></ToastProvider>,
   )
 }
 
@@ -86,6 +87,9 @@ describe('CalendarFeedCard', () => {
     mount()
     await screen.findByText('phone')
     fireEvent.click(screen.getByRole('button', { name: 'Revoke the phone link' }))
+    expect((await screen.findByRole('alertdialog')).textContent).toContain("Calendars using it stop updating — this can't be undone")
+    expect(revokeFeedToken).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke link' }))
     await waitFor(() => expect(revokeFeedToken).toHaveBeenCalledWith(1))
     await waitFor(() => expect(fetchFeedTokens).toHaveBeenCalledTimes(2))
   })

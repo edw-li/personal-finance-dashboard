@@ -1,10 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { HealthCheck, HealthOut } from '../../types/api'
 import ToastProvider from '../ToastProvider'
 import HealthCard from './HealthCard'
+import { ConfirmProvider } from '../feedback/confirm'
 
 vi.mock('../../api/lifecycle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/lifecycle')>()),
@@ -43,9 +44,9 @@ function health(checks: HealthCheck[]): HealthOut {
 function mount() {
   return render(
     <MemoryRouter>
-      <ToastProvider>
+      <ToastProvider><ConfirmProvider>
         <HealthCard />
-      </ToastProvider>
+      </ConfirmProvider></ToastProvider>
     </MemoryRouter>,
   )
 }
@@ -83,7 +84,7 @@ describe('HealthCard', () => {
     mount()
     fireEvent.click(await screen.findByRole('button', { name: 'Delete Sep 2026' }))
     expect(deleteSpendingMonth).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Sep 2026?' }))
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete Sep 2026' }))
     await waitFor(() => expect(deleteSpendingMonth).toHaveBeenCalledWith('2026-09-01', { source: 'repair' }))
     expect(await screen.findByText("Deleted Sep 2026's zero-filled rows")).toBeTruthy()
     await waitFor(() => expect(fetchHealth).toHaveBeenCalledTimes(2))
@@ -104,7 +105,7 @@ describe('HealthCard', () => {
     vi.mocked(deleteSpendingMonth).mockRejectedValue(new ApiError('no spending or net pay recorded for this month', 404))
     mount()
     fireEvent.click(await screen.findByRole('button', { name: 'Delete Sep 2026' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Sep 2026?' }))
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete Sep 2026' }))
     // By TEXT, then by role: ToastProvider keeps an always-mounted assertive region, so
     // findByRole('alert') would resolve on that empty region before the banner arrives.
     const banner = (await screen.findByText('no spending or net pay recorded for this month'))

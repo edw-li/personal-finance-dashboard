@@ -617,3 +617,6 @@
 #price-refresh .system-facts { grid-template-columns: 1fr; }
 #price-refresh .system-fact { display: block; }
 .system-fact dd .system-overdue { color: var(--negative); }
+
+.household-rename { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.activity-report { flex-basis: 100%; min-width: 0; }

@@ -6,6 +6,8 @@ import { deleteSpendingMonth } from '../../api/spending'
 import type { HealthCheck } from '../../types/api'
 import { formatMonth } from '../../utils/format'
 import InfoHint from '../InfoHint'
+import { useConfirm } from '../feedback/confirm'
+import BusyButton from '../feedback/BusyButton'
 import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import '../panels.css'
@@ -27,18 +29,18 @@ export default function HealthCard() {
   const [checks, setChecks] = useState<HealthCheck[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [armed, setArmed] = useState<string | null>(null) // `${check.id}:${month}` awaiting its second click
   const seqRef = useRef(0)
   const toast = useToast()
+  const ask = useConfirm()
+  const cardRef = useRef<HTMLElement>(null)
 
   const load = (initial = false) => {
     const seq = ++seqRef.current
-    warmSource(initial)(WARM.health, fetchHealth)
+    return warmSource(initial)(WARM.health, fetchHealth)
       .then((out) => {
         if (seq !== seqRef.current) return
         setChecks(out.checks.filter((check) => check.severity !== 'ok'))
         setError(null)
-        setArmed(null)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
@@ -51,12 +53,13 @@ export default function HealthCard() {
     // mount-only (house idiom)
   }, [])
 
-  const repairMonth = (check: HealthCheck, month: string) => {
-    const key = `${check.id}:${month}`
-    if (armed !== key) {
-      setArmed(key)
-      return
-    }
+  const repairMonth = async (month: string, anchor: HTMLElement) => {
+    if (!await ask({
+      anchor,
+      title: `Delete ${formatMonth(month)}'s zero-filled rows?`,
+      body: 'Removes the empty spending and take-home rows for this month. You can Undo this repair.',
+      confirmLabel: `Delete ${formatMonth(month)}`,
+    })) return
     setBusy(true)
     setError(null)
     deleteSpendingMonth(month, { source: 'repair' })
@@ -72,13 +75,13 @@ export default function HealthCard() {
                     void undoBatch(batchId)
                       .then(() => {
                         toast.success(`Undone — ${formatMonth(month)}'s rows are back`)
-                        load()
+                        void load().then(() => cardRef.current?.focus())
                       })
                       .catch((err: unknown) => toast.error(message(err, 'Undo failed'))),
                 },
               },
         )
-        load()
+        void load().then(() => cardRef.current?.focus())
       })
       .catch((err: unknown) => setError(message(err, 'Repair failed.')))
       .finally(() => setBusy(false))
@@ -90,7 +93,7 @@ export default function HealthCard() {
     createSnapshot()
       .then((entry) => {
         toast.success(`Snapshot written — ${entry.name}`)
-        load()
+        void load().then(() => cardRef.current?.focus())
       })
       .catch((err: unknown) => setError(message(err, 'Snapshot failed.')))
       .finally(() => setBusy(false))
@@ -108,32 +111,31 @@ export default function HealthCard() {
     }
     if (fix.action === 'delete_spending_month') {
       return check.months.map((month) => {
-        const key = `${check.id}:${month}`
         return (
-          <button
+          <BusyButton
             key={month}
             type="button"
-            className={`button${armed === key ? ' danger-button' : ''}`}
+            className="button danger-button"
             disabled={busy}
-            onClick={() => repairMonth(check, month)}
+            onClick={(event) => void repairMonth(month, event.currentTarget)}
           >
-            {armed === key ? `Delete ${formatMonth(month)}?` : `Delete ${formatMonth(month)}`}
-          </button>
+            {`Delete ${formatMonth(month)}`}
+          </BusyButton>
         )
       })
     }
     if (fix.action === 'snapshot_now') {
       return (
-        <button type="button" className="button" disabled={busy} onClick={snapshotNow}>
+        <BusyButton type="button" className="button" disabled={busy} onClick={snapshotNow}>
           {fix.label}
-        </button>
+        </BusyButton>
       )
     }
     return null
   }
 
   return (
-    <section className="card span-6" id="health" role="region" aria-label="Data health">
+    <section ref={cardRef} tabIndex={-1} className="card span-6" id="health" role="region" aria-label="Data health">
       <h2 className="eyebrow">
         Data health
         {/* The §199A check went with the stored itemized total (2026-09-11 spec §1.4): a

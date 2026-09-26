@@ -14,6 +14,7 @@ import type {
 } from '../types/api'
 import SettingsPage from './SettingsPage'
 import ToastProvider from '../components/ToastProvider'
+import { ConfirmProvider } from '../components/feedback/confirm'
 import { expectInDocumentOrder } from '../testing/domOrder'
 import { resetWarmForTests } from '../components/settings/settingsPrefetch'
 
@@ -262,7 +263,6 @@ const pick = (file: File) => fireEvent.change(fileBox(), { target: { files: [fil
 
 // Default "yes" keeps jsdom's unimplemented window.confirm out of every other test in the
 // file; only the decline test flips it (BracketsEditor.test.tsx's arrangement).
-const confirmSpy = vi.spyOn(window, 'confirm')
 
 const ME: PersonOut = { id: 1, name: 'Me', is_primary: true }
 const CHECKING: AccountOut = {
@@ -334,7 +334,6 @@ beforeEach(() => {
   // Empty answers: neither card adds a row, a banner or a button to this file's queries.
   vi.mocked(fetchActivity).mockResolvedValue({ entries: [], next_before: null })
   vi.mocked(fetchHealth).mockResolvedValue({ checked_at: '2026-09-04T09:00:00+00:00', checks: [] })
-  confirmSpy.mockReturnValue(true)
 })
 
 afterEach(() => {
@@ -348,7 +347,7 @@ afterEach(() => {
 const renderPage = (section = 'household') =>
   render(
     <MemoryRouter initialEntries={[`/settings?section=${section}`]}>
-      <SettingsPage />
+      <ConfirmProvider><SettingsPage /></ConfirmProvider>
     </MemoryRouter>,
   )
 
@@ -665,7 +664,6 @@ describe('SettingsPage — xlsx import', () => {
 
   it('spends no request when the clobber warning is declined', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
-    confirmSpy.mockReturnValue(false)
     renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
@@ -673,8 +671,10 @@ describe('SettingsPage — xlsx import', () => {
     fireEvent.click(dryButton())
     await waitFor(() => expect(applyButton().disabled).toBe(false))
     fireEvent.click(applyButton())
+    expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel', exact: true }))
 
-    expect(confirmSpy).toHaveBeenCalledWith(CLOBBER_WARNING)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
     // One call: the dry run. "No" means nothing was uploaded a second time.
     expect(vi.mocked(importXlsx)).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Applied.')).toBeNull()
@@ -692,10 +692,12 @@ describe('SettingsPage — xlsx import', () => {
     fireEvent.click(dryButton())
     await waitFor(() => expect(applyButton().disabled).toBe(false))
     fireEvent.click(applyButton())
+    expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook', exact: true }))
 
     // The sentence names the one thing a dry run cannot show: sheet-covered years win, so
     // taxes work done in the UI for those years is gone after this.
-    expect(confirmSpy).toHaveBeenCalledWith(CLOBBER_WARNING)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
     await waitFor(() => expect(vi.mocked(importXlsx)).toHaveBeenCalledTimes(2))
     expect(vi.mocked(importXlsx).mock.calls[1]).toEqual([file, false])
 
@@ -715,7 +717,7 @@ describe('SettingsPage — xlsx import', () => {
     render(
       <MemoryRouter initialEntries={['/settings?section=data']}>
         <ToastProvider>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </ToastProvider>
       </MemoryRouter>,
     )
@@ -735,6 +737,8 @@ describe('SettingsPage — xlsx import', () => {
       },
     ])
     fireEvent.click(applyButton())
+    expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook', exact: true }))
     expect(
       await screen.findByText(/^Workbook imported\. The data it replaced is saved as a restore point \(/),
     ).toBeTruthy()
@@ -788,6 +792,8 @@ describe('SettingsPage — xlsx import', () => {
     fireEvent.click(dryButton())
     await waitFor(() => expect(applyButton().disabled).toBe(false))
     fireEvent.click(applyButton())
+    expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook', exact: true }))
 
     expect(await screen.findByText('import failed: database is locked')).toBeTruthy()
     // A failed APPLY may still have written — the import is not one transaction. The
@@ -1069,7 +1075,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#limits']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       // waitFor from the first tick rather than findBy-then-assert: the ring lives for
@@ -1106,7 +1112,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#sec-planning']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
@@ -1130,7 +1136,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#calendar']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       await waitFor(() =>
@@ -1185,7 +1191,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#calendar']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       await waitFor(() =>
@@ -1222,7 +1228,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
       <MemoryRouter
         initialEntries={[`/settings?restore=${encodeURIComponent(fresh.name)}#restore`]}
       >
-        <SettingsPage />
+        <ConfirmProvider><SettingsPage /></ConfirmProvider>
       </MemoryRouter>,
     )
     // The ring lands as soon as the cards exist; the arrival is still waiting for the list.
@@ -1248,7 +1254,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
   it('takes the ring off the card it leaves when the anchor moves', async () => {
     render(
       <MemoryRouter initialEntries={['/settings#limits']}>
-        <SettingsPage />
+        <ConfirmProvider><SettingsPage /></ConfirmProvider>
         <AnchorProbe to="/settings#backups" />
       </MemoryRouter>,
     )
@@ -1303,7 +1309,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#limits']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       // waitFor from the first tick rather than findBy-then-assert: the ring lives for

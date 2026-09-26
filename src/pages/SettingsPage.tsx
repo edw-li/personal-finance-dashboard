@@ -6,6 +6,8 @@ import { ApiError, describeError } from '../api/client'
 import { importXlsx } from '../api/importer'
 import { fetchAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
+import { useConfirm } from '../components/feedback/confirm'
+import { useLatest } from '../components/reorder/useLatest'
 import { SaveButton } from '../components/feedback/SaveButton'
 import { SaveStatus } from '../components/feedback/SaveStatus'
 import { useSaveState } from '../components/feedback/useSaveState'
@@ -65,6 +67,8 @@ export default function SettingsPage() {
   const [people, setPeople] = useState<PersonOut[]>([])
   const seqRef = useRef(0)
   const toast = useToast()
+  const ask = useConfirm()
+  const latestImport = useLatest({ file, report })
   const navigate = useNavigate()
   // Bumped whenever an apply may have written a restore point (2026-09-23 spec §B3): the Backups
   // and Restore cards each hold their own reading of the volume, and both are stale the moment an
@@ -267,18 +271,17 @@ export default function SettingsPage() {
       })
   }
 
-  const applyImport = () => {
-    // The one thing a dry run cannot show, said before the write: within a year the SHEET
-    // wins, so taxes work done in the UI for sheet-covered years is about to be replaced. And
-    // the honest way back (2026-09-23 spec §B3): the apply saves a restore point first, which
-    // the Restore card lists — "This cannot be undone" had stopped being true.
-    const ok = window.confirm(
-      'Apply this workbook to the live database? Sheet values overwrite imported rows — ' +
-        'taxes inputs and brackets you edited in the UI for sheet-covered years WILL be ' +
-        'reset to the sheet. A restore point of your current data is saved first — you can ' +
-        'roll back from Settings › Data › Restore.',
-    )
-    if (!ok) return
+  const applyImport = async (anchor: HTMLElement) => {
+    if (!canApply) return
+    const chosen = file
+    const checked = report
+    const accepted = await ask({
+      anchor,
+      title: 'Apply this workbook to the live database?',
+      body: 'Sheet values overwrite imported rows — taxes inputs and brackets you edited in the UI for sheet-covered years WILL be reset to the sheet. A restore point of your current data is saved first — you can roll back from Settings › Data › Restore.',
+      confirmLabel: 'Apply workbook',
+    })
+    if (!accepted || latestImport.current.file !== chosen || latestImport.current.report !== checked) return
     runImport(false)
   }
 
@@ -429,7 +432,7 @@ export default function SettingsPage() {
                       type="button"
                       className="button button-primary"
                       disabled={!canApply}
-                      onClick={applyImport}
+                      onClick={(event) => void applyImport(event.currentTarget)}
                     >
                       {importBusy === 'apply' ? 'Applying…' : 'Apply import'}
                     </button>

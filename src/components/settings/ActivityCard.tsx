@@ -4,6 +4,7 @@ import { fetchActivity, fetchActivityRun, undoBatch } from '../../api/lifecycle'
 import type { ActivityEntry, ActivityRun, ActivityRunDetail, ImportReport, RestoreReport } from '../../types/api'
 import { formatBytes, formatDateTime } from '../../utils/format'
 import InfoHint from '../InfoHint'
+import BusyButton from '../feedback/BusyButton'
 import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import ImportReportView from './ImportReportView'
@@ -110,6 +111,7 @@ export default function ActivityCard() {
   }
 
   const viewReport = (runId: number) => {
+    if (detail?.run.run_id === runId) { setDetail(null); return }
     setBusy(true)
     fetchActivityRun(runId)
       .then(setDetail)
@@ -121,7 +123,7 @@ export default function ActivityCard() {
     <section className="card span-12" id="activity" role="region" aria-label="Activity">
       <h2 className="eyebrow">
         Activity
-        <InfoHint text="Every money-bearing change — month saves and deletes, account, category and budget edits, imports, restores, snapshots — newest first. Undo replays one change in reverse while nothing later touched the same rows; imports and restores are summaries and are undone by restoring a snapshot instead." />
+        <InfoHint text="Every money-bearing change — month saves and deletes; account, category and budget edits; portfolio transactions, dividends and securities; credit cards and reward categories, multipliers, credits and limits; ESPP lots, offerings and periods; paycheck profiles; comp events and RSU grants; calendar events and overrides; reorders; imports, restores and snapshots — newest first. Undo replays one change in reverse while nothing later touched the same rows; imports and restores are summaries and are undone by restoring a snapshot instead." />
       </h2>
       <FeedBanner error={error} retry={() => load()} retryLabel="Retry loading activity" />
       {entries === null && error === null && <SettingsGhost height={487} />}
@@ -143,14 +145,14 @@ export default function ActivityCard() {
                   <span className="activity-label">{entry.label}</span>
                   {entry.undone_by !== null && <span className="settings-note">undone</span>}
                   {entry.undoable && (
-                    <button
+                    <BusyButton
                       type="button"
                       className={`button${armed === entry.batch_id ? ' danger-button' : ''}`}
                       disabled={busy}
                       onClick={() => undo(entry.batch_id, entry.label)}
                     >
                       {armed === entry.batch_id ? 'Undo?' : 'Undo'}
-                    </button>
+                    </BusyButton>
                   )}
                 </li>
               ) : (
@@ -159,9 +161,14 @@ export default function ActivityCard() {
                   <span className={`badge activity-source activity-source-run${entry.ok ? '' : ' is-failed'}`}>run</span>
                   <span className="activity-label">{runLine(entry)}</span>
                   {entry.has_report && (
-                    <button type="button" className="button" disabled={busy} onClick={() => viewReport(entry.run_id)}>
-                      View report
-                    </button>
+                    <BusyButton type="button" className="button" inert={busy} aria-expanded={detail?.run.run_id === entry.run_id} aria-controls={`activity-report-${entry.run_id}`} onClick={() => viewReport(entry.run_id)}>
+                      {detail?.run.run_id === entry.run_id ? 'Hide report' : 'View report'}
+                    </BusyButton>
+                  )}
+                  {detail?.run.run_id === entry.run_id && (
+                    <div className="activity-report" id={`activity-report-${entry.run_id}`}>
+                      <ReportBody detail={detail} />
+                    </div>
                   )}
                 </li>
               ),
@@ -169,22 +176,11 @@ export default function ActivityCard() {
           </ul>
         )}
         {nextBefore !== null && (
-          <button type="button" className="button" disabled={busy} onClick={loadMore}>
+          <BusyButton type="button" className="button" disabled={busy} onClick={loadMore}>
             Load more
-          </button>
+          </BusyButton>
         )}
       </div>
-      {detail !== null && (
-        <div className="activity-report">
-          <div className="settings-card-actions">
-            <span className="eyebrow">{runLine(detail.run)}</span>
-            <button type="button" className="button" onClick={() => setDetail(null)}>
-              Close report
-            </button>
-          </div>
-          <ReportBody detail={detail} />
-        </div>
-      )}
     </section>
   )
 }

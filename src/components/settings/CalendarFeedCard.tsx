@@ -5,6 +5,8 @@ import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import type { AppSettingsOut, FeedTokenOut } from '../../types/api'
 import { formatDate, formatDateTime } from '../../utils/format'
 import InfoHint from '../InfoHint'
+import { useConfirm } from '../feedback/confirm'
+import BusyButton from '../feedback/BusyButton'
 import { SaveButton } from '../feedback/SaveButton'
 import { SaveStatus } from '../feedback/SaveStatus'
 import { useSaveState } from '../feedback/useSaveState'
@@ -40,18 +42,22 @@ export default function CalendarFeedCard() {
   const [busy, setBusy] = useState(false)
   const seqRef = useRef(0)
   const toast = useToast()
+  const ask = useConfirm()
+  const cardRef = useRef<HTMLElement>(null)
 
   // A plain function over stable setters, called from the effect and from Retry (the
   // LimitsCard idiom — a useCallback here trips preserve-manual-memoization).
-  const load = (initial = false) => {
+  const load = (initial = false, seedDay = true) => {
     const seq = ++seqRef.current
     const source = warmSource(initial)
-    Promise.all([source(WARM.feedTokens, fetchFeedTokens), source(WARM.appSettings, fetchAppSettings)])
+    return Promise.all([source(WARM.feedTokens, fetchFeedTokens), source(WARM.appSettings, fetchAppSettings)])
       .then(([list, appSettings]) => {
         if (seq !== seqRef.current) return
         setTokens(list)
-        setSettings(appSettings)
-        setDayBox(String(appSettings.calendar_update_due_day))
+        if (seedDay) {
+          setSettings(appSettings)
+          setDayBox(String(appSettings.calendar_update_due_day))
+        }
         setError(null)
       })
       .catch((err: unknown) => {
@@ -89,17 +95,24 @@ export default function CalendarFeedCard() {
 
   const dismissFresh = () => {
     setFresh(null)
-    load()
+    load(false, false)
   }
 
-  const revoke = (token: FeedTokenOut) => {
+  const revoke = async (token: FeedTokenOut, anchor: HTMLElement) => {
+    if (!await ask({
+      anchor,
+      title: `Revoke the ${token.label} feed link?`,
+      body: "Calendars using it stop updating — this can't be undone",
+      confirmLabel: 'Revoke link',
+    })) return
     setBusy(true)
     setError(null)
     // No Undo: the plaintext is gone for good, which is the point of revoking.
     revokeFeedToken(token.id)
       .then(() => {
         toast.success(`Revoked the ${token.label} link — calendars using it will stop updating`)
-        load()
+        void load(false, false)
+        cardRef.current?.querySelector<HTMLInputElement>('input')?.focus()
       })
       .catch((err: unknown) => setError(message(err, 'Could not revoke the link.')))
       .finally(() => setBusy(false))
@@ -120,7 +133,7 @@ export default function CalendarFeedCard() {
   }
 
   return (
-    <section className="card span-12" id="calendar" role="region" aria-label="Calendar feed">
+    <section ref={cardRef} className="card span-12" id="calendar" role="region" aria-label="Calendar feed">
       <h2 className="eyebrow">
         Calendar feed
         <InfoHint text="Subscribe your phone or desktop calendar to the dashboard's events — vests, paydays, deadlines, your own reminders — with amounts. The link is the credential: anyone holding it can read the feed." />
@@ -260,15 +273,15 @@ export default function CalendarFeedCard() {
                         {token.last_used_at === null ? 'never' : formatDateTime(token.last_used_at)}
                       </td>
                       <td className="row-actions">
-                        <button
+                        <BusyButton
                           type="button"
                           className="button"
                           aria-label={`Revoke the ${token.label} link`}
                           disabled={busy}
-                          onClick={() => revoke(token)}
+                          onClick={(event) => void revoke(token, event.currentTarget)}
                         >
                           Revoke
-                        </button>
+                        </BusyButton>
                       </td>
                     </tr>
                   ))}

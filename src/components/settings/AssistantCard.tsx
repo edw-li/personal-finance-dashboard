@@ -7,6 +7,7 @@ import {
 } from '../../api/assistant'
 import type { AssistantModelsOut, AssistantSettingsOut } from '../../types/api'
 import InfoHint from '../InfoHint'
+import { useConfirm } from '../feedback/confirm'
 import BusyButton from '../feedback/BusyButton'
 import { SaveButton } from '../feedback/SaveButton'
 import { SaveStatus } from '../feedback/SaveStatus'
@@ -52,6 +53,8 @@ export default function AssistantCard() {
   const [probing, setProbing] = useState(false)
   const [probeError, setProbeError] = useState<string | null>(null)
   const seqRef = useRef(0)
+  const saveRef = useRef<HTMLButtonElement>(null)
+  const ask = useConfirm()
 
   // What a payload seeds, applied from the two WRITE echoes. The load chain below spells
   // the same three setters out instead of calling this: a component-scope helper would make
@@ -100,10 +103,19 @@ export default function AssistantCard() {
     })
   }
 
-  const removeOverride = () => void removeState.run(async () => {
-    adopt(await putAssistantSettings({ api_key: null }))
-    setProbe(null)
-  })
+  const removeOverride = async (anchor: HTMLElement) => {
+    if (!await ask({
+      anchor,
+      title: 'Remove the saved assistant key?',
+      body: "The saved key is removed permanently. The assistant falls back to the server's environment key if one is configured — this can't be undone.",
+      confirmLabel: 'Remove key',
+    })) return
+    await removeState.run(async () => {
+      adopt(await putAssistantSettings({ api_key: null }))
+      setProbe(null)
+      saveRef.current?.focus()
+    })
+  }
 
   const testKey = () => {
     setProbing(true)
@@ -156,7 +168,7 @@ export default function AssistantCard() {
             />
           </label>
           {key.source === 'override' && (
-            <BusyButton type="button" className="button" busy={removeState.status === 'saving'} inert={saveState.status === 'saving'} onClick={removeOverride}>
+            <BusyButton type="button" className="button" busy={removeState.status === 'saving'} inert={saveState.status === 'saving'} onClick={(event) => void removeOverride(event.currentTarget)}>
               Remove saved key
             </BusyButton>
           )}
@@ -191,7 +203,7 @@ export default function AssistantCard() {
             home for the key is the server&apos;s <code>.env</code>.
           </p>
           <div className="settings-card-actions">
-            <SaveButton type="submit" className="button button-primary" state={saveState} aria-disabled={removeState.status === 'saving'}>Save assistant settings</SaveButton>
+            <SaveButton ref={saveRef} type="submit" className="button button-primary" state={saveState} aria-disabled={removeState.status === 'saving'}>Save assistant settings</SaveButton>
             <SaveStatus state={saveState} />
             <BusyButton
               type="button"

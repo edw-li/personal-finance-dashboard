@@ -5,6 +5,7 @@ import { ApiError } from '../../api/client'
 import type { RestoreReport, SnapshotEntry } from '../../types/api'
 import ToastProvider from '../ToastProvider'
 import RestoreCard from './RestoreCard'
+import { ConfirmProvider } from '../feedback/confirm'
 
 vi.mock('../../api/lifecycle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/lifecycle')>()),
@@ -113,23 +114,24 @@ function Probe({ to }: { to: string }) {
 function mount(entry = '/settings', arriveTo = '/settings') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
-      <ToastProvider>
+      <ToastProvider><ConfirmProvider>
         <RestoreCard />
         <Probe to={arriveTo} />
-      </ToastProvider>
+      </ConfirmProvider></ToastProvider>
     </MemoryRouter>,
   )
 }
 
-const confirmSpy = vi.spyOn(window, 'confirm')
 const select = () => screen.getByLabelText('Stored snapshot') as HTMLSelectElement
 const fileBox = () => screen.getByLabelText('Snapshot file (.zip)') as HTMLInputElement
 const url = () => screen.getByTestId('location').textContent
-const dateBox = () =>
-  screen.getByLabelText("Type the snapshot's date (YYYY-MM-DD) to confirm") as HTMLInputElement
+const dateBox = () => {
+  if (screen.queryByRole('alertdialog') === null) fireEvent.click(restoreButton())
+  return screen.getByLabelText("Type the snapshot's date (YYYY-MM-DD) to confirm") as HTMLInputElement
+}
 const dryButton = () => screen.getByRole('button', { name: /^dry run/i }) as HTMLButtonElement
 const restoreButton = () =>
-  screen.getByRole('button', { name: /^restor(e|ing…)$/i }) as HTMLButtonElement
+  (screen.queryByRole('button', { name: 'Restore snapshot', exact: true }) ?? screen.getByRole('button', { name: 'Restore', exact: true })) as HTMLButtonElement
 // The card's OWN banner, scoped to it: ToastProvider always mounts an (empty) role="alert"
 // live region beside its children, so a bare screen.findByRole('alert') would resolve
 // against that one the moment it exists and never see the card's message.
@@ -140,7 +142,6 @@ beforeEach(() => {
   vi.mocked(fetchRestorePoints).mockResolvedValue([])
   vi.mocked(restoreStored).mockResolvedValue(report())
   vi.mocked(restoreUpload).mockResolvedValue(report())
-  confirmSpy.mockReturnValue(true)
 })
 
 afterEach(() => {
@@ -173,9 +174,9 @@ describe('RestoreCard', () => {
       )
     const view = render(
       <MemoryRouter initialEntries={['/settings']}>
-        <ToastProvider>
+        <ToastProvider><ConfirmProvider>
           <RestoreCard onStoredChanged={onStoredChanged} />
-        </ToastProvider>
+        </ConfirmProvider></ToastProvider>
       </MemoryRouter>,
     )
     await waitFor(() => expect(select().options).toHaveLength(2))
@@ -192,9 +193,9 @@ describe('RestoreCard', () => {
     vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
     view.rerender(
       <MemoryRouter initialEntries={['/settings']}>
-        <ToastProvider>
+        <ToastProvider><ConfirmProvider>
           <RestoreCard onStoredChanged={onStoredChanged} revision={1} />
-        </ToastProvider>
+        </ConfirmProvider></ToastProvider>
       </MemoryRouter>,
     )
     await waitFor(() => expect(select().options).toHaveLength(3))
@@ -211,9 +212,9 @@ describe('RestoreCard', () => {
       .mockRejectedValueOnce(new ApiError('Restore failed and nothing was changed', 500))
     render(
       <MemoryRouter initialEntries={['/settings']}>
-        <ToastProvider>
+        <ToastProvider><ConfirmProvider>
           <RestoreCard onStoredChanged={onStoredChanged} />
-        </ToastProvider>
+        </ConfirmProvider></ToastProvider>
       </MemoryRouter>,
     )
     await waitFor(() => expect(select().options).toHaveLength(2))
@@ -253,18 +254,18 @@ describe('RestoreCard', () => {
     await waitFor(() => expect(url()).toBe('/settings#restore'))
     // Pre-selected, never applied: the reader still dry-runs it and types its date.
     expect(restoreStored).toHaveBeenCalledTimes(2)
-    expect(restoreButton().disabled).toBe(true)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
   })
 
   it('offers the stored snapshots and arms Dry run once one is chosen', async () => {
     mount()
     expect(await screen.findByRole('region', { name: 'Restore' })).toBeTruthy()
     expect(document.getElementById('restore')).toBeTruthy()
-    expect(dryButton().disabled).toBe(true)
+    expect(dryButton().getAttribute('aria-disabled') === 'true').toBe(true)
     await waitFor(() => expect(select().options).toHaveLength(2))
     fireEvent.change(select(), { target: { value: STORED.name } })
-    expect(dryButton().disabled).toBe(false)
-    expect(restoreButton().disabled).toBe(true)
+    expect(dryButton().getAttribute('aria-disabled') === 'true').toBe(false)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
   })
 
   it('dry-runs the stored file, renders the report, and arms Restore only on the typed date', async () => {
@@ -275,11 +276,12 @@ describe('RestoreCard', () => {
     await waitFor(() => expect(restoreStored).toHaveBeenCalledWith(STORED.name, true))
     expect(await screen.findByText('Dry run — nothing was written.')).toBeTruthy()
     expect(screen.getByText('account_balances')).toBeTruthy()
-    expect(restoreButton().disabled).toBe(true)
+    dateBox()
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
     fireEvent.change(dateBox(), { target: { value: '2026-09-03' } }) // the wrong day
-    expect(restoreButton().disabled).toBe(true)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
     fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
-    expect(restoreButton().disabled).toBe(false)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(false)
   })
 
   it('restores after the confirm sentence, toasts, and shows the applied report', async () => {
@@ -300,11 +302,6 @@ describe('RestoreCard', () => {
     await screen.findByText('Dry run — nothing was written.')
     fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
     fireEvent.click(restoreButton())
-    expect(confirmSpy).toHaveBeenCalledWith(
-      'Restore the snapshot from Sep 2, 2026? A restore point of the current database is written ' +
-        'first (kept with the last three), then every exported table is replaced. Other pages ' +
-        'reload on their next visit.',
-    )
     await waitFor(() => expect(restoreStored).toHaveBeenCalledWith(STORED.name, false))
     expect(await screen.findByText('Restored.')).toBeTruthy()
     expect(
@@ -319,18 +316,17 @@ describe('RestoreCard', () => {
       ),
     ).toBeTruthy()
     // An applied report arms nothing: dry-run again to restore again.
-    expect(restoreButton().disabled).toBe(true)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
   })
 
   it('spends no request when the confirm is declined', async () => {
-    confirmSpy.mockReturnValue(false)
     mount()
     await waitFor(() => expect(select().options).toHaveLength(2))
     fireEvent.change(select(), { target: { value: STORED.name } })
     fireEvent.click(dryButton())
     await screen.findByText('Dry run — nothing was written.')
     fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
-    fireEvent.click(restoreButton())
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(restoreStored).toHaveBeenCalledTimes(1)
   })
 
@@ -343,11 +339,12 @@ describe('RestoreCard', () => {
     await waitFor(() => expect(restoreUpload).toHaveBeenCalledWith(file, true))
     await screen.findByText('Dry run — nothing was written.')
     fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
-    expect(restoreButton().disabled).toBe(false)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     // Picking a stored file instead drops the report and the arm: they described the upload.
     fireEvent.change(select(), { target: { value: STORED.name } })
     expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
-    expect(restoreButton().disabled).toBe(true)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
   })
 
   it('keeps Restore disabled on an incompatible or erroring dry run, and prints the router sentence verbatim', async () => {
@@ -361,8 +358,8 @@ describe('RestoreCard', () => {
     fireEvent.change(select(), { target: { value: STORED.name } })
     fireEvent.click(dryButton())
     await screen.findByText(/incompatible$/)
-    fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
-    expect(restoreButton().disabled).toBe(true)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
     vi.mocked(restoreStored).mockRejectedValueOnce(
       new ApiError(
         'This snapshot was exported at schema `b8e4d17c2a90`; this server runs ' +
@@ -380,7 +377,7 @@ describe('RestoreCard', () => {
   it('pre-selects a stored snapshot named in the URL and strips the param, anchor intact', async () => {
     mount(`/settings?restore=${encodeURIComponent(STORED.name)}#restore`)
     await waitFor(() => expect(select().value).toBe(STORED.name))
-    expect(dryButton().disabled).toBe(false)
+    expect(dryButton().getAttribute('aria-disabled') === 'true').toBe(false)
     // The COMMAND is consumed; the anchor is not. The page hangs its scroll-and-ring off
     // location.hash, and a strip that dropped it would re-run that effect with nothing to
     // aim at — cancelling the only timer that takes the ring back off.
@@ -408,9 +405,6 @@ describe('RestoreCard', () => {
     // its date, the confirm's sentence, and the file the apply actually names.
     fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
     fireEvent.click(restoreButton())
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Restore the snapshot from Sep 2, 2026?'),
-    )
     await waitFor(() => expect(restoreStored).toHaveBeenLastCalledWith(STORED.name, false))
   })
 
@@ -453,16 +447,14 @@ describe('RestoreCard', () => {
     fireEvent.change(select(), { target: { value: NIGHTLY.name } })
     fireEvent.click(dryButton())
     expect(await screen.findByText(/^Snapshot from Sep 3, 2026 ·/)).toBeTruthy()
-    expect(dateBox().placeholder).toBe('2026-09-03')
+    dateBox()
+    expect(screen.getByRole('alertdialog').textContent).toContain('Restore the snapshot from Sep 3, 2026?')
     // The UTC day the stamp's TEXT reads — the row never said that, so it must not arm.
     fireEvent.change(dateBox(), { target: { value: '2026-09-04' } })
-    expect(restoreButton().disabled).toBe(true)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
     fireEvent.change(dateBox(), { target: { value: '2026-09-03' } })
-    expect(restoreButton().disabled).toBe(false)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(false)
     fireEvent.click(restoreButton())
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Restore the snapshot from Sep 3, 2026?'),
-    )
   })
 
   it('clears the file picker when a stored snapshot is chosen instead', async () => {
@@ -511,7 +503,7 @@ describe('RestoreCard', () => {
     fireEvent.click(restoreButton())
     expect((await banner()).textContent).toContain('Restore failed and nothing was changed')
     expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
-    expect(restoreButton().disabled).toBe(true)
+    expect(restoreButton().getAttribute('aria-disabled') === 'true').toBe(true)
   })
 
   it('prints the upload refusals verbatim — the 413 and the 422 alike', async () => {

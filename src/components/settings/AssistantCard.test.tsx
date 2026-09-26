@@ -12,6 +12,7 @@ vi.mock('../../api/assistant', () => ({
 }))
 
 import AssistantCard from './AssistantCard'
+import { ConfirmProvider } from '../feedback/confirm'
 
 const MODELS = {
   configured: true,
@@ -55,7 +56,7 @@ describe('AssistantCard', () => {
       key: { configured: false, source: null },
       default_model: 'kimi-k3',
     })
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     await waitFor(() => expect(screen.getByLabelText(/nvidia api key/i)).toBeTruthy())
     expect(screen.queryByText(/from \.env/i)).toBeNull()
     expect(screen.queryByRole('button', { name: /remove saved key/i })).toBeNull()
@@ -66,7 +67,7 @@ describe('AssistantCard', () => {
       key: { configured: true, source: 'env' },
       default_model: 'kimi-k3',
     })
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     await waitFor(() => expect(screen.getByText(/from \.env/i)).toBeTruthy())
     const input = screen.getByLabelText(/nvidia api key/i) as HTMLInputElement
     expect(input.value).toBe('')
@@ -82,9 +83,12 @@ describe('AssistantCard', () => {
       key: { configured: true, source: 'env' },
       default_model: 'kimi-k3',
     })
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     await waitFor(() => expect(screen.getByText(/set here/i)).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /remove saved key/i }))
+    expect(await screen.findByRole('alertdialog')).toBeTruthy()
+    expect(putAssistantSettings).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove key', exact: true }))
     await waitFor(() =>
       expect(putAssistantSettings).toHaveBeenCalledWith({ api_key: null }),
     )
@@ -101,7 +105,7 @@ describe('AssistantCard', () => {
       key: { configured: true, source: 'override' },
       default_model: 'kimi-k3',
     })
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     await waitFor(() => expect(screen.getByLabelText(/nvidia api key/i)).toBeTruthy())
     const input = screen.getByLabelText(/nvidia api key/i) as HTMLInputElement
     fireEvent.change(input, { target: { value: 'nvapi-secret' } })
@@ -121,7 +125,7 @@ describe('AssistantCard', () => {
       key: { configured: true, source: 'env' },
       default_model: 'nemotron-3.5-lightning',
     })
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     await waitFor(() => expect(screen.getByLabelText(/default model/i)).toBeTruthy())
     fireEvent.change(screen.getByLabelText(/default model/i), {
       target: { value: 'nemotron-3.5-lightning' },
@@ -140,7 +144,7 @@ describe('AssistantCard', () => {
       default_model: 'kimi-k3',
     })
     fetchAssistantModels.mockResolvedValue(MODELS)
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     await waitFor(() => expect(screen.getByRole('button', { name: /test key/i })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /test key/i }))
     await waitFor(() => expect(fetchAssistantModels).toHaveBeenCalledWith(true))
@@ -164,7 +168,7 @@ describe('AssistantCard', () => {
       default_model: 'kimi-k3',
     })
     fetchAssistantModels.mockResolvedValue(MODELS)
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     fireEvent.click(await screen.findByRole('button', { name: /test key/i }))
     await waitFor(() => expect(screen.getByText(/Kimi K3/, { selector: 'li' })).toBeTruthy())
     expect(screen.getByText(/Kimi K3/, { selector: 'li' }).textContent).toContain(
@@ -187,7 +191,7 @@ describe('AssistantCard', () => {
       key_ok: false,
       models: MODELS.models.map((m) => ({ ...m, available: false })),
     })
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     fireEvent.click(await screen.findByRole('button', { name: /test key/i }))
     await waitFor(() =>
       expect(screen.getByText('Key rejected or the catalog was unreachable.')).toBeTruthy(),
@@ -200,7 +204,7 @@ describe('AssistantCard', () => {
       default_model: 'kimi-k3',
     })
     putAssistantSettings.mockRejectedValue(new ApiError('key rejected', 422))
-    render(<AssistantCard />)
+    render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
     await waitFor(() => expect(screen.getByLabelText(/nvidia api key/i)).toBeTruthy())
     fireEvent.change(screen.getByLabelText(/nvidia api key/i), {
       target: { value: 'nvapi-typo' },
@@ -217,7 +221,7 @@ describe('AssistantCard', () => {
 
 it('keeps the saved form quiet without removing its Save control from the tab order', async () => {
   fetchAssistantSettings.mockResolvedValue({ key: { configured: false, source: null }, default_model: 'kimi-k3' })
-  render(<AssistantCard />)
+  render(<ConfirmProvider><AssistantCard /></ConfirmProvider>)
   const save = await screen.findByRole('button', { name: 'Save assistant settings' })
   expect(save.getAttribute('aria-disabled')).toBe('true')
   expect(save.hasAttribute('disabled')).toBe(false)
