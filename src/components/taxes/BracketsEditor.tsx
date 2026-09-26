@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { ApiError } from '../../api/client'
 import {
   cloneBrackets,
@@ -12,6 +13,7 @@ import {
 } from '../../api/taxes'
 import type { Jurisdiction } from '../../api/taxes'
 import AmountInput from '../AmountInput'
+import { balancedSplit, groupWeight } from './bracketColumns'
 import InfoHint from '../InfoHint'
 import type {
   BracketCloneReviewFlags,
@@ -431,6 +433,45 @@ export default function BracketsEditor({
   // 42 rows of hand transcription — so the tab offers the clone instead.
   const isEmpty = Object.values(payload.jurisdictions).every((rows) => rows.length === 0)
 
+  // Two independent columns (2026-09-25 polish spec §3.5, TPC-12d): a short table no longer leaves a
+  // ragged hole beside a tall one. The split is read off the SAVED tables and held for this tab — and
+  // re-read when a clone fills an empty one — so rows added while editing grow their column in place,
+  // and a save never moves a table, or the Save under the pointer, to the other side.
+  const splitKey = `${activeStatus}:${isEmpty ? 'empty' : 'rows'}`
+  const weigh = (): number[] => [
+    ...JURISDICTIONS.map((name) =>
+      groupWeight(
+        (payload.jurisdictions[name] ?? []).length,
+        PER_WORKER_JURISDICTIONS.includes(name) && people.length > 0
+          ? {
+              helper: name === firstStripName,
+              people: people.map(
+                (person) =>
+                  (payload.per_person ?? []).find((entry) => entry.person_id === person.id)?.jurisdictions[name]?.length ?? 0,
+              ),
+            }
+          : undefined,
+      ),
+    ),
+    ...extras.map((name) => groupWeight((payload.jurisdictions[name] ?? []).length)),
+  ]
+  const [split, setSplit] = useState(() => ({ key: splitKey, at: balancedSplit(weigh()) }))
+  if (split.key !== splitKey) setSplit({ key: splitKey, at: balancedSplit(weigh()) })
+  // The two stacks. Keyed, so each keeps its identity across renders; a group changes stacks only
+  // when the split itself moves (a tab switch, a clone).
+  const columns = (groups: ReactNode[]) => [
+    <div key="first" className="bracket-column">
+      {groups.slice(0, split.at)}
+    </div>,
+    ...(split.at < groups.length
+      ? [
+          <div key="second" className="bracket-column">
+            {groups.slice(split.at)}
+          </div>,
+        ]
+      : []),
+  ]
+
   // Seeds this status from the SAME year's single tables (design §5.5: the clone source is
   // always single). 409 when the target already has rows, which `isEmpty` already prevents —
   // it lands in the banner verbatim if the server disagrees.
@@ -830,8 +871,9 @@ export default function BracketsEditor({
           </button>
         </div>
       )}
-      <div className="bracket-grid">
-        {JURISDICTIONS.map((name) => {
+      <div className="bracket-columns">
+        {columns([
+        ...JURISDICTIONS.map((name) => {
           const rows = tables[name] ?? []
           const message = errors[name]
           const perWorker = PER_WORKER_JURISDICTIONS.includes(name)
@@ -842,7 +884,7 @@ export default function BracketsEditor({
           // this table's rate/threshold cells and stops at its own Save, never wandering into
           // the next jurisdiction's rows. A person's card is a scope of its own for the same
           // reason — and a SIBLING of this form rather than a child, because forms do not nest.
-          // The group is one grid cell: the table and the strip that qualifies it stay together
+          // The group is one stack entry: the table and the strip that qualifies it stay together
           // (2026-09-13 polish spec §12).
           return (
             <div key={name} className="bracket-group">
@@ -903,8 +945,8 @@ export default function BracketsEditor({
               )}
             </div>
           )
-        })}
-        {extras.map((name) => (
+        }),
+        ...extras.map((name) => (
           <div key={name} className="bracket-group">
             <div className="bracket-block">
               <h3 className="eyebrow">{label(name)} brackets</h3>
@@ -932,7 +974,8 @@ export default function BracketsEditor({
               </table>
             </div>
           </div>
-        ))}
+        )),
+        ])}
       </div>
     </section>
   )
