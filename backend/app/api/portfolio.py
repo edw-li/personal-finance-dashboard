@@ -11,10 +11,12 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import (
     DividendPayment,
+    LatestPrice,
     Person,
     PortfolioAccount,
     PortfolioValueHistory,
     PositionTransaction,
+    PriceHistory,
     Security,
     SecurityDividendEvent,
 )
@@ -49,7 +51,13 @@ from app.schemas.portfolio import (
     TransactionUpdate,
 )
 from app.services import clock
-from app.services.changelog import CHANGE_BATCH_HEADER, ChangeBatch, change_batch, row_image
+from app.services.changelog import (
+    CHANGE_BATCH_HEADER,
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    row_image,
+)
 from app.services.money import (
     MONEY_MAX_ABS_10_2,
     MONEY_MAX_ABS_10_4,
@@ -190,7 +198,15 @@ async def list_securities(db: AsyncSession = Depends(get_db)) -> list[Security]:
 
 
 @router.post("/securities", response_model=SecurityOut, status_code=201)
-async def create_security(body: SecurityCreate, db: AsyncSession = Depends(get_db)) -> Security:
+async def create_security(
+    body: SecurityCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Security:
+    """Logged (2026-09-25 polish spec §6.1). Accepted: once a refresh has written prices for
+    the new security, undoing the create refuses (DEPENDENT_REFUSAL) — the price rows depend
+    on it."""
     ticker = _normalize_ticker(body.ticker)
     name = _validated_name(body.name)
     annual = body.annual_dividend
@@ -214,7 +230,10 @@ async def create_security(body: SecurityCreate, db: AsyncSession = Depends(get_d
         ex_div_date=ex_div_date,
     )
     db.add(security)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(security)
+    batch.label = f"Added security {security.ticker}"
+    response.headers.update(batch_header(await batch.commit()))
     return security
 
 
@@ -231,8 +250,16 @@ NON_NULLABLE_SECURITY_FIELDS = {"name", "holding_type", "is_manual_priced", "is_
 
 @router.patch("/securities/{security_id}", response_model=SecurityOut)
 async def update_security(
-    security_id: int, body: SecurityUpdate, db: AsyncSession = Depends(get_db)
+    security_id: int,
+    body: SecurityUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> Security:
+    """Accepted (spec §6.1): the change log keeps whole-row images, so undoing an edit also
+    writes back the refresh-owned columns (annual dividend, ex-dates) as they stood at the
+    edit — the next refresh restores them. The refresh is unlogged, so the overlap refusal
+    cannot see it (update_classification has always had this property)."""
     security = await _get_security(db, security_id)
     # Validate EVERY field before touching the ORM object: a 422 raised halfway through a
     # multi-field PATCH would otherwise leave half the row mutated for the next autoflush.
@@ -248,14 +275,28 @@ async def update_security(
             elif field_name == "ex_div_date":
                 value = require_reasonable_date(value, "ex_div_date")
         validated[field_name] = value
+    before = row_image(security)
     for field_name, value in validated.items():
         setattr(security, field_name, value)
-    await db.commit()
+    batch.record_update(security, before)
+    batch.label = f"Edited security {security.ticker}"
+    response.headers.update(batch_header(await batch.commit()))
     return security
 
 
 @router.delete("/securities/{security_id}", status_code=204)
-async def delete_security(security_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_security(
+    security_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Refused while transactions or dividends reference the security (deactivate instead).
+    Otherwise its derived rows go first — the historical ex-dividend markers, the daily closes
+    (~780 for the employer ticker) and the latest quote — each imaged and deleted through the
+    ORM rather than left to ON DELETE CASCADE, then the security LAST, so an Undo (which
+    replays in reverse) restores the security and then every row that hung off it, ids
+    included. Accepted (spec §6.1): once the ticker is created again, that Undo refuses
+    (REPLAY_REFUSAL) — the ticker is taken."""
     security = await _get_security(db, security_id)
     txn_count = (
         await db.execute(
@@ -279,9 +320,41 @@ async def delete_security(security_id: int, db: AsyncSession = Depends(get_db)) 
                 " — deactivate it instead"
             ),
         )
-    await db.delete(security)  # latest/history price rows CASCADE — derived data
-    await db.commit()
-    return Response(status_code=204)
+    events = (
+        (
+            await db.execute(
+                select(SecurityDividendEvent)
+                .where(SecurityDividendEvent.security_id == security_id)
+                .order_by(SecurityDividendEvent.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    history = (
+        (
+            await db.execute(
+                select(PriceHistory)
+                .where(PriceHistory.security_id == security_id)
+                .order_by(PriceHistory.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    latest = await db.get(LatestPrice, security_id)
+    for row in [*events, *history, *([] if latest is None else [latest])]:
+        batch.record_delete(row)
+        await db.delete(row)
+    # Out before the security's own DELETE: no relationship() orders these mappers, and the
+    # unit of work would otherwise delete the security first and let the cascade take the
+    # markers from under their own DELETEs.
+    await db.flush()
+    batch.record_delete(security)
+    await db.delete(security)
+    batch.label = f"Deleted security {security.ticker}"
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 def _validated_txn_fields(
