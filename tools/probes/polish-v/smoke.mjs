@@ -238,8 +238,15 @@ async function walkGroup(options) {
     const fiveSkeleton = ['projection', 'calendar', 'portfolio', 'espp'].includes(name)
     // A deliberate slow response makes the cold skeleton observable; an unobserved skeleton is not a pass.
     if (fiveSkeleton) await slowApi(page.context(), 750)
-    await visit(page, url)
-    const observed = await page.evaluate(() => ({ ...window.__polishV, heading: document.querySelector('h1')?.textContent, overflow: document.documentElement.scrollWidth - innerWidth, selectedTab: document.querySelector('[role="tab"][aria-selected="true"]')?.textContent }))
+    let actualUrl = url
+    if (name === 'card-detail') {
+      const cards = await api(config, 'credit-cards'), card = cards.find(card => card.is_active) ?? cards[0]
+      if (!card) throw new Error('No copied card available for detail route coverage')
+      actualUrl = `/credit-cards?card=${encodeURIComponent(card.slug)}`
+    }
+    await visit(page, actualUrl)
+    if (name === 'card-detail') await page.locator('.card-detail').waitFor({ state: 'visible' })
+    const observed = await page.evaluate(() => ({ ...window.__polishV, url: location.pathname + location.search, heading: document.querySelector('h1')?.textContent, overflow: document.documentElement.scrollWidth - innerWidth, selectedTab: document.querySelector('[role="tab"][aria-selected="true"]')?.textContent }))
     check(id, 'Route has content and no horizontal page overflow', !!observed.heading && observed.overflow <= 1, observed)
     check(id, 'Cold route CLS is below0.1', observed.cls < .1, { cls: observed.cls, shifts: observed.shifts })
     check(id, 'Observed skeletons contain no 4+1 orphan', observed.skeletonLayouts.every(layout => layout !== '4+1'), observed.skeletonLayouts)

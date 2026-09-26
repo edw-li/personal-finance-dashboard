@@ -45,7 +45,7 @@ export const routes = [
   ['taxes', '/taxes'], ['tax-inputs', '/taxes?section=inputs'], ['tax-tables', '/taxes?section=tables'],
   ['tax-whatif', '/taxes?section=whatif&whatif=other_capital_gains%3A1234'],
   ['tax-whatif-sale', '/taxes?section=whatif&whatif=NVDA'],
-  ['cards', '/credit-cards'], ['cards-manage', '/credit-cards?section=manage'], ['cards-lines', '/credit-cards?section=lines'],
+  ['cards', '/credit-cards'], ['cards-manage', '/credit-cards?section=manage'], ['cards-lines', '/credit-cards?section=lines'], ['card-detail', '/credit-cards'],
   ['calendar', '/calendar'], ['calendar-list', '/calendar?view=list'],
   ['projection', '/projection'], ['projection-trend', '/projection?section=trend'],
   ['update-balances', '/update?step=balances'], ['update-spending', '/update?step=spending'], ['update-review', '/update?step=review'],
