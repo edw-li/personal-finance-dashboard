@@ -105,7 +105,7 @@ describe('CashflowStrip', () => {
   })
 
   // 2026-09-25 polish spec §4.1 (PCC-17): each labelled group is a slot that takes part in the row's
-  // four lines, so the strip ends on one edge (the wrapped tiles were 22px short).
+  // three lines, so the strip ends on one edge (the wrapped tiles were 22px short).
   it('wraps each tile in a slot of the row', () => {
     render(<CashflowStrip events={events} month="2026-09-01" quoteAsOf={null} living={BUDGET} />)
     const groups = screen.getAllByRole('group')

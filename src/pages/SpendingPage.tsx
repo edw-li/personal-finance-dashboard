@@ -590,8 +590,7 @@ export default function SpendingPage() {
         <LocalSectionPanel state={views} section="overview">
         <FeedBanner error={evidence.error} />
         {kpis && (
-          // Steady (2026-09-25 polish spec §4.3): the badge line and one delta line are reserved, so the
-          // row keeps one height across every month the ribbon offers (200 ↔ 217px before).
+          // Steady: shared title and delta dimensions keep the row's height across selected months.
           <div className="kpi-row kpi-row-steady">
             <StatTile
               label={`Living spending — ${formatMonth(kpis.month)}`}

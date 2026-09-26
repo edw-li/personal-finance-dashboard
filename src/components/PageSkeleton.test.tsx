@@ -59,14 +59,14 @@ describe('SkeletonCard', () => {
 describe('ghost parity (motion spec §7; 2026-09-25 polish spec §4.6)', () => {
   const lines = (tile: Element) => [...tile.children].map((child) => child.className)
 
-  it('draws each ghost as the real tile’s four lines, a block inside three of them', () => {
+  it('draws each ghost as the real tile’s three lines, a block inside each', () => {
     const { rerender } = render(<PageSkeleton tiles={2} strip />)
     const tiles = document.querySelectorAll('.kpi-row .stat-tile.skeleton-tile')
     expect(tiles.length).toBe(2)
-    expect(lines(tiles[0])).toEqual(['stat-label', 'stat-badge-row', 'stat-value', 'stat-delta'])
+    expect(lines(tiles[0])).toEqual(['stat-header', 'stat-value', 'stat-delta'])
     expect(tiles[0].querySelectorAll('.skeleton').length).toBe(3) // label, value, delta
     expect(tiles[0].querySelector('.stat-value > .stat-value-figure > .skeleton-value')).not.toBeNull()
-    expect(tiles[0].querySelector('.stat-badge-row')?.childNodes.length).toBe(0)
+    expect(tiles[0].querySelector('.stat-badge-row')).toBeNull()
     expect(document.querySelector('.skeleton-strip')?.getAttribute('aria-hidden')).toBe('true')
     rerender(<PageSkeleton tiles={2} />)
     expect(document.querySelector('.skeleton-strip')).toBeNull()

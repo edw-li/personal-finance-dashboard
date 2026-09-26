@@ -78,8 +78,8 @@
 
 /* ── Stat tiles ────────────────────────────────────────────────────── */
 
-/* One strip, four lines (2026-09-25 polish spec §4.1, contract C4). The row is the grid and every tile
-   a four-row SUBGRID of it — label · badge · value · delta — so a line's labels, badges, values and
+/* One strip, three lines. The row is the grid and every tile
+   a three-row SUBGRID of it — header · value · delta — so a line's headers, values and
    deltas share tracks: the figures sit on one baseline and the deltas start on one line whatever each
    tile carries. The row has NO row gap on purpose: a subgrid's tracks absorb half the parent's gutter
    on each side, so a row gap opened inside every tile (an empty badge line measured 16px in Edge).
@@ -106,12 +106,12 @@
 .kpi-row > .stat-tile,
 .kpi-row > .stat-tile-slot,
 .stat-tile-slot > .stat-tile {
-  grid-row: span 4;
+  grid-row: span 3;
   grid-template-rows: subgrid;
   row-gap: 0;
 }
 
-/* A wrapper that labels its tile (CashflowStrip's role="group") takes part in the row's four lines
+/* A wrapper that labels its tile (CashflowStrip's role="group") takes part in the row's three lines
    too: a subgrid of the row whose one child is a subgrid of it — the wrappers were stretched while
    the tiles inside kept their content height, a 22px ragged bottom (PCC-17). */
 .stat-tile-slot {
@@ -159,7 +159,7 @@
   /* One track exactly the tile's width: an auto column would widen to a nowrap label and wrap the
      delta past the tile's edge. */
   grid-template-columns: minmax(0, 1fr);
-  /* A tile outside a row (Card detail's verdict) has four rows of its own, packed at the top. */
+  /* A tile outside a row (Card detail's verdict) has three rows of its own, packed at the top. */
   align-content: start;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -169,20 +169,51 @@
      the subgrid off — four tiles' lines drifted apart in Edge. .stat-value is the container now. */
 }
 
+.stat-header {
+  container: stat-header / inline-size;
+  /* Tooltips in this header paint above the sibling value's size container. */
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+}
+
 .stat-label {
+  flex: 1;
+  min-width: 0;
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-bottom: 0.45rem;
 }
 
-/* Label text and its (i) travel as one unbreakable unit (2026-09-13 polish §10). The one label
-   known to overflow five 217px columns ("Reach FI target within N years") is shortened by lane P4;
-   every other label fits its tile at the 220px floor. */
+/* Keep the info button beside the title text, including when a badge makes the words wrap. */
 .stat-label-text {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
   white-space: nowrap;
+}
+
+.stat-label-text > :is(button, .info-hint-wrap) { flex: none; }
+
+/* A long title can use two lines beside a badge; the badge never drops beneath it. */
+.stat-header:has(.stat-badge) .stat-label {
+  letter-spacing: 0.04em;
+}
+
+.stat-header:has(.stat-badge) .stat-label-text {
+  display: block;
+  white-space: normal;
+  text-wrap: balance;
+}
+
+/* Let the title's next line use the full width instead of reserving an icon column. */
+.stat-header:has(.stat-badge) .stat-label-text > :is(button, .info-hint-wrap) {
+  float: right;
 }
 
 /* The evidence (i) never grows its label line: its 24px target is pulled back to its 13px glyph, as the
@@ -193,29 +224,12 @@
   margin-bottom: -5.5px;
 }
 
-/* Line 2, the badge's own line: beside the label a badge wrapped under it in a narrow tile and dropped
-   that one value off the row's baseline (OU-03). Empty, it is 0px — a line where no tile has a badge
-   costs nothing. A flex row, so the line is the badge's own height and not a text strut's. */
-.stat-badge-row {
-  display: flex;
-  align-items: center;
-}
-
-.stat-badge-row:not(:empty) {
-  margin-bottom: 0.35rem;
-}
-
-/* The badge's box — shared with a steady row's reserve (below), so a reserved line is exactly a badge
-   tall. */
-.stat-badge,
-.kpi-row-steady .stat-badge-row:empty::before {
+/* A small status pill in the caller's own casing, pinned beside the title. */
+.stat-badge {
+  flex: none;
   padding: 0.05rem 0.45rem;
   font-size: 0.7rem;
   font-weight: 500;
-}
-
-/* A small status pill in the caller's own casing — a state, not an eyebrow. */
-.stat-badge {
   border-radius: 999px;
   background: var(--fill);
   color: var(--muted);
@@ -224,7 +238,18 @@
   white-space: nowrap;
 }
 
-/* Line 3. The size container its figure scales against — the tile cannot be one (see .stat-tile), and
+/* Narrow headers keep long status wording within the top-right corner. Steady rows (and
+   their ghosts) fit two title lines so changing the month cannot move the values. */
+@container stat-header (max-width: 260px) {
+  .stat-badge {
+    max-width: 4.5rem;
+    white-space: normal;
+    text-align: center;
+  }
+  .kpi-row-steady .stat-label { min-height: 2rem; }
+}
+
+/* Line 2. The size container its figure scales against — the tile cannot be one (see .stat-tile), and
    this box is the tile's content width, what cqi read when the tile was the container. Values share
    the line's FIRST baseline, a hero's included; a unit line hangs below its figure (Money lasts) rather
    than lifting it off the row, which is what `last baseline` did (measured 16px in Edge). */
@@ -278,7 +303,7 @@
   white-space: normal;
 }
 
-/* Line 4. Empty, it costs nothing: a line whose tiles carry no delta ends at its values. */
+/* Line 3. Empty, it costs nothing: a line whose tiles carry no delta ends at its values. */
 .stat-delta {
   margin-top: 0.35rem;
   font-size: 0.8rem;
@@ -302,15 +327,8 @@
   word-spacing: -0.1em;
 }
 
-/* A steady row keeps one height as its month changes (the Overview, Net worth, Spending; spec §4.3):
-   its badge line and one delta line stand whether or not the month on show fills them. The reserve is
-   an invisible no-break space in the badge's own box and in the delta's own type, so a reserved line is
-   exactly as tall as the line it stands in for. */
-.kpi-row-steady .stat-badge-row {
-  margin-bottom: 0.35rem;
-}
-
-.kpi-row-steady .stat-badge-row:empty::before,
+/* A steady row keeps its delta height as the selected month changes. Badges share the title;
+   there is no separate badge track or empty placeholder. */
 .kpi-row-steady .stat-delta:empty::before {
   content: '\a0';
   visibility: hidden;

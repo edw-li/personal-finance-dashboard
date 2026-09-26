@@ -126,20 +126,18 @@ describe('StatTile delta glyph', () => {
   })
 })
 
-// Contract C4 (2026-09-25 polish spec §4.1): four children, always, in this order — each is a line
-// the row shares, so a line's labels, badges, values and deltas can sit on shared tracks.
-describe('StatTile four lines', () => {
-  it('renders label, badge row, value and delta in that order, all four every time', () => {
+// Header, value and delta share tracks; badges belong beside the title, not on a reserved line.
+describe('StatTile three lines', () => {
+  it('renders header, value and delta in that order every time', () => {
     render(<StatTile label="Net worth" value="$1.00" />)
     const tile = document.querySelector('.stat-tile') as HTMLElement
     expect([...tile.children].map((child) => child.className)).toEqual([
-      'stat-label',
-      'stat-badge-row',
+      'stat-header',
       'stat-value',
       'stat-delta stat-delta-neutral',
     ])
     // Empty lines are EMPTY — no whitespace node — so CSS `:empty` can size them to nothing.
-    expect(tile.querySelector('.stat-badge-row')?.childNodes.length).toBe(0)
+    expect(tile.querySelector('.stat-badge-row')).toBeNull()
     expect(tile.querySelector('.stat-delta')?.childNodes.length).toBe(0)
   })
 
@@ -253,26 +251,25 @@ describe('countUp', () => {
 // orphan hint line and onto the tile it describes; the nowrap unit is why the (i) can no longer
 // wrap onto a line of its own.
 describe('StatTile badge and label unit', () => {
-  it('renders the badge as a pill on its own line, never inside the label', () => {
+  it('renders the badge beside the label in the shared header', () => {
     render(<StatTile label="Living spending" value="$4,932.87" badge="Not yet reviewed" hint="Cash outflow this month." />)
-    const badge = document.querySelector('.stat-badge-row > .stat-badge')
+    const badge = document.querySelector('.stat-header > .stat-badge')
     expect(badge?.textContent).toBe('Not yet reviewed')
-    // The label line holds the label alone: a badge there wrapped under it at 1440 and dropped that
-    // one value 17–19px below its neighbours (OU-03).
+    // Keep the label's identity separate from its status, while sharing one header track.
     expect(document.querySelector('.stat-label .stat-badge')).toBeNull()
     expect(document.querySelector('.stat-label')?.textContent).toBe('Living spending')
     // Every page test that finds a tile by its label keeps working: the text is one node.
     expect(screen.getByText('Living spending')).toBeTruthy()
-    // Text and (i) share one nowrap span, so the icon can never wrap alone.
+    // Text and its info affordance remain together in the label unit.
     const unit = document.querySelector('.stat-label-text') as HTMLElement
     expect(unit.textContent).toBe('Living spending')
     expect(unit.querySelector('button.info-hint')).toBeTruthy()
   })
 
-  it('renders no badge node without the prop — the badge line stays, empty', () => {
+  it('renders no badge or reserved badge line without the prop', () => {
     render(<StatTile label="Net worth" value="$1.00" />)
     expect(document.querySelector('.stat-badge')).toBeNull()
-    expect(document.querySelector('.stat-badge-row')?.childNodes.length).toBe(0)
+    expect(document.querySelector('.stat-badge-row')).toBeNull()
     expect(document.querySelector('.stat-label')?.textContent).toBe('Net worth')
   })
 
@@ -280,8 +277,7 @@ describe('StatTile badge and label unit', () => {
     const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\s+/g, ' ')
-    expect(css).toContain('.stat-label-text { white-space: nowrap; }')
-    // The box (0.7rem, its padding) is shared with the steady row's reserve — tileRowCss.test.ts.
+    expect(css).toMatch(/\.stat-label-text \{[^}]*display: inline-flex;[^}]*white-space: nowrap;/)
     expect(css).toMatch(/\.stat-badge \{[^}]*background: var\(--fill\);[^}]*text-transform: none;/)
   })
 })

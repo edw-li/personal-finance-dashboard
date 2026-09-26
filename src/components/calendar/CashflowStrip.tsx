@@ -71,7 +71,7 @@ function legWords(events: CalendarEvent[], month: string, direction: 'in' | 'out
 // no estimate the tile says so and the net is the scheduled one, labelled as such. A tile whose
 // inputs include an estimate wears the tilde; the quote the vest estimates ride is on the Vesting
 // tile's own line. Hidden events are excluded; done deadlines are included (the money still moved).
-// Each labelled group is a slot of the row's four lines (2026-09-25 polish spec §4.1), and the two
+// Each labelled group is a slot of the row's three lines, and the two
 // scheduled legs say what they count (§4.4).
 export default function CashflowStrip({
   events,

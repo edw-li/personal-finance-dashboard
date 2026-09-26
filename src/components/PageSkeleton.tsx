@@ -80,7 +80,7 @@ export default function PageSkeleton({
   )
 }
 
-/* A ghost tile IS a tile (2026-09-25 polish spec §4.6): the real four lines, a block set inside the
+/* A ghost tile IS a tile (2026-09-25 polish spec §4.6): the real three lines, a block set inside the
    label's, the figure's and the delta's line box, so it stands exactly as tall as the tile that
    replaces it — the same type sets every line, at every width — and takes the row's subgrid like any
    tile. Exported (2026-09-07): the ESPP strip, the Overview and Paycheck ghost single slots of a mixed
@@ -94,10 +94,11 @@ export function GhostTile({ delta = true, hero = false }: { delta?: boolean; her
     // aria-hidden on the TILE, not only on the row above it: in a mixed row its neighbours are real
     // tiles that must stay readable, so there is no hidden container.
     <div className={classes} aria-hidden="true">
-      <div className="stat-label">
-        <span className="skeleton skeleton-label" />
+      <div className="stat-header">
+        <div className="stat-label">
+          <span className="skeleton skeleton-label" />
+        </div>
       </div>
-      <div className="stat-badge-row" />
       <div className="stat-value">
         <span className="stat-value-figure">
           <span className="skeleton skeleton-value" />

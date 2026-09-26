@@ -21,9 +21,9 @@ const rule = (selector: string) => {
 }
 
 describe('tile rows share one grid (spec §4.1)', () => {
-  it('makes every tile — or its labelled slot — a four-line subgrid of its row', () => {
+  it('makes every tile — or its labelled slot — a three-line subgrid of its row', () => {
     expect(CSS).toContain(
-      '.kpi-row > .stat-tile, .kpi-row > .stat-tile-slot, .stat-tile-slot > .stat-tile { grid-row: span 4; grid-template-rows: subgrid; row-gap: 0; }',
+      '.kpi-row > .stat-tile, .kpi-row > .stat-tile-slot, .stat-tile-slot > .stat-tile { grid-row: span 3; grid-template-rows: subgrid; row-gap: 0; }',
     )
     expect(CSS).toContain('.stat-tile-slot { display: grid; grid-template-columns: minmax(0, 1fr); }')
   })
@@ -51,9 +51,10 @@ describe('tile rows share one grid (spec §4.1)', () => {
     expect(CSS).toContain('.stat-tile-hero .stat-value-figure { font-size: min(clamp(1.5rem, 1rem + 1.1vw, 2.4rem), 12cqi); }')
   })
 
-  it('costs an empty badge or delta line nothing, and keeps each delta clause whole', () => {
-    expect(CSS).toContain('.stat-badge-row { display: flex; align-items: center; }')
-    expect(CSS).toContain('.stat-badge-row:not(:empty) { margin-bottom: 0.35rem; }')
+  it('keeps badges in the header, empty deltas free and each delta clause whole', () => {
+    expect(rule('.stat-header')).toContain('justify-content: space-between;')
+    expect(rule('.stat-badge')).toContain('flex: none;')
+    expect(CSS).not.toContain('.stat-badge-row')
     expect(CSS).toContain('.stat-delta:empty { margin-top: 0; }')
     expect(CSS).toContain('.stat-delta-clause { display: inline-block; }')
   })
@@ -63,14 +64,10 @@ describe('tile rows share one grid (spec §4.1)', () => {
     expect(CSS).not.toMatch(/\.skeleton-tile \{[^}]*min-height/)
   })
 
-  it('reserves the badge line and one delta line on a steady row, in their own boxes', () => {
+  it('reserves only the delta line on a steady row', () => {
     expect(CSS).toContain(
-      '.stat-badge, .kpi-row-steady .stat-badge-row:empty::before { padding: 0.05rem 0.45rem; font-size: 0.7rem; font-weight: 500; }',
+      ".kpi-row-steady .stat-delta:empty::before { content: '\\a0'; visibility: hidden; }",
     )
-    expect(CSS).toContain(
-      ".kpi-row-steady .stat-badge-row:empty::before, .kpi-row-steady .stat-delta:empty::before { content: '\\a0'; visibility: hidden; }",
-    )
-    expect(CSS).toContain('.kpi-row-steady .stat-badge-row { margin-bottom: 0.35rem; }')
     expect(CSS).toContain('.kpi-row-steady .stat-delta:empty { margin-top: 0.35rem; }')
   })
 

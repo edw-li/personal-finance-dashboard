@@ -63,9 +63,7 @@ export default function StatTile({
   hint?: string
   hero?: boolean
   evidence?: MetricEvidence
-  /** A small status pill on the badge line under the label ("Not yet reviewed") — the review state
-   *  that used to float under the tile row as an orphan line (2026-09-13 polish §10); its own line
-   *  since 2026-09-25 (polish spec §4.1). */
+  /** A small status pill at the top right, beside the label ("Not yet reviewed"). */
   badge?: ReactNode
   /** Settle the value from 0 over ~450ms on a FRESH first paint (2026-08-27 spec §8).
    *  Callers gate it themselves (never on cached paints); the final frame renders
@@ -121,21 +119,18 @@ export default function StatTile({
   const glyphSpan = glyph ? <span className="stat-delta-glyph" aria-hidden="true">{glyph} </span> : null
   return (
     <div className={hero ? 'stat-tile stat-tile-hero' : 'stat-tile'}>
-      {/* Four lines, always, in this order (2026-09-25 polish spec §4.1, contract C4). Inside a row
-          each is a track the row shares — label · badge · value · delta — so a line's figures sit on
-          one baseline and its deltas start on one line whatever each tile carries. */}
-      <div className="stat-label">
-        {/* One nowrap unit for the words and their (i): an atomic inline may break before it,
-            and the icon kept landing alone on a second line (audit P-11). */}
-        <span className="stat-label-text">
-          {label}
-          {hint !== undefined && evidence === undefined && <InfoHint text={hint} />}
-          {evidence !== undefined && <MetricInfoButton evidence={evidence} />}
-        </span>
+      {/* Shared header, value and delta tracks keep the figures aligned without reserving
+          an empty badge line. A badge stays at the header's top right. */}
+      <div className="stat-header">
+        <div className="stat-label">
+          <span className="stat-label-text">
+            {label}
+            {hint !== undefined && evidence === undefined && <InfoHint text={hint} />}
+            {evidence !== undefined && <MetricInfoButton evidence={evidence} />}
+          </span>
+        </div>
+        {badge !== undefined && <span className="stat-badge">{badge}</span>}
       </div>
-      {/* The badge's own line: beside the label it wrapped under it in a narrow tile and pushed that
-          one value off the row's baseline (OU-03). Empty without a badge. */}
-      <div className="stat-badge-row">{badge !== undefined && <span className="stat-badge">{badge}</span>}</div>
       <div className="stat-value">
         {/* The figure is what .stat-value's container width sizes (panels.css). */}
         <span className="stat-value-figure">{display ?? value}</span>
