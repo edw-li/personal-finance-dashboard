@@ -32,6 +32,7 @@ from app.schemas.credit_cards import (
 )
 from app.schemas.ordering import OrderIn
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.day_labels import long_day
 from app.services.money import (
     MONEY_MAX_ABS_8_2,
     MONEY_MAX_ABS_10_2,
@@ -73,6 +74,18 @@ def _edit_label(noun: str, name: str, before: dict, after: dict, *, off: str, on
     if moved == {"is_active"}:
         return f"{on if after['is_active'] else off} {noun} {name}"
     return f"Edited {noun} {name}"
+
+
+def _dollars(value: Decimal) -> str:
+    """Money inside a sentence: '$300', '$20,000', '$1,234.50' — whole dollars drop the
+    cents."""
+    return f"${value:,.0f}" if value == value.to_integral_value() else f"${value:,.2f}"
+
+
+def _credit_name(label: str) -> str:
+    """'Travel' -> 'Travel credit'. The card page names a credit "the {label} credit", so a
+    label that already ends in the word keeps its own."""
+    return label if label.lower().endswith("credit") else f"{label} credit"
 
 
 # --- reward categories (matrix rows) ------------------------------------------------------
@@ -515,7 +528,10 @@ async def list_credit_cards(db: AsyncSession = Depends(get_db)) -> list[CreditCa
 
 @router.post("", response_model=CreditCardOut, status_code=201)
 async def create_credit_card(
-    body: CreditCardIn, db: AsyncSession = Depends(get_db)
+    body: CreditCardIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CreditCardOut:
     values = await _validated_card_values(db, body, card_id=None)
     if values["sort_order"] is None:
@@ -527,7 +543,10 @@ async def create_credit_card(
         ).scalar_one()
     card = CreditCard(**values)
     db.add(card)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(card)
+    batch.label = f"Added card {card.name}"
+    response.headers.update(batch_header(await batch.commit()))
     return await _one_card_out(db, card)
 
 
@@ -550,29 +569,76 @@ async def reorder_credit_cards(
 
 @router.patch("/{card_id}", response_model=CreditCardOut)
 async def update_credit_card(
-    card_id: int, body: CreditCardIn, db: AsyncSession = Depends(get_db)
+    card_id: int,
+    body: CreditCardIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CreditCardOut:
     """Full replace (house style) — the client sends the whole card back, except that an
     absent or null sort_order keeps the stored one (2026-09-23 reorder spec §3.3): the
-    list's drag owns that column, and an edit form holding a stale copy must not undo it."""
+    list's drag owns that column, and an edit form holding a stale copy must not undo it.
+    Archive / Unarchive is this same PATCH with is_active flipped, and its label says so."""
     card = await _get_card(db, card_id)
     values = await _validated_card_values(db, body, card_id=card_id)
     if values["sort_order"] is None:
         del values["sort_order"]
+    before = row_image(card)
     for field, value in values.items():
         setattr(card, field, value)
-    await db.commit()
+    batch.record_update(card, before)
+    batch.label = _edit_label(
+        "card", card.name, before, row_image(card), off="Archived", on="Unarchived"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return await _one_card_out(db, card)
 
 
 @router.delete("/{card_id}", status_code=204)
-async def delete_credit_card(card_id: int, db: AsyncSession = Depends(get_db)) -> Response:
-    """Cascades credits, cells and limit events (FK CASCADE); pins SET NULL. The
-    frontend offers Undo by re-POSTing the card plus its children."""
+async def delete_credit_card(
+    card_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Removes the card and everything that points at it, each row IMAGED so the Activity
+    card's Undo restores all of it with the same ids: the categories pinned to the card are
+    unpinned first (updates to NULL), then its credits, cells and limit history go, and the
+    card goes LAST — undo replays in reverse, so the card is back before anything that points
+    at it."""
     card = await _get_card(db, card_id)
+    pinned = (
+        (
+            await db.execute(
+                select(RewardCategory)
+                .where(RewardCategory.pinned_card_id == card_id)
+                .order_by(RewardCategory.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for category in pinned:
+        before = row_image(category)
+        category.pinned_card_id = None
+        batch.record_update(category, before)
+    for child in (CardCredit, RewardRate, CreditLimitEvent):
+        rows = (
+            (await db.execute(select(child).where(child.card_id == card_id).order_by(child.id)))
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            batch.record_delete(row)
+            await db.delete(row)
+    # All of it reaches the database BEFORE the card's own DELETE. With no relationship()
+    # between these models the unit of work orders deletes by class name, CreditCard ahead of
+    # CreditLimitEvent and RewardRate, and the FK cascade would take rows the session still
+    # means to delete.
+    await db.flush()
+    batch.record_delete(card)
+    batch.label = f"Deleted card {card.name}"
     await db.delete(card)
-    await db.commit()
-    return Response(status_code=204)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- card credits -------------------------------------------------------------------------
@@ -587,9 +653,13 @@ def _validated_credit_value(value: Decimal) -> Decimal:
 
 @router.post("/{card_id}/credits", response_model=CardCreditOut, status_code=201)
 async def create_card_credit(
-    card_id: int, body: CardCreditIn, db: AsyncSession = Depends(get_db)
+    card_id: int,
+    body: CardCreditIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CardCredit:
-    await _get_card(db, card_id)
+    card = await _get_card(db, card_id)
     credit = CardCredit(
         card_id=card_id,
         label=body.label,
@@ -598,33 +668,56 @@ async def create_card_credit(
         reset_cadence=body.reset_cadence,
     )
     db.add(credit)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(credit)
+    batch.label = (
+        f"Added the {_dollars(credit.annual_value)} {_credit_name(credit.label)} to {card.name}"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return credit
 
 
 @router.patch("/credits/{credit_id}", response_model=CardCreditOut)
 async def update_card_credit(
-    credit_id: int, body: CardCreditIn, db: AsyncSession = Depends(get_db)
+    credit_id: int,
+    body: CardCreditIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CardCredit:
     credit = await db.get(CardCredit, credit_id)
     if credit is None:
         raise HTTPException(status_code=404, detail="credit not found")
+    card = await _get_card(db, credit.card_id)
+    annual_value = _validated_credit_value(body.annual_value)
+    # Every raise is behind us — mutate only now, then image what moved.
+    before = row_image(credit)
     credit.label = body.label
-    credit.annual_value = _validated_credit_value(body.annual_value)
+    credit.annual_value = annual_value
     credit.counts = body.counts
     credit.reset_cadence = body.reset_cadence
-    await db.commit()
+    batch.record_update(credit, before)
+    batch.label = f"Edited the {_credit_name(credit.label)} on {card.name}"
+    response.headers.update(batch_header(await batch.commit()))
     return credit
 
 
 @router.delete("/credits/{credit_id}", status_code=204)
-async def delete_card_credit(credit_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_card_credit(
+    credit_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
     credit = await db.get(CardCredit, credit_id)
     if credit is None:
         raise HTTPException(status_code=404, detail="credit not found")
+    card = await _get_card(db, credit.card_id)
+    batch.record_delete(credit)
+    batch.label = (
+        f"Deleted the {_dollars(credit.annual_value)} {_credit_name(credit.label)} from {card.name}"
+    )
     await db.delete(credit)
-    await db.commit()
-    return Response(status_code=204)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- credit limit events ------------------------------------------------------------------
@@ -632,12 +725,16 @@ async def delete_card_credit(credit_id: int, db: AsyncSession = Depends(get_db))
 
 @router.post("/{card_id}/limits", response_model=list[CreditLimitEventOut], status_code=201)
 async def create_limit_event(
-    card_id: int, body: CreditLimitEventIn, db: AsyncSession = Depends(get_db)
+    card_id: int,
+    body: CreditLimitEventIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[CreditLimitEvent]:
     """Returns the card's FULL limit history ascending (the budgets-PUT precedent) so
     the editor renders without a second fetch. Same (card, date) → 409, not upsert:
     a mis-dated entry is fixed by delete-then-re-add, keeping every change deliberate."""
-    await _get_card(db, card_id)
+    card = await _get_card(db, card_id)
     require_reasonable_date(body.effective_date, "effective_date")
     amount = quantize_money(body.limit_amount, "limit_amount", max_abs=MONEY_MAX_ABS_12_2)
     if amount <= 0:
@@ -659,15 +756,19 @@ async def create_limit_event(
             status_code=409,
             detail=f"limit event for {body.effective_date} already exists — delete it first",
         )
-    db.add(
-        CreditLimitEvent(
-            card_id=card_id,
-            effective_date=body.effective_date,
-            limit_amount=amount,
-            note=body.note,
-        )
+    event = CreditLimitEvent(
+        card_id=card_id,
+        effective_date=body.effective_date,
+        limit_amount=amount,
+        note=body.note,
     )
-    await db.commit()
+    db.add(event)
+    await db.flush()
+    batch.record_insert(event)
+    batch.label = (
+        f"Added {card.name}'s {_dollars(amount)} limit from {long_day(body.effective_date)}"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return list(
         (
             await db.execute(
@@ -683,12 +784,19 @@ async def create_limit_event(
 
 @router.delete("/{card_id}/limits/{event_id}", status_code=204)
 async def delete_limit_event(
-    card_id: int, event_id: int, db: AsyncSession = Depends(get_db)
+    card_id: int,
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> Response:
-    await _get_card(db, card_id)
+    card = await _get_card(db, card_id)
     event = await db.get(CreditLimitEvent, event_id)
     if event is None or event.card_id != card_id:
         raise HTTPException(status_code=404, detail="limit event not found")
+    batch.record_delete(event)
+    batch.label = (
+        f"Deleted {card.name}'s {_dollars(event.limit_amount)} limit from "
+        f"{long_day(event.effective_date)}"
+    )
     await db.delete(event)
-    await db.commit()
-    return Response(status_code=204)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
