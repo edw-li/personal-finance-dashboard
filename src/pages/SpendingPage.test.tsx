@@ -763,13 +763,13 @@ describe('SpendingPage — reviewed-month metrics', () => {
     expect(tileValue('Living spending — Jun 2026')).toBe('$2,750.00')
     const june = screen.getByText('Living spending — Jun 2026').closest('.stat-tile') as HTMLElement
     expect(june.querySelector('.stat-badge')).toBeNull() // a closed month wears no badge
-    expect(june.querySelector('.stat-delta')?.textContent).toBe('Cash outflow $2,750.00 · tax $0.00 · transfers $0.00')
+    expect(june.querySelector('.stat-delta')?.textContent).toBe('tax $0 · transfers $0')
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
     expect(await screen.findByText('Where Jul 2026 went')).toBeTruthy()
     expect(tileValue('Living spending — Jul 2026')).toBe('$2,580.00')
     const july = screen.getByText('Living spending — Jul 2026').closest('.stat-tile') as HTMLElement
     expect(july.querySelector('.stat-badge')?.textContent).toBe(REVIEW_LABELS.in_progress)
-    expect(july.querySelector('.stat-delta')?.textContent).toBe('Cash outflow $2,580.00 · tax $0.00 · transfers $0.00')
+    expect(july.querySelector('.stat-delta')?.textContent).toBe('tax $0 · transfers $0')
     // T3/L4: no bare line under the tiles and no third door into the wizard.
     expect(document.querySelector('.spending-metric-context')).toBeNull()
     expect(screen.queryByRole('link', { name: 'Review month' })).toBeNull()
@@ -784,6 +784,41 @@ describe('SpendingPage — reviewed-month metrics', () => {
     expect(screen.queryByText('Living spending — Jul 2026')).toBeNull()
     fireEvent.click(screen.getByLabelText(/Stacked bar chart of all monthly category entries/))
     expect(await screen.findByText('Living spending — Jun 2026')).toBeTruthy()
+  })
+
+  // 2026-09-25 polish spec §4.4: the two bare tiles get a real second line — the month before, from the
+  // matrix (up is good for both) — and the row reserves its badge and delta lines (§4.3).
+  it('compares savings and net pay with the month before, and keeps the row steady', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture())
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')
+    // 57.0% against June's 54.2%: 2.8 points up, green.
+    expect(delta('Savings rate — cash')?.textContent).toBe('▲ 2.8 pts vs Jun')
+    expect(delta('Savings rate — cash')?.className).toContain('stat-delta-positive')
+    // $6,000.00 both months.
+    expect(delta('Net pay')?.textContent).toBe('same as Jun')
+    expect(delta('Net pay')?.className).toContain('stat-delta-neutral')
+    expect(screen.getByText('Savings rate — cash').closest('.kpi-row')?.className).toBe('kpi-row kpi-row-steady')
+  })
+
+  it('says a month with nothing before it has nothing to compare', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: '2026-06-01', review_state: ['closed', 'in_progress'] }))
+    renderPage()
+    await screen.findByText('Where Jun 2026 went')
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')
+    expect(delta('Savings rate — cash')?.textContent).toBe('No May to compare')
+    expect(delta('Net pay')?.textContent).toBe('No May to compare')
+  })
+
+  it('prints the net-pay change in whole dollars, signed and toned', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ net_pay: ['6000.00', '5141.25'], savings_rate: ['0.541666667', '0.5'] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')
+    expect(delta('Net pay')?.textContent).toBe('▼ -$859 vs Jun')
+    expect(delta('Net pay')?.className).toContain('stat-delta-negative')
+    expect(delta('Savings rate — cash')?.textContent).toBe('▼ 4.2 pts vs Jun')
   })
 
   it('uses the server comparison window and counts eligible months instead of averaging the displayed history', async () => {

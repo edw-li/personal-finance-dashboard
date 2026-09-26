@@ -51,8 +51,8 @@ import { partialFootnote, partlyEnteredMonths } from '../charts/partlyEntered'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
-import { formatCurrency, formatMonth, formatPct } from '../utils/format'
-import { todayIso } from '../utils/months'
+import { formatCurrency, formatCurrencyWhole, formatMonth, formatPct } from '../utils/format'
+import { addMonths, todayIso } from '../utils/months'
 import { hasVsBudget, monthMovers } from '../utils/spending'
 import '../components/panels.css'
 import './SpendingPage.css'
@@ -89,6 +89,25 @@ function defaultTrend(m: SpendingMatrix): { categoryId: number }[] {
   if (m.categories.length === 0) return []
   const [biggest] = rankCategories(m)
   return biggest === undefined ? [] : [{ categoryId: biggest.id }]
+}
+
+/** A tile's second line against the month before (2026-09-25 polish spec §4.4): "▲ 2.8 pts vs Jun",
+ *  "▼ -$859 vs Jun" — up is good for both, so the tone follows the direction — "same as Jun", or "No Jun
+ *  to compare" when that month has no figure. `change` words the difference; `flat` is the least change
+ *  that is not "same". */
+function versusMonthBefore(
+  current: string | null,
+  previous: string | null,
+  previousMonth: string,
+  change: (difference: number) => string,
+  flat: number,
+): { text: string; tone: 'positive' | 'negative' | 'neutral' } {
+  const name = formatMonth(previousMonth).slice(0, 3)
+  if (current === null) return { text: 'no take-home entered', tone: 'neutral' }
+  if (previous === null) return { text: `No ${name} to compare`, tone: 'neutral' }
+  const difference = Number(current) - Number(previous)
+  if (Math.abs(difference) < flat) return { text: `same as ${name}`, tone: 'neutral' }
+  return { text: `${change(difference)} vs ${name}`, tone: difference > 0 ? 'positive' : 'negative' }
 }
 
 export default function SpendingPage() {
@@ -449,14 +468,25 @@ export default function SpendingPage() {
     // must not dilute the average. totals[] itself carries "0.00" for such months (the
     // server sums over an empty set), so enteredness is judged on the SERIES — the same
     // rule filledMonths uses for the ribbon below.
+    // The calendar month before, for the two tiles' second lines (spec §4.4) — absent from the matrix,
+    // or unentered there, it has no figure to compare with.
+    const previousMonth = addMonths(matrix.months[focusIndex], -1)
+    const previousIndex = matrix.months.indexOf(previousMonth)
     return {
       month: matrix.months[focusIndex],
       total: matrix.living_total?.[focusIndex] ?? null,
       average: matrix.comparison_average?.[focusIndex] ?? null,
       savings: matrix.savings_rate[focusIndex],
       netPay: matrix.net_pay[focusIndex],
+      previousMonth,
+      previousSavings: previousIndex < 0 ? null : matrix.savings_rate[previousIndex],
+      previousNetPay: previousIndex < 0 ? null : matrix.net_pay[previousIndex],
     }
   }, [matrix, focusIndex])
+  // The two tiles' second lines against the month before (spec §4.4): points for the rate, whole
+  // dollars for the pay.
+  const savingsLine = kpis && versusMonthBefore(kpis.savings, kpis.previousSavings, kpis.previousMonth, (d) => `${Math.abs(d * 100).toFixed(1)} pts`, 0.0005)
+  const netPayLine = kpis && versusMonthBefore(kpis.netPay, kpis.previousNetPay, kpis.previousMonth, formatCurrencyWhole, 0.5)
   // The compared month's review state — the tile's badge when it is not closed (T3).
   const reviewState = matrix?.review_state?.[focusIndex]
 
@@ -523,7 +553,7 @@ export default function SpendingPage() {
           },
         }}
         skeleton={{
-          tiles: 4,
+          tiles: { count: 4, steady: true },
           cards: [
             { span: 12, height: 360 },
             { span: 6, height: 300 },
@@ -537,14 +567,17 @@ export default function SpendingPage() {
         <LocalSectionPanel state={views} section="overview">
         <FeedBanner error={evidence.error} />
         {kpis && (
-          <div className="kpi-row">
+          // Steady (2026-09-25 polish spec §4.3): the badge line and one delta line are reserved, so the
+          // row keeps one height across every month the ribbon offers (200 ↔ 217px before).
+          <div className="kpi-row kpi-row-steady">
             <StatTile
               label={`Living spending — ${formatMonth(kpis.month)}`}
               value={formatCurrency(kpis.total)}
-              // T3 (2026-09-13 audit): the cash triple that floated under the row as a bare line
-              // is this tile's own second line; the review state is its badge (closed = nothing
-              // to flag). Neutral tone — a split, not a judgment.
-              delta={`Cash outflow ${formatCurrency(matrix?.cash_outflow?.[focusIndex])} · tax ${formatCurrency(matrix?.tax_total?.[focusIndex])} · transfers ${formatCurrency(matrix?.transfer_total?.[focusIndex])}`}
+              // T3 (2026-09-13 audit): the month's other outflows are this tile's own second line — tax
+              // and transfers, whole dollars, one line at 1440 (2026-09-25 spec §4.3; the cash total, =
+              // living + tax, ran it to two). The review state is its badge (closed = nothing to flag).
+              // Neutral tone — a split, not a judgment.
+              delta={`tax ${formatCurrencyWhole(matrix?.tax_total?.[focusIndex])} · transfers ${formatCurrencyWhole(matrix?.transfer_total?.[focusIndex])}`}
               tone="neutral"
               badge={reviewState !== undefined && reviewState !== 'closed' ? REVIEW_LABELS[reviewState] : undefined}
               hint="Living categories only. Tax paid from take-home and transfers are shown separately."
@@ -560,12 +593,16 @@ export default function SpendingPage() {
             <StatTile
               label="Savings rate — cash"
               value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
+              delta={savingsLine?.text}
+              tone={savingsLine?.tone}
               hint="(net pay − living spend − tax paid) ÷ net pay for the viewed month. Payroll deductions are not in this one — the Savings rate chart on Trends draws both readings."
               evidence={evidence.metric('cash_savings_rate')}
             />
             <StatTile
               label="Net pay"
               value={formatCurrency(kpis.netPay)}
+              delta={netPayLine?.text}
+              tone={netPayLine?.tone}
               hint="Take-home pay entered for the viewed month."
               evidence={evidence.metric('net_pay')}
             />
