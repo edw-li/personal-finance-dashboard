@@ -102,7 +102,7 @@ beforeEach(() => {
     { effective_month: '2026-03-01', amount: '425.00' },
     { effective_month: '2026-09-01', amount: null },
   ])
-  vi.mocked(deleteCategoryBudget).mockResolvedValue(undefined)
+  vi.mocked(deleteCategoryBudget).mockResolvedValue({ batchId: null })
   vi.mocked(fetchBudgetSuggestions).mockResolvedValue(suggestions)
   vi.mocked(seedBudgets).mockResolvedValue(seeded)
   vi.mocked(undoBatch).mockResolvedValue({} as never)

@@ -14,8 +14,10 @@ from app.services.ownership import parse_owner
 from app.services.people import load_people, primary_person
 
 
-async def resolve_portfolio_account(db: AsyncSession, label: str) -> PortfolioAccount:
-    """Get-or-create the row for `label` (stripped, exactly as the router always stored it).
+async def resolve_portfolio_account(db: AsyncSession, label: str) -> tuple[PortfolioAccount, bool]:
+    """Get-or-create the row for `label` (stripped, exactly as the router always stored it),
+    and whether THIS call minted it — a change-logged writer (the ledger router) images the
+    minted row, so an Undo takes it away with the write that brought it.
 
     A NEW label defaults to the PRIMARY person — the migration's backfill rule, continued
     for labels that appear later; a database with no roster (create_all tests, a scratch
@@ -33,12 +35,12 @@ async def resolve_portfolio_account(db: AsyncSession, label: str) -> PortfolioAc
         .first()
     )
     if existing is not None:
-        return existing
+        return existing, False
     primary = primary_person(await load_people(db))
     account = PortfolioAccount(label=cleaned, person_id=None if primary is None else primary.id)
     db.add(account)
     await db.flush()
-    return account
+    return account, True
 
 
 def portfolio_owner_clause(owner: str) -> ColumnElement[bool]:

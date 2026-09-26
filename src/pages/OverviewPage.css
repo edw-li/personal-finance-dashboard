@@ -176,14 +176,17 @@
 .up-next-clause {
   white-space: nowrap;
 }
-/* The two columns end on the same line (lane V: the agenda column ran 66px past the wealth
-   column at 1440 and 1920, over the 24px limit). `stretch` hands both columns the taller one's
-   height, and each column's LAST row takes the slack — so the difference lands INSIDE the last
-   card rather than as dead space under it. Row counts are exact: trend + changes, and up next +
+/* The two columns end on one line (lane V: the agenda column ran 66px past the wealth column at
+   1440 and 1920, over the 24px limit), and the slack goes to something that can use it (2026-09-25
+   polish spec §3.2, OU-04). `stretch` hands both columns the taller one's height. On the left the Net
+   worth trend's row is the 1fr and the trend fills it (ChartCard `fill`); "Changes" keeps its own
+   height instead of carrying a 66–134px blank band. On the right the cards are content-sized and only
+   the last, Data status, takes slack — when the left column is the taller (the trend's Table open),
+   with its note pinned to its foot (below). Row counts are exact: trend + changes, and up next +
    needs attention + data status. */
 .overview-primary { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(310px, 1fr); gap: 1rem; align-items: stretch; }
 .overview-wealth-column, .overview-agenda-column { display: grid; gap: 1rem; min-width: 0; }
-.overview-wealth-column { grid-template-rows: auto 1fr; }
+.overview-wealth-column { grid-template-rows: 1fr auto; }
 .overview-agenda-column { grid-template-rows: auto auto 1fr; }
 .overview-primary .card { margin: 0; }
 .overview-primary .up-next { margin: 0; }
@@ -232,7 +235,11 @@
 .data-status-row dt { flex: none; color: var(--muted); white-space: nowrap; }
 .data-status-row dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .overview-data-status .stale { color: var(--warn); }
-.data-status-note { margin: .6rem 0 0; }
+/* Data status is the card that stretches when the wealth column runs taller (spec §3.2): a column, so
+   its note rides the card's foot rather than hanging over a blank band. The note's air becomes padding
+   so it holds when there is no slack to push it down. */
+.overview-data-status { display: flex; flex-direction: column; }
+.data-status-note { margin: auto 0 0; padding-top: .6rem; }
 
 /* Start here (2026-09-14 guide spec §7.1): the empty book's one card, first in the agenda
    column. The column's three-row template above counts the cards that always ship, so the

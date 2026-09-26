@@ -13,6 +13,7 @@ import { useDetailPanel } from '../details/DetailPanelProvider'
 import Disclosure from '../Disclosure'
 import Segmented from '../shell/Segmented'
 import SelectionDetail from '../details/SelectionDetail'
+import TableScroll from '../TableScroll'
 import AllocationTargetEditor from './AllocationTargetEditor'
 import ClassificationEditor from './ClassificationEditor'
 import type { ClassificationEditorHandle } from './ClassificationEditor'
@@ -184,23 +185,27 @@ function AllocationAside({ data, onSelect, onClassify, onSelectTicker }: {
       {data.latest_quote_at !== data.as_of ? ` – ${formatDate(data.latest_quote_at)}` : ''}.
       {coverage.unpriced_count > 0 ? ' Missing-price value cannot be estimated from coverage counts.' : ''}
     </p>
-    <table className="port-table allocation-ranked-table">
-      <thead><tr><th scope="col">Category</th><th scope="col" className="num">Value</th><th scope="col" className="num">Weight</th></tr></thead>
-      <tbody>{data.slices.map((slice, index) => <Fragment key={slice.key}>
-        <tr className={slice.is_unknown ? 'allocation-unknown' : undefined}>
-          <th scope="row"><button type="button" className="allocation-category-button" onClick={() => onSelect(slice)}>
-            <span className="allocation-category-swatch" aria-hidden="true"
-              style={{ backgroundColor: slice.is_unknown ? 'var(--other-series)' : `var(--chart-${index % 8 + 1})` }} />
-            {displayLabel(slice.key, slice.label, data.by)}
-          </button></th>
-          <td className="num">{formatCurrency(slice.market_value)}</td>
-          <td className="num">{formatPct(slice.weight_pct, { signed: false })}</td>
-        </tr>
-        {classifiable && slice.is_unknown && slice.members.length > 0 && <tr className="allocation-unknown allocation-classify-row">
-          <td colSpan={3}><ClassifyButton count={slice.members.length} onClick={onClassify} /></td>
-        </tr>}
-      </Fragment>)}</tbody>
-    </table>
+    {/* Capped at the donut's height beside it (2026-09-25 polish spec §3.6, PE-20; allocation.css):
+        the list scrolls under its pinned header instead of resizing the card by up to 294px. */}
+    <TableScroll label="Allocation categories" className="allocation-table-scroll">
+      <table className="port-table allocation-ranked-table">
+        <thead><tr><th scope="col">Category</th><th scope="col" className="num">Value</th><th scope="col" className="num">Weight</th></tr></thead>
+        <tbody>{data.slices.map((slice, index) => <Fragment key={slice.key}>
+          <tr className={slice.is_unknown ? 'allocation-unknown' : undefined}>
+            <th scope="row"><button type="button" className="allocation-category-button" onClick={() => onSelect(slice)}>
+              <span className="allocation-category-swatch" aria-hidden="true"
+                style={{ backgroundColor: slice.is_unknown ? 'var(--other-series)' : `var(--chart-${index % 8 + 1})` }} />
+              {displayLabel(slice.key, slice.label, data.by)}
+            </button></th>
+            <td className="num">{formatCurrency(slice.market_value)}</td>
+            <td className="num">{formatPct(slice.weight_pct, { signed: false })}</td>
+          </tr>
+          {classifiable && slice.is_unknown && slice.members.length > 0 && <tr className="allocation-unknown allocation-classify-row">
+            <td colSpan={3}><ClassifyButton count={slice.members.length} onClick={onClassify} /></td>
+          </tr>}
+        </Fragment>)}</tbody>
+      </table>
+    </TableScroll>
     {coverage.warnings.map((warning) => <p className="hint" key={warning}>{warning}</p>)}
     {coverage.unpriced_holdings.length > 0 && <Disclosure summary={`Missing quotes (${coverage.unpriced_count})`} className="allocation-missing-quotes">
       {coverage.unpriced_holdings.map((h) => <p key={`${h.security_id}:${h.account}`}>

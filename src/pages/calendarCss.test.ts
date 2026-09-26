@@ -67,3 +67,13 @@ describe('CalendarPage.css — out-of-month days and the event popover (batch-2 
     expect(up).toContain('bottom: calc(100% + 4px);')
   })
 })
+
+describe('CalendarPage.css — the weekday header (2026-09-25 polish spec §3.4, PCC-04)', () => {
+  // The header row is row 1 of the same grid (the ARIA rows are display: contents), and
+  // grid-auto-rows sized it like a week: 76px for 15px of labels, a 65px blank band above the month.
+  it('sizes the header row to its labels and leaves the weeks to the auto rows', () => {
+    const grid = declarationsFor('.cal-grid')
+    expect(grid).toContain('grid-template-rows: auto;')
+    expect(grid).toContain('grid-auto-rows: minmax(76px, auto);')
+  })
+})

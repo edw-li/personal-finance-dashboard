@@ -377,3 +377,106 @@ describe('ChartCard persistent interactions', () => {
     expect(changed).toHaveBeenCalledWith(null)
   })
 })
+
+// Contract C5 (2026-09-25 polish spec §3.1): a half-width card always has a partner in its row, so it
+// grows its PLOT to the row's height — the configured height is the floor. jsdom lays nothing out;
+// what the card declares is what can be pinned here, and chartFillCss.test.ts pins the CSS.
+describe('ChartCard fill (spec §3.1, contract C5)', () => {
+  const chart = () => screen.getByTestId('echart')
+  const card = () => document.querySelector('section.chart-card') as HTMLElement
+
+  it('fills by default at span 6: the chart takes the plot box and the configured height is its floor', () => {
+    render(<ChartCard {...base} option={OPTION} span={6} height={260} />)
+    expect(chart().getAttribute('data-height')).toBe('fill')
+    expect(card().classList.contains('chart-card-fill')).toBe(true)
+    expect(card().style.getPropertyValue('--chart-h')).toBe('260px')
+  })
+
+  it('keeps a fixed plot at span 12 unless asked, and takes `fill` when it is', () => {
+    render(<ChartCard {...base} option={OPTION} height={220} />)
+    expect(chart().getAttribute('data-height')).toBe('220')
+    expect(card().classList.contains('chart-card-fill')).toBe(false)
+    // The configured height is on every card: the Allocation aside caps itself at it (§3.6).
+    expect(card().style.getPropertyValue('--chart-h')).toBe('220px')
+    cleanup()
+    render(<ChartCard {...base} option={OPTION} height={220} fill />)
+    expect(chart().getAttribute('data-height')).toBe('fill')
+    expect(card().classList.contains('chart-card-fill')).toBe(true)
+  })
+
+  it('lets a half-width card opt out', () => {
+    render(<ChartCard {...base} option={OPTION} span={6} height={300} fill={false} />)
+    expect(chart().getAttribute('data-height')).toBe('300')
+    expect(card().classList.contains('chart-card-fill')).toBe(false)
+  })
+
+  it('never fills a card with an aside — its plot sits inside the aside wrapper, which does not grow', () => {
+    render(<ChartCard {...base} option={OPTION} span={6} height={240} aside={<p>Legend</p>} />)
+    expect(chart().getAttribute('data-height')).toBe('240')
+    expect(card().classList.contains('chart-card-fill')).toBe(false)
+  })
+
+  it('keeps the skeleton at the configured height while the data is out — the CSS grows it with the row', () => {
+    render(<ChartCard {...base} option={null} busy span={6} height={300} />)
+    expect((document.querySelector('.chart-card-skeleton') as HTMLElement).style.height).toBe('300px')
+    expect(card().classList.contains('chart-card-fill')).toBe(true)
+  })
+})
+
+// Spending › Trends (spec §3.1): the card without controls reserves the controls row, so its plot
+// starts on the same line as its partner's, whose header carries a Segmented.
+describe('ChartCard reserveControls (spec §3.1)', () => {
+  it('reserves an empty controls row in a header with nothing to put there', () => {
+    render(<ChartCard {...base} option={OPTION} reserveControls />)
+    const controls = document.querySelector('.chart-card-header .chart-card-controls') as HTMLElement
+    expect(controls).toBeTruthy()
+    expect(controls.childElementCount).toBe(0)
+  })
+
+  it('draws no controls row by default', () => {
+    render(<ChartCard {...base} option={OPTION} />)
+    expect(document.querySelector('.chart-card-controls')).toBeNull()
+  })
+})
+
+// 2026-09-25 polish spec §5.5 (MOTION-11): "Table" opened the twin below the fold — 21px of it on
+// Net worth, none on Taxes — and the click looked like it did nothing. jsdom has no scrollIntoView,
+// so the prototype is stubbed (GuideCard.test's idiom).
+describe('ChartCard Table reveal (spec §5.5)', () => {
+  const csv = () => ({ headers: ['Month', 'Net worth'], rows: [['2026-08-01', '1500.00']] })
+  const original = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
+  let scrollIntoView: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    if (original) Object.defineProperty(Element.prototype, 'scrollIntoView', original)
+    else Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  })
+
+  it('brings the opened twin into view — nearest, smoothly — and does nothing on close', () => {
+    render(<ChartCard {...base} option={OPTION} csv={csv} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', behavior: 'smooth' })
+    expect(scrollIntoView.mock.instances[0]).toBe(document.querySelector('.chart-table'))
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+  })
+
+  it('lands at once for a reader who asked for less motion', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(<ChartCard {...base} option={OPTION} csv={csv} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', behavior: 'instant' })
+  })
+
+  it('does not scroll again when the card re-renders with the twin open', () => {
+    const { rerender } = render(<ChartCard {...base} option={OPTION} csv={csv} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    rerender(<ChartCard {...base} option={{ series: [] } as EChartsOption} csv={csv} />)
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+  })
+})

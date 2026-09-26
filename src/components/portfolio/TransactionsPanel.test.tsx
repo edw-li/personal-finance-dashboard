@@ -1100,7 +1100,7 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
   // any other, so no drop races the row coming back.
   it("counts the delete toast's Undo — the grips wait while the row is re-created", async () => {
     // Set here: reorderHooks' restoreAllMocks takes back the module factory's answer.
-    vi.mocked(deleteTransaction).mockResolvedValue(undefined)
+    vi.mocked(deleteTransaction).mockResolvedValue({ batchId: null })
     let answer: (value: TransactionOut) => void = () => {}
     vi.mocked(createTransaction).mockReturnValueOnce(
       new Promise<TransactionOut>((resolve) => {

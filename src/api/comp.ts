@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, apiDeleteLogged } from './client'
 import type {
   CompEventCreate,
   CompEventOut,
@@ -24,8 +24,9 @@ export function updateEvent(id: number, body: CompEventUpdate): Promise<CompEven
   return api<CompEventOut>(`/comp/events/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
-export function deleteEvent(id: number): Promise<void> {
-  return api<void>(`/comp/events/${id}`, { method: 'DELETE' })
+// Logged (2026-09-25 polish spec §6.1): the answer names the batch an Undo reverts.
+export function deleteEvent(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/comp/events/${id}`)
 }
 
 // --- RSU grants + the vesting schedule ---
@@ -48,6 +49,6 @@ export function updateRsuGrant(id: number, body: RsuGrantUpdate): Promise<RsuGra
   return api<RsuGrantOut>(`/comp/rsu-grants/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
-export function deleteRsuGrant(id: number): Promise<void> {
-  return api<void>(`/comp/rsu-grants/${id}`, { method: 'DELETE' })
+export function deleteRsuGrant(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/comp/rsu-grants/${id}`)
 }

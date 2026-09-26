@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { fetchCalendar } from '../api/calendar'
 import { fetchCoverage } from '../api/coverage'
@@ -62,8 +62,10 @@ import { metricReceipt } from '../utils/metricReceipt'
 import { REVIEW_LABELS } from '../api/monthReview'
 import OverviewChanges from '../components/overview/OverviewChanges'
 import OverviewCustomize from '../components/overview/OverviewCustomize'
+import { childRects, deeperSpans, flipChildren } from '../components/overview/customizeReflow'
 import { useAssistantView } from '../components/assistant/viewState'
 import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
+import type { OverviewLayout } from '../prefs/overviewLayout'
 import { getLocal, setLocal, subscribe } from '../prefs/prefsStore'
 import type {
   CalendarEvent,
@@ -429,6 +431,35 @@ export default function OverviewPage() {
     data !== null &&
     ((data.ts?.months.length ?? 0) > 0 || (data.yearly?.years.length ?? 0) > 0 || (data.dividends?.length ?? 0) > 0)
 
+  // The deeper grid's spans follow the order the reader chose (2026-09-25 polish spec §3.2, OU-16),
+  // over the views that DRAW: Year to date renders nothing once its feeds answer with no history, and
+  // a card that is not there must not keep the two charts apart. Its skeleton, while those feeds are
+  // out, is a card, so it counts.
+  const ytdDraws = showYtd || (ytd === null && (wealth.busy || investments.busy || spending.busy))
+  const shownDeeper = layout.cards.filter((id) => id !== 'ytd' || ytdDraws)
+  const deeperSpan = deeperSpans(shownDeeper)
+  // …and the reflow glides (spec §3.2): the boxes are read in the Customize change handler, BEFORE the
+  // new layout commits, and played in a layout effect after it — the page never paints in between. The
+  // tile row is found from the deeper grid rather than given a ref of its own: its markup is the tile
+  // lane's, and one child per tile is all this needs.
+  const deeperRef = useRef<HTMLDivElement>(null)
+  const reflowFrom = useRef<{ tiles: Map<string, DOMRect>; cards: Map<string, DOMRect> } | null>(null)
+  const tileRow = () => deeperRef.current?.closest('.overview-page')?.querySelector('.kpi-row') ?? null
+  const applyLayout = (next: OverviewLayout) => {
+    reflowFrom.current = { tiles: childRects(tileRow(), layout.tiles), cards: childRects(deeperRef.current, shownDeeper) }
+    setLayout(next)
+    setLocal('overview_layout', next)
+  }
+  // Unkeyed on purpose: it runs after every commit and does nothing unless a Customize change left
+  // boxes to play from; the ids it plays to are this render's.
+  useLayoutEffect(() => {
+    const from = reflowFrom.current
+    if (from === null) return
+    reflowFrom.current = null
+    flipChildren(tileRow(), layout.tiles, from.tiles)
+    flipChildren(deeperRef.current, shownDeeper, from.cards)
+  })
+
   // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
   // paycheck is entered but whose spending is not comes back with an explicit "0.00". A
   // green "▼ under $5,000.00 12-mo avg" would congratulate the user for a month they have
@@ -664,7 +695,7 @@ export default function OverviewPage() {
                   </div>
                 </dl>
               </section>
-            ) : ytd === null && (wealth.busy || investments.busy || spending.busy) ? (
+            ) : ytdDraws ? (
               // Spec §9: reserve the slot while the feeds behind it are still in flight — the card
               // used to appear out of nothing when `dividends` landed and shoved the deeper stack
               // down 212px on a slow investments feed.
@@ -674,7 +705,7 @@ export default function OverviewPage() {
             ) : null,
     performance: (
               <ChartCard
-                span={6}
+                span={deeperSpan.get('performance') ?? 12}
                 title="Portfolio performance"
                 hint={performanceHint}
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
@@ -704,7 +735,7 @@ export default function OverviewPage() {
     ),
     spending: (
               <ChartCard
-                span={6}
+                span={deeperSpan.get('spending') ?? 12}
                 title="Recent spending"
                 // The dashed line is spendStats.avg12 (the twelve months BEFORE the
                 // latest), which is also the figure the spend tile compares against — the
@@ -765,7 +796,7 @@ export default function OverviewPage() {
              button stays live while a load is in flight: an impatient second click is
              harmless, the body dims to show the work, and seqRef decides which answer
              lands. */
-          <><OverviewCustomize value={layout} onChange={next => { setLayout(next); setLocal('overview_layout', next) }} /><button type="button" className="button" onClick={reload}>
+          <><OverviewCustomize value={layout} onChange={applyLayout} /><button type="button" className="button" onClick={reload}>
             Refresh
           </button></>
         }
@@ -800,6 +831,9 @@ export default function OverviewPage() {
                 exportName="net-worth-trend"
                 csv={data.ts ? () => netWorthTrendCsv(data.ts!) : undefined}
                 height={220}
+                // The wealth column's elastic card (2026-09-25 polish spec §3.2): the plot grows with
+                // the band from 220px, so "Changes" below keeps its own height.
+                fill
                 selectionAdapter={params => {
                   const index = params.dataIndex
                   if (!data.ts || typeof index !== 'number' || !data.ts.months[index]) return null
@@ -928,7 +962,7 @@ export default function OverviewPage() {
                 />
               </aside>
             </div>
-            <div className="overview-deeper card-grid">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
+            <div ref={deeperRef} className="overview-deeper card-grid">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
           </>
         )}
       </PageFrame>

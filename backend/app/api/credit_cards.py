@@ -1,3 +1,17 @@
+"""Credit cards API: the rewards matrix (reward categories x cards -> multipliers), the card
+roster, and each card's credits and limit history (2026-08-25 spec).
+
+Every write is change-logged (2026-09-25 polish spec §6.1): one ChangeBatch per request, an
+Activity label, and the X-Change-Batch header, so the Activity card — and the page's own toast
+— can undo it exactly. The two deletes that have dependents image them through the ORM,
+children first and the row LAST, instead of leaving them to the FKs' ON DELETE: undo_batch
+replays in reverse, so the row is back before anything that points at it, and every row comes
+back with the id it had. Undoing a delete after a new row took the same name refuses with the
+replay sentence (the unique index is the conflict); undoing a create while other rows now
+point at it — a card's credits, cells, limit history or pins — refuses with the dependent one.
+"""
+
+from collections.abc import Sequence
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -31,6 +45,16 @@ from app.schemas.credit_cards import (
     RewardRatePut,
 )
 from app.schemas.ordering import OrderIn
+from app.services.changelog import (
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    edit_label,
+    lock_children,
+    lock_parent,
+    row_image,
+)
+from app.services.day_labels import long_day
 from app.services.money import (
     MONEY_MAX_ABS_8_2,
     MONEY_MAX_ABS_10_2,
@@ -44,6 +68,7 @@ from app.services.ordering import (
     STALE_REWARD_CATEGORIES,
     apply_order,
     in_list_order,
+    moved_ids,
     next_sort_order,
     order_lock,
 )
@@ -61,11 +86,61 @@ POINT_VALUE_MAX_ABS = Decimal(100)  # Numeric(6,4): 2 integer digits
 # int converter. Keep new static sub-paths above the cards section.
 
 
+# --- Activity labels (2026-09-25 polish spec §6.1; a PATCH's is changelog.edit_label) ------
+
+
+def _dollars(value: Decimal) -> str:
+    """Money inside a sentence: '$300', '$20,000', '$1,234.50' — whole dollars drop the
+    cents."""
+    return f"${value:,.0f}" if value == value.to_integral_value() else f"${value:,.2f}"
+
+
+def _credit_name(label: str) -> str:
+    """'Travel' -> 'Travel credit'. The card page names a credit "the {label} credit", so a
+    label that already ends in the word keeps its own."""
+    return label if label.lower().endswith("credit") else f"{label} credit"
+
+
+def _reorder_label(
+    rows: Sequence[CreditCard | RewardCategory], new_order: list[int], noun: str, plural: str
+) -> str:
+    """A reorder's label, the spending categories' rule (2026-09-23 spec §8.4): the one row
+    whose move explains the whole change is named, else the minimal moved set is counted."""
+    moved = moved_ids([row.id for row in rows], new_order)
+    if len(moved) == 1:
+        return f"Moved {noun} {next(row.name for row in rows if row.id == moved[0])}"
+    return f"Reordered {len(moved)} {plural}"
+
+
+def _matrix_label(multipliers: int, conditions: int) -> str:
+    """A matrix save's label, by what it changed: the cells whose multiplier was added,
+    changed or cleared, and the cells where only the condition moved — the note and the
+    monthly bonus cap the matrix marks with ⁺. A save that only capped a bonus must not claim
+    it edited a multiplier."""
+
+    def cells(count: int) -> str:
+        return f"{count} reward multiplier{'' if count == 1 else 's'}"
+
+    condition = "condition" if conditions == 1 else "conditions"
+    if not conditions:
+        return f"Edited {cells(multipliers)}"
+    if not multipliers:
+        return f"Edited the {condition} on {cells(conditions)}"
+    return f"Edited {cells(multipliers)} and the {condition} on {conditions} more"
+
+
 # --- reward categories (matrix rows) ------------------------------------------------------
 
 
-async def _get_reward_category(db: AsyncSession, category_id: int) -> RewardCategory:
-    category = await db.get(RewardCategory, category_id)
+async def _get_reward_category(
+    db: AsyncSession, category_id: int, *, lock: bool = False
+) -> RewardCategory:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    category = (
+        await lock_parent(db, RewardCategory, category_id)
+        if lock
+        else await db.get(RewardCategory, category_id)
+    )
     if category is None:
         raise HTTPException(status_code=404, detail="reward category not found")
     return category
@@ -98,7 +173,10 @@ async def list_reward_categories(db: AsyncSession = Depends(get_db)) -> list[Rew
 
 @router.post("/categories", response_model=RewardCategoryOut, status_code=201)
 async def create_reward_category(
-    body: RewardCategoryCreate, db: AsyncSession = Depends(get_db)
+    body: RewardCategoryCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> RewardCategory:
     slug = slugify(body.name)
     if not slug or len(slug) > 80:
@@ -136,30 +214,48 @@ async def create_reward_category(
         pinned_card_id=body.pinned_card_id,
     )
     db.add(category)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(category)
+    batch.label = f"Added reward category {category.name}"
+    response.headers.update(batch_header(await batch.commit()))
     return category
 
 
 @router.put("/categories/order", response_model=list[RewardCategoryOut])
 async def reorder_reward_categories(
-    body: OrderIn, db: AsyncSession = Depends(get_db)
+    body: OrderIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[RewardCategory]:
     """Drag-to-reorder the Categories & weights rows (2026-09-23 spec §3.2): `ids` is every
     reward category in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
-    rows whose value moves are written. Unlogged like the rest of this router — the client's
-    Undo re-sends the previous order. Serialized per list (decision 16): the order lock
-    comes first. Declared before /categories/{category_id}."""
+    rows whose value moves are written — as ONE change batch (2026-09-25 polish spec §6.1).
+    Logged because every other write to these rows is: an older edit's Undo puts its whole
+    old row back, sort_order included, so after an unlogged reorder it would silently move
+    the row; logged, that Undo meets the overlap refusal instead. The client's own Undo still
+    re-sends the previous order. Serialized per list (decision 16): the order lock comes
+    first. Declared before /categories/{category_id}."""
     await db.execute(order_lock(RewardCategory))
     categories = list((await db.execute(in_list_order(RewardCategory))).scalars())
+    before = {category.id: row_image(category) for category in categories}
     ordered, changed = apply_order(categories, body.ids, stale_detail=STALE_REWARD_CATEGORIES)
-    if changed:  # the order as stored writes nothing
-        await db.commit()
+    if not changed:  # the order as stored: nothing written, nothing logged
+        return ordered
+    for category, _old, _new in changed:
+        batch.record_update(category, before[category.id])
+    batch.label = _reorder_label(categories, body.ids, "reward category", "reward categories")
+    response.headers.update(batch_header(await batch.commit()))
     return ordered
 
 
 @router.patch("/categories/{category_id}", response_model=RewardCategoryOut)
 async def update_reward_category(
-    category_id: int, body: RewardCategoryUpdate, db: AsyncSession = Depends(get_db)
+    category_id: int,
+    body: RewardCategoryUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> RewardCategory:
     category = await _get_reward_category(db, category_id)
     updates = body.model_dump(exclude_unset=True)
@@ -197,20 +293,43 @@ async def update_reward_category(
     await _validated_category_refs(
         db, updates.get("spending_category_id"), updates.get("pinned_card_id")
     )
+    before = row_image(category)
     for field, value in updates.items():
         setattr(category, field, value)
-    await db.commit()
+    batch.record_update(category, before)
+    batch.label = edit_label(
+        "reward category", category.name, before, row_image(category), off="Hid", on="Showed"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return category
 
 
 @router.delete("/categories/{category_id}", status_code=204)
-async def delete_reward_category(category_id: int, db: AsyncSession = Depends(get_db)) -> Response:
-    """Deletes the row AND its matrix cells (FK CASCADE). Unlike spending categories
-    there is no monthly history to orphan — cells are cheap to re-enter, so no guard."""
-    category = await _get_reward_category(db, category_id)
+async def delete_reward_category(
+    category_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Deletes the row AND its matrix cells — the cells by their own explicit DELETEs, each
+    imaged, so the Activity card's Undo restores them with the row. Unlike spending categories
+    there is no monthly history to orphan — cells are cheap to re-enter — so no guard. The row
+    is read FOR UPDATE first, so no cell another tab adds meanwhile can leave with the cascade
+    unimaged."""
+    category = await _get_reward_category(db, category_id, lock=True)
+    cells = await lock_children(
+        db, select(RewardRate).where(RewardRate.category_id == category_id).order_by(RewardRate.id)
+    )
+    for rate in cells:
+        batch.record_delete(rate)
+        await db.delete(rate)
+    # The cells reach the database before the row: with no relationship() between these
+    # models the unit of work orders deletes by class name, RewardCategory ahead of RewardRate,
+    # and the FK cascade would take cells the session still means to delete.
+    await db.flush()
+    batch.record_delete(category)
+    batch.label = f"Deleted reward category {category.name}"
     await db.delete(category)
-    await db.commit()
-    return Response(status_code=204)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- reward rates (matrix cells) ----------------------------------------------------------
@@ -231,11 +350,17 @@ async def list_reward_rates(db: AsyncSession = Depends(get_db)) -> list[RewardRa
 
 @router.put("/rates", response_model=list[RewardRateOut])
 async def put_reward_rates(
-    body: list[RewardRatePut], db: AsyncSession = Depends(get_db)
+    body: list[RewardRatePut],
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[RewardRate]:
     """Bulk matrix save: upsert cells, delete where multiplier is null. ATOMIC — any
     validation failure raises before the single commit, applying nothing. Returns the
-    full post-save cell list (the matrix re-renders without a second fetch)."""
+    full post-save cell list (the matrix re-renders without a second fetch). Every cell it
+    adds, changes or clears is a row of ONE change batch, so one Undo reverts the whole save,
+    and its label counts multipliers apart from conditions (_matrix_label); an all-unchanged
+    save records nothing and names no batch."""
     seen: set[tuple[int, int]] = set()
     for entry in body:
         key = (entry.card_id, entry.category_id)
@@ -269,12 +394,16 @@ async def put_reward_rates(
         (rate.card_id, rate.category_id): rate
         for rate in (await db.execute(select(RewardRate))).scalars()
     }
+    added: list[RewardRate] = []
+    multipliers = conditions = 0
     for entry in body:
         key = (entry.card_id, entry.category_id)
         row = existing.get(key)
         if entry.multiplier is None:
             if row is not None:
+                batch.record_delete(row)
                 await db.delete(row)
+                multipliers += 1
             continue
         multiplier = quantize_money(entry.multiplier, "multiplier", max_abs=MULTIPLIER_MAX_ABS)
         if multiplier <= 0:
@@ -285,28 +414,40 @@ async def put_reward_rates(
             if cap <= 0:
                 raise HTTPException(status_code=422, detail="monthly_cap must be positive")
         if row is None:
-            db.add(
-                RewardRate(
-                    card_id=entry.card_id,
-                    category_id=entry.category_id,
-                    multiplier=multiplier,
-                    note=entry.note,
-                    monthly_cap=cap,
-                )
+            rate = RewardRate(
+                card_id=entry.card_id,
+                category_id=entry.category_id,
+                multiplier=multiplier,
+                note=entry.note,
+                monthly_cap=cap,
             )
+            db.add(rate)
+            added.append(rate)
         else:
+            before = row_image(row)
             row.multiplier = multiplier
             row.note = entry.note
             row.monthly_cap = cap
-    await db.commit()
+            batch.record_update(row, before)
+            after = row_image(row)
+            if after["multiplier"] != before["multiplier"]:
+                multipliers += 1
+            elif after != before:
+                conditions += 1  # the note or the cap alone
+    await db.flush()  # the new cells' ids, which their images need
+    for rate in added:
+        batch.record_insert(rate)
+    batch.label = _matrix_label(multipliers + len(added), conditions)
+    response.headers.update(batch_header(await batch.commit()))
     return await _all_rates(db)
 
 
 # --- cards --------------------------------------------------------------------------------
 
 
-async def _get_card(db: AsyncSession, card_id: int) -> CreditCard:
-    card = await db.get(CreditCard, card_id)
+async def _get_card(db: AsyncSession, card_id: int, *, lock: bool = False) -> CreditCard:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    card = await lock_parent(db, CreditCard, card_id) if lock else await db.get(CreditCard, card_id)
     if card is None:
         raise HTTPException(status_code=404, detail="card not found")
     return card
@@ -448,7 +589,10 @@ async def list_credit_cards(db: AsyncSession = Depends(get_db)) -> list[CreditCa
 
 @router.post("", response_model=CreditCardOut, status_code=201)
 async def create_credit_card(
-    body: CreditCardIn, db: AsyncSession = Depends(get_db)
+    body: CreditCardIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CreditCardOut:
     values = await _validated_card_values(db, body, card_id=None)
     if values["sort_order"] is None:
@@ -460,52 +604,104 @@ async def create_credit_card(
         ).scalar_one()
     card = CreditCard(**values)
     db.add(card)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(card)
+    batch.label = f"Added card {card.name}"
+    response.headers.update(batch_header(await batch.commit()))
     return await _one_card_out(db, card)
 
 
 @router.put("/order", response_model=list[CreditCardOut])
 async def reorder_credit_cards(
-    body: OrderIn, db: AsyncSession = Depends(get_db)
+    body: OrderIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[CreditCardOut]:
     """Drag-to-reorder the card list (2026-09-23 spec §3.2): `ids` is every card, active
     and inactive, in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
-    rows whose value moves are written. Answers exactly as the list GET does. Unlogged like
-    the rest of this router — the client's Undo re-sends the previous order. Serialized per
+    rows whose value moves are written — as ONE change batch, logged for the reason
+    reorder_reward_categories gives (2026-09-25 polish spec §6.1). Answers exactly as the
+    list GET does. The client's own Undo still re-sends the previous order. Serialized per
     list (decision 16): the order lock comes first. Declared before the /{card_id} routes."""
     await db.execute(order_lock(CreditCard))
     cards = list((await db.execute(in_list_order(CreditCard))).scalars())
+    before = {card.id: row_image(card) for card in cards}
     ordered, changed = apply_order(cards, body.ids, stale_detail=STALE_CARDS)
-    if changed:  # the order as stored writes nothing
-        await db.commit()
+    if changed:  # the order as stored writes and logs nothing
+        for card, _old, _new in changed:
+            batch.record_update(card, before[card.id])
+        batch.label = _reorder_label(cards, body.ids, "card", "cards")
+        response.headers.update(batch_header(await batch.commit()))
     return await _cards_out(db, ordered)
 
 
 @router.patch("/{card_id}", response_model=CreditCardOut)
 async def update_credit_card(
-    card_id: int, body: CreditCardIn, db: AsyncSession = Depends(get_db)
+    card_id: int,
+    body: CreditCardIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CreditCardOut:
     """Full replace (house style) — the client sends the whole card back, except that an
     absent or null sort_order keeps the stored one (2026-09-23 reorder spec §3.3): the
-    list's drag owns that column, and an edit form holding a stale copy must not undo it."""
+    list's drag owns that column, and an edit form holding a stale copy must not undo it.
+    Archive / Unarchive is this same PATCH with is_active flipped, and its label says so."""
     card = await _get_card(db, card_id)
     values = await _validated_card_values(db, body, card_id=card_id)
     if values["sort_order"] is None:
         del values["sort_order"]
+    before = row_image(card)
     for field, value in values.items():
         setattr(card, field, value)
-    await db.commit()
+    batch.record_update(card, before)
+    batch.label = edit_label(
+        "card", card.name, before, row_image(card), off="Archived", on="Unarchived"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return await _one_card_out(db, card)
 
 
 @router.delete("/{card_id}", status_code=204)
-async def delete_credit_card(card_id: int, db: AsyncSession = Depends(get_db)) -> Response:
-    """Cascades credits, cells and limit events (FK CASCADE); pins SET NULL. The
-    frontend offers Undo by re-POSTing the card plus its children."""
-    card = await _get_card(db, card_id)
+async def delete_credit_card(
+    card_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Removes the card and everything that points at it, each row IMAGED so the Activity
+    card's Undo restores all of it with the same ids: the categories pinned to the card are
+    unpinned first (updates to NULL), then its credits, cells and limit history go, and the
+    card goes LAST — undo replays in reverse, so the card is back before anything that points
+    at it. The card is read FOR UPDATE first, so nothing another tab points at it meanwhile can
+    leave with the cascade unimaged."""
+    card = await _get_card(db, card_id, lock=True)
+    pinned = await lock_children(
+        db,
+        select(RewardCategory)
+        .where(RewardCategory.pinned_card_id == card_id)
+        .order_by(RewardCategory.id),
+    )
+    for category in pinned:
+        before = row_image(category)
+        category.pinned_card_id = None
+        batch.record_update(category, before)
+    for child in (CardCredit, RewardRate, CreditLimitEvent):
+        rows = await lock_children(
+            db, select(child).where(child.card_id == card_id).order_by(child.id)
+        )
+        for row in rows:
+            batch.record_delete(row)
+            await db.delete(row)
+    # All of it reaches the database BEFORE the card's own DELETE. With no relationship()
+    # between these models the unit of work orders deletes by class name, CreditCard ahead of
+    # CreditLimitEvent and RewardRate, and the FK cascade would take rows the session still
+    # means to delete.
+    await db.flush()
+    batch.record_delete(card)
+    batch.label = f"Deleted card {card.name}"
     await db.delete(card)
-    await db.commit()
-    return Response(status_code=204)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- card credits -------------------------------------------------------------------------
@@ -520,9 +716,13 @@ def _validated_credit_value(value: Decimal) -> Decimal:
 
 @router.post("/{card_id}/credits", response_model=CardCreditOut, status_code=201)
 async def create_card_credit(
-    card_id: int, body: CardCreditIn, db: AsyncSession = Depends(get_db)
+    card_id: int,
+    body: CardCreditIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CardCredit:
-    await _get_card(db, card_id)
+    card = await _get_card(db, card_id)
     credit = CardCredit(
         card_id=card_id,
         label=body.label,
@@ -531,33 +731,56 @@ async def create_card_credit(
         reset_cadence=body.reset_cadence,
     )
     db.add(credit)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(credit)
+    batch.label = (
+        f"Added the {_dollars(credit.annual_value)} {_credit_name(credit.label)} to {card.name}"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return credit
 
 
 @router.patch("/credits/{credit_id}", response_model=CardCreditOut)
 async def update_card_credit(
-    credit_id: int, body: CardCreditIn, db: AsyncSession = Depends(get_db)
+    credit_id: int,
+    body: CardCreditIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CardCredit:
     credit = await db.get(CardCredit, credit_id)
     if credit is None:
         raise HTTPException(status_code=404, detail="credit not found")
+    card = await _get_card(db, credit.card_id)
+    annual_value = _validated_credit_value(body.annual_value)
+    # Every raise is behind us — mutate only now, then image what moved.
+    before = row_image(credit)
     credit.label = body.label
-    credit.annual_value = _validated_credit_value(body.annual_value)
+    credit.annual_value = annual_value
     credit.counts = body.counts
     credit.reset_cadence = body.reset_cadence
-    await db.commit()
+    batch.record_update(credit, before)
+    batch.label = f"Edited the {_credit_name(credit.label)} on {card.name}"
+    response.headers.update(batch_header(await batch.commit()))
     return credit
 
 
 @router.delete("/credits/{credit_id}", status_code=204)
-async def delete_card_credit(credit_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_card_credit(
+    credit_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
     credit = await db.get(CardCredit, credit_id)
     if credit is None:
         raise HTTPException(status_code=404, detail="credit not found")
+    card = await _get_card(db, credit.card_id)
+    batch.record_delete(credit)
+    batch.label = (
+        f"Deleted the {_dollars(credit.annual_value)} {_credit_name(credit.label)} from {card.name}"
+    )
     await db.delete(credit)
-    await db.commit()
-    return Response(status_code=204)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- credit limit events ------------------------------------------------------------------
@@ -565,12 +788,16 @@ async def delete_card_credit(credit_id: int, db: AsyncSession = Depends(get_db))
 
 @router.post("/{card_id}/limits", response_model=list[CreditLimitEventOut], status_code=201)
 async def create_limit_event(
-    card_id: int, body: CreditLimitEventIn, db: AsyncSession = Depends(get_db)
+    card_id: int,
+    body: CreditLimitEventIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[CreditLimitEvent]:
     """Returns the card's FULL limit history ascending (the budgets-PUT precedent) so
     the editor renders without a second fetch. Same (card, date) → 409, not upsert:
     a mis-dated entry is fixed by delete-then-re-add, keeping every change deliberate."""
-    await _get_card(db, card_id)
+    card = await _get_card(db, card_id)
     require_reasonable_date(body.effective_date, "effective_date")
     amount = quantize_money(body.limit_amount, "limit_amount", max_abs=MONEY_MAX_ABS_12_2)
     if amount <= 0:
@@ -592,15 +819,19 @@ async def create_limit_event(
             status_code=409,
             detail=f"limit event for {body.effective_date} already exists — delete it first",
         )
-    db.add(
-        CreditLimitEvent(
-            card_id=card_id,
-            effective_date=body.effective_date,
-            limit_amount=amount,
-            note=body.note,
-        )
+    event = CreditLimitEvent(
+        card_id=card_id,
+        effective_date=body.effective_date,
+        limit_amount=amount,
+        note=body.note,
     )
-    await db.commit()
+    db.add(event)
+    await db.flush()
+    batch.record_insert(event)
+    batch.label = (
+        f"Added {card.name}'s {_dollars(amount)} limit from {long_day(body.effective_date)}"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return list(
         (
             await db.execute(
@@ -616,12 +847,19 @@ async def create_limit_event(
 
 @router.delete("/{card_id}/limits/{event_id}", status_code=204)
 async def delete_limit_event(
-    card_id: int, event_id: int, db: AsyncSession = Depends(get_db)
+    card_id: int,
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> Response:
-    await _get_card(db, card_id)
+    card = await _get_card(db, card_id)
     event = await db.get(CreditLimitEvent, event_id)
     if event is None or event.card_id != card_id:
         raise HTTPException(status_code=404, detail="limit event not found")
+    batch.record_delete(event)
+    batch.label = (
+        f"Deleted {card.name}'s {_dollars(event.limit_amount)} limit from "
+        f"{long_day(event.effective_date)}"
+    )
     await db.delete(event)
-    await db.commit()
-    return Response(status_code=204)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))

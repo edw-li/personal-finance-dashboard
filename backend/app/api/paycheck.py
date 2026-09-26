@@ -16,6 +16,12 @@ clock — and it decides two things off that single read: which profile is curre
 `profile_id` is given, and which year's contribution limits the pace rows are measured
 against. Both would be wrong for the PT evening hours the container already calls
 tomorrow, and on 31 December they would be a YEAR wrong (audit item 31).
+
+The three profile writes are change-logged (2026-09-25 polish spec §6.1): one ChangeBatch per
+request, an Activity label naming WHOSE profile it is, and the X-Change-Batch header.
+`paycheck_profiles` is a month-review input, so the Activity card's Undo of one takes the
+review-input locks like any other (services.changelog.undo_batch). The transient `in_force`
+flag is unmapped, so no change-log image ever carries it.
 """
 
 from dataclasses import dataclass
@@ -47,6 +53,8 @@ from app.schemas.paycheck import (
     ProfileUpdate,
 )
 from app.services import clock
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.day_labels import long_day
 from app.services.espp_calc import StoredPeriod, plan_year_rows
 from app.services.espp_pace import espp_pace_item
 from app.services.limit_check import PaceItem, employer_match, paycheck_pace
@@ -341,6 +349,14 @@ def _merged(provided: dict, key: str, current):
     return current if value is None else value
 
 
+async def _profile_label(db: AsyncSession, verb: str, profile: PaycheckProfile) -> str:
+    """The Activity label names WHOSE profile it is: the effective date is unique per person,
+    so two earners can each have one effective the same day."""
+    person = await db.get(Person, profile.person_id)
+    owner = "the" if person is None else f"{person.name}'s"
+    return f"{verb} {owner} paycheck profile effective {long_day(profile.effective_date)}"
+
+
 @router.get("/profiles", response_model=list[ProfileOut])
 async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[PaycheckProfile]:
     # Newest first — the page opens on the profile in force. ONE list for the whole
@@ -361,7 +377,12 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[PaycheckProf
 
 
 @router.post("/profiles", response_model=ProfileOut, status_code=201)
-async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) -> PaycheckProfile:
+async def create_profile(
+    body: ProfileIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> PaycheckProfile:
     person_id = await _require_person(db, body.person_id)
     fields = _validated_profile(
         effective_date=body.effective_date,
@@ -383,14 +404,21 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
     await _require_free_effective_date(db, person_id, fields["effective_date"])
     profile = PaycheckProfile(person_id=person_id, notes=body.notes, **fields)
     db.add(profile)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(profile)
+    batch.label = await _profile_label(db, "Added", profile)
+    response.headers.update(batch_header(await batch.commit()))
     await _mark_in_force(db, [profile], clock.product_today())
     return profile
 
 
 @router.patch("/profiles/{profile_id}", response_model=ProfileOut)
 async def update_profile(
-    profile_id: IdPath, body: ProfileUpdate, db: AsyncSession = Depends(get_db)
+    profile_id: IdPath,
+    body: ProfileUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> PaycheckProfile:
     profile = await _get_profile(db, profile_id)
     provided = body.model_dump(exclude_unset=True)
@@ -425,20 +453,29 @@ async def update_profile(
         await _require_free_effective_date(db, profile.person_id, fields["effective_date"])
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
+    before = row_image(profile)
     for name, value in fields.items():
         setattr(profile, name, value)
     if "notes" in provided:
         profile.notes = provided["notes"]  # nullable: an explicit null really clears it
-    await db.commit()
+    batch.record_update(profile, before)
+    batch.label = await _profile_label(db, "Edited", profile)
+    response.headers.update(batch_header(await batch.commit()))
     await _mark_in_force(db, [profile], clock.product_today())
     return profile
 
 
 @router.delete("/profiles/{profile_id}", status_code=204)
-async def delete_profile(profile_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
-    await db.delete(await _get_profile(db, profile_id))
-    await db.commit()
-    return Response(status_code=204)
+async def delete_profile(
+    profile_id: IdPath,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    profile = await _get_profile(db, profile_id)
+    batch.record_delete(profile)
+    batch.label = await _profile_label(db, "Deleted", profile)
+    await db.delete(profile)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 async def _default_profile(db: AsyncSession, person_id: int, today: date) -> PaycheckProfile | None:

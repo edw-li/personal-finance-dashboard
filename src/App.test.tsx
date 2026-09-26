@@ -26,16 +26,25 @@ vi.mock('./components/Layout', async () => {
   const { Link, Outlet } = await import('react-router-dom')
   const { useDetailPanel } = await import('./components/details/DetailPanelProvider')
   const { default: MetricInspector } = await import('./components/details/MetricInspector')
+  const { useConfirm } = await import('./components/feedback/confirm')
   const metric = { id: 'private-balance', label: 'Captured balance', definition_version: 'test-v1', definition: 'Private financial amount',
     value: '8675309.42', unit: 'USD', scope: 'household', completeness: 'complete', components: [],
     source_link: '/net-worth', source_label: 'Open source', as_of: '2026-09-01', warnings: [] }
   function Layout() {
     const panel = useDetailPanel()!
+    const confirm = useConfirm()
     return <>
       <Link to="/portfolio">Go to portfolio</Link>
       <button onClick={() => panel.open({ id: 'assistant', title: 'Financial question', content:
         <button onClick={() => panel.open({ id: 'assistant-metric:private-balance', title: 'Captured balance', content: <MetricInspector evidence={metric} /> })}>Inspect captured balance</button>,
       })}>Open financial question</button>
+      <button onClick={(event) => {
+        void confirm({ anchor: event.currentTarget, title: 'Leave the page?', confirmLabel: 'Leave' })
+      }}>Ask a question</button>
+      <button onClick={(event) => {
+        void confirm({ anchor: event.currentTarget, title: 'Reset the lots?', confirmLabel: 'Reset',
+          body: <>Their history is on <Link to="/portfolio">the portfolio page</Link>.</> })
+      }}>Ask with a link</button>
       <Suspense fallback={<p>Loading page</p>}><Outlet /></Suspense>
     </>
   }
@@ -86,5 +95,28 @@ describe('authenticated detail-panel lifetime', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to Financial question' }))
     expect(screen.getByRole('dialog', { name: 'Financial question' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Inspect captured balance' })).toBeTruthy()
+  })
+})
+
+describe('the in-app confirm (2026-09-25 polish spec §6.3)', () => {
+  it('is mounted once for the whole signed-in app, its popover outside every page', async () => {
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Page /' })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask a question' }))
+    const popover = screen.getByRole('alertdialog', { name: 'Leave the page?' })
+    expect(popover.parentElement).toBe(document.body)
+  })
+
+  // Mounted inside the router: a router Link in a question's body would otherwise throw above every
+  // error boundary and blank the whole app (review #3).
+  it("renders a router Link in a question's body, and the Link navigates", async () => {
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Page /' })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask with a link' }))
+    const link = screen.getByRole('link', { name: 'the portfolio page' })
+    expect(link.closest('[role="alertdialog"]')).not.toBeNull()
+    expect(link.getAttribute('href')).toBe('/portfolio')
+    fireEvent.click(link)
+    expect(await screen.findByRole('heading', { name: 'Page /portfolio' })).toBeTruthy()
   })
 })

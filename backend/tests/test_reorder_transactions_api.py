@@ -1,6 +1,7 @@
 """PUT /portfolio/transactions/order — the replay order (2026-09-23 drag-to-reorder spec
-§3.2, §8.3, §9). Unlogged by design (spec §0.10): the client's Undo re-sends the previous
-order, so these tests prove the fold report, the scope and the renumbering instead."""
+§3.2, §8.3, §9). Change-logged since 2026-09-25 (polish spec §6.1; the batch itself is pinned
+in test_changelog_portfolio.py), so these tests prove the fold report, the scope and the
+renumbering."""
 
 from decimal import Decimal
 
@@ -85,7 +86,14 @@ async def test_a_cross_holding_move_changes_no_figures_and_spaces_the_ledger(aut
     assert await replay_order(db) == [(t2, 10), (t3, 20), (t1, 30)]  # evenly spaced
     listed = (await auth_client.get(TRANSACTIONS)).json()
     assert [t["id"] for t in listed] == [t2, t3, t1]  # the follow-up GET agrees
-    assert (await db.execute(select(ChangeLog))).scalars().all() == []  # unlogged (§0.10)
+    # Logged (polish spec §6.1): one update per renumbered row, in ONE batch the header names.
+    logged = (await db.execute(select(ChangeLog).order_by(ChangeLog.id))).scalars().all()
+    assert [(r.pk["id"], r.before["sort_index"], r.after["sort_index"]) for r in logged] == [
+        (t2, 7, 10),
+        (t3, 7, 20),
+        (t1, 3, 30),
+    ]
+    assert {str(r.batch_id) for r in logged} == {resp.headers["x-change-batch"]}
 
 
 async def test_an_owner_scoped_reorder_keeps_hidden_rows_in_their_slots(auth_client, db):

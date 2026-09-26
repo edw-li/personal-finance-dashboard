@@ -480,7 +480,7 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
   })
 
   it('Delete offers Undo that re-POSTs the v2 body', async () => {
-    vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
+    vi.mocked(deleteCustomEvent).mockResolvedValue({ batchId: null })
     vi.mocked(createCustomEvent).mockResolvedValue({ id: 77, date: DAY_15, label: 'Car insurance', detail: 'policy 8841', person_id: null, ...v2Body } as never)
     renderPage()
     await screen.findByRole('grid')
@@ -515,7 +515,7 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
   // starting there). The series' own start is what a restore has to send.
   it('Undo restores a series from its start, not from the clicked occurrence', async () => {
     const seriesStart = `${PREV.slice(0, 8)}05`
-    vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
+    vi.mocked(deleteCustomEvent).mockResolvedValue({ batchId: null })
     vi.mocked(createCustomEvent).mockResolvedValue({ id: 78, date: seriesStart, label: 'Piano lesson', detail: null, person_id: null, amount: '60.00', direction: 'out', recurrence: 'weekly', until: null })
     renderPage([
       calendarEvent({ date: DAY_16, type: 'custom', label: 'Piano lesson', short_label: 'Piano lesson', id: 43, amount: '60.00', direction: 'out', basis: 'confirmed', recurrence: 'weekly', until: null, series_start: seriesStart }),

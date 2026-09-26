@@ -103,8 +103,8 @@ export const START_CARDS: GuideCard[] = [
         <div className="guide-fact">
           <h4>The footer</h4>
           <p>
-            The sidebar footer shows who is signed in, which deployment this is, a theme toggle and{' '}
-            <b className="guide-label">Log out</b>.
+            The sidebar footer is one row: who is signed in (hover the address for the deployment and the
+            build), then the theme toggle and <b className="guide-label">Log out</b>.
           </p>
         </div>
       </div>

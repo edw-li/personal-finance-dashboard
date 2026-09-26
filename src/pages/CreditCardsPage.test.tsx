@@ -982,7 +982,7 @@ describe('CreditCardsPage — card ownership', () => {
   })
 
   it('UNDO after delete re-POSTs the card verbatim — person_id must survive', async () => {
-    vi.mocked(deleteCreditCard).mockResolvedValue(undefined)
+    vi.mocked(deleteCreditCard).mockResolvedValue({ batchId: null })
     vi.mocked(createCreditCard).mockResolvedValue(RH)
     render(
       <MemoryRouter initialEntries={['/credit-cards?section=manage']}>
@@ -1485,7 +1485,7 @@ describe('CreditCardsPage — Categories & weights: late answers and overlapping
           }),
       )
       .mockImplementationOnce(async (ids) => categoriesIn(ids))
-    vi.mocked(deleteRewardCategory).mockResolvedValue(undefined)
+    vi.mocked(deleteRewardCategory).mockResolvedValue({ batchId: null })
     vi.mocked(createRewardCategory).mockResolvedValue(CATEGORIES[2])
     const rerenderWith = renderCategoriesPanel(onChanged[0])
     keyboardMove('Dining', 'ArrowUp')
@@ -1965,7 +1965,7 @@ describe('CreditCardsPage — the card roster: late answers and overlapping requ
           }),
       )
       .mockImplementationOnce(async (ids) => cardsIn(ids))
-    vi.mocked(deleteCreditCard).mockResolvedValue(undefined)
+    vi.mocked(deleteCreditCard).mockResolvedValue({ batchId: null })
     vi.mocked(createCreditCard).mockResolvedValue(RH)
     const rerenderWith = renderCardsPanel(onChanged[0])
     keyboardMove('Venture X', 'ArrowDown')

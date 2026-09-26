@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot, Person
+from app.models import ACCOUNT_GROUPS, Account, AccountBalance, CreditCard, NetWorthSnapshot, Person
 from app.schemas.net_worth import (
     AccountCreate,
     AccountOut,
@@ -26,9 +26,17 @@ from app.schemas.net_worth import (
 )
 from app.schemas.ordering import OrderIn
 from app.services import clock
-from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.changelog import (
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    edit_label,
+    lock_children,
+    lock_parent,
+    row_image,
+)
 from app.services.money import mom_pct, require_first_of_month
-from app.services.month_review import load_review_book
+from app.services.month_review import load_review_book, lock_review_inputs
 from app.services.month_writes import write_balances
 from app.services.net_worth_calc import (
     ZERO,
@@ -181,6 +189,7 @@ async def reorder_accounts(
 @router.post("/accounts", response_model=AccountOut, status_code=201)
 async def create_account(
     body: AccountCreate,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Account:
@@ -225,13 +234,16 @@ async def create_account(
     db.add(account)
     await db.flush()
     batch.record_insert(account)
-    batch.label = f"Created account {account.name}"
-    await batch.commit()
+    batch.label = f"Added account {account.name}"
+    response.headers.update(batch_header(await batch.commit()))
     return account
 
 
-async def _get_account(db: AsyncSession, account_id: int) -> Account:
-    account = await db.get(Account, account_id)
+async def _get_account(db: AsyncSession, account_id: int, *, lock: bool = False) -> Account:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    account = (
+        await lock_parent(db, Account, account_id) if lock else await db.get(Account, account_id)
+    )
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
     return account
@@ -241,6 +253,7 @@ async def _get_account(db: AsyncSession, account_id: int) -> Account:
 async def update_account(
     account_id: int,
     body: AccountUpdate,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Account:
@@ -299,8 +312,10 @@ async def update_account(
     for field, value in updates.items():
         setattr(account, field, value)
     batch.record_update(account, before)
-    batch.label = f"Updated account {account.name}"
-    await batch.commit()
+    batch.label = edit_label(
+        "account", account.name, before, row_image(account), off="Retired", on="Restored"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return account
 
 
@@ -310,7 +325,17 @@ async def delete_account(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Response:
-    account = await _get_account(db, account_id)
+    """Refused while balance rows exist (deactivate instead). Otherwise the links that point at
+    the account are nulled first — its components' parent_account_id and credit cards'
+    account_id, the end state the FKs' SET NULL left — each imaged through the ORM, then the
+    account LAST, so an Undo (which replays in reverse) brings the account back and relinks
+    them (2026-09-25 polish spec §6.1). The account is read FOR UPDATE first, so a balance,
+    component or card link another tab writes meanwhile waits rather than leaving with the
+    cascade unimaged — and before that the month-review table locks, the month save's own, in
+    undo_batch's order (review locks, then rows): row lock first, a save holding them and writing
+    a balance for this account deadlocked with the delete, and Postgres aborted the save."""
+    await lock_review_inputs(db)
+    account = await _get_account(db, account_id, lock=True)
     balance_count = (
         await db.execute(
             select(func.count())
@@ -323,11 +348,27 @@ async def delete_account(
             status_code=409,
             detail=f"account has {balance_count} balance rows — deactivate it instead",
         )
+    components = await lock_children(
+        db, select(Account).where(Account.parent_account_id == account_id).order_by(Account.id)
+    )
+    for component in components:
+        before = row_image(component)
+        component.parent_account_id = None
+        batch.record_update(component, before)
+    cards = await lock_children(
+        db, select(CreditCard).where(CreditCard.account_id == account_id).order_by(CreditCard.id)
+    )
+    for card in cards:
+        before = row_image(card)
+        card.account_id = None
+        batch.record_update(card, before)
+    # Out before the account's own DELETE, so the statements run in the order they were imaged.
+    await db.flush()
     batch.record_delete(account)
     batch.label = f"Deleted account {account.name}"
     await db.delete(account)
-    await batch.commit()
-    return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 QUARTER_END_MONTHS = (3, 6, 9, 12)

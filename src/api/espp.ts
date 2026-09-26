@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, apiDeleteLogged } from './client'
 import type {
   EsppLotCreate,
   EsppLotOut,
@@ -31,8 +31,10 @@ export function updateLot(id: number, body: EsppLotUpdate): Promise<EsppLotOut> 
   return api<EsppLotOut>(`/espp/lots/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
-export function deleteLot(id: number): Promise<void> {
-  return api<void>(`/espp/lots/${id}`, { method: 'DELETE' })
+// Logged (2026-09-25 polish spec §6.1): the answer names the batch an Undo reverts, null when
+// nothing was recorded.
+export function deleteLot(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/espp/lots/${id}`)
 }
 
 // --- offerings ---
@@ -54,8 +56,8 @@ export function updateOffering(id: number, body: EsppOfferingUpdate): Promise<Es
   })
 }
 
-export function deleteOffering(id: number): Promise<void> {
-  return api<void>(`/espp/offerings/${id}`, { method: 'DELETE' })
+export function deleteOffering(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/espp/offerings/${id}`)
 }
 
 // --- periods ---
@@ -72,8 +74,9 @@ export function updatePeriod(id: number, body: EsppPeriodUpdate): Promise<EsppPe
   return api<EsppPeriodOut>(`/espp/periods/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
-export function deletePeriod(id: number): Promise<void> {
-  return api<void>(`/espp/periods/${id}`, { method: 'DELETE' })
+// A period's "Reset" (the row goes back to its derived values) — logged like the other deletes.
+export function deletePeriod(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/espp/periods/${id}`)
 }
 
 // --- modeler ---

@@ -1,0 +1,284 @@
+/* Feedback where the user acted (2026-09-25 polish spec §5, §6.3; contract C3) — ONE sheet for the
+   building blocks in this folder: the shared danger button, the quiet (aria-disabled) and busy button
+   states, the confirm popover, a row leaving and a row flashing, and the save status. Tokens only:
+   every duration is a --t-* (index.css zeroes them under reduced motion) and every colour a theme
+   token, so both themes follow. */
+
+/* ── The danger button ─────────────────────────────────────────────── */
+/* THE rule. MonthlyUpdatePage.css and settings.css still carry the copies it replaces; wave 2
+   deletes them. Quiet like any other control while it cannot be pressed. */
+.danger-button:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--negative);
+  color: var(--negative);
+}
+
+/* ── Quiet: aria-disabled wears the :disabled look ─────────────────── */
+/* BusyButton never sets `disabled` — a disabled button drops the focus it holds (spec D3) — so its
+   quiet state wears panels.css's `.button:disabled` and `.button-primary:disabled` itself;
+   feedbackCss.test.ts holds each pair equal. */
+.button[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button-primary[aria-disabled='true'],
+.button-primary[aria-disabled='true']:hover {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 1;
+  filter: none;
+}
+
+/* A disabled button never goes :active, so the press feedback (panels.css's motion grammar) must not
+   answer a quiet one either. */
+.button[aria-disabled='true']:active {
+  transform: none;
+}
+
+/* ── Busy ──────────────────────────────────────────────────────────── */
+/* Busy is not unavailable: the pressed button keeps its own face and says "working" with a spinner,
+   while its siblings go quiet around it (spec §6.3). Later than the quiet rules at the same
+   specificity, so these win them. */
+.button[aria-busy='true'] {
+  opacity: 1;
+  cursor: progress;
+}
+
+.button-primary[aria-busy='true'],
+.button-primary[aria-busy='true']:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+/* The label never wraps (a wrapped "Save name" grew its row — audit SGS), and keeps .button's own gap
+   between an icon and its words. */
+.busy-button-label {
+  display: inline-flex;
+  align-items: center;
+  gap: inherit;
+  white-space: nowrap;
+}
+
+/* Centred, so content the idle button did not have — the spinner — spills evenly into both paddings
+   while BusyButton holds the idle width (its max-width lock). */
+.busy-button[aria-busy='true'] {
+  justify-content: center;
+}
+
+/* Drawn in the button's own ink, so it reads on a quiet, a primary and a danger button in either
+   theme: a faint ring with one bright quarter. */
+.busy-spinner {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: 0.8em;
+  height: 0.8em;
+  vertical-align: -0.1em;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+}
+
+/* A button without .button's flex gap still leaves room after the spinner. */
+.busy-button:not(.button) > .busy-spinner {
+  margin-inline-end: 0.4em;
+}
+
+/* A BusyButton without the house .button class (a link-styled one) still goes quiet the way a disabled
+   control does, and — later, at the same specificity — keeps its own face while busy, as above. */
+.busy-button:not(.button)[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.busy-button:not(.button)[aria-busy='true'] {
+  opacity: 1;
+  cursor: progress;
+}
+
+/* ── The confirm popover (useConfirm) ──────────────────────────────── */
+/* Portaled to <body> and fixed: .page is a containing block for fixed descendants and a stacking
+   context (panels.css's .page note), so a popover inside it could neither stand where its anchor is
+   nor clear the chrome. z 25: over the detail panel layer (16) — a question can be asked from the
+   assistant — and the palette (20); under the toasts (30), whose Undo must never be buried.
+   confirmPlacement.ts writes top/left; the entrance is .popover-surface's pop-in. */
+.popover-surface.confirm-popover {
+  position: fixed;
+  z-index: 25;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 16px));
+}
+
+.confirm-popover-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.confirm-popover-body {
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.confirm-popover-body > :first-child {
+  margin-top: 0;
+}
+
+.confirm-popover-body > :last-child {
+  margin-bottom: 0;
+}
+
+.confirm-popover-arm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* .field-input right-aligns figures; a typed date reads left to right, like the prompt above it. */
+.confirm-popover-arm .field-input {
+  text-align: left;
+}
+
+.confirm-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+}
+
+/* ── A row leaving (useDeleteWithUndo) ─────────────────────────────── */
+/* The row fades while its delete runs, and cannot be pressed again; it leaves the tree when the list
+   reloads. A refused delete simply takes the attribute away — no transition back: the row is just
+   there again. `!important` because a transient state must win over whatever the row's own rules (or
+   an inline style) say about its opacity and box; the fade still runs — a transition outranks
+   important declarations in the cascade. */
+[data-leaving] {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+
+/* A table row cannot be given a height, so it fades in place; any other row also folds its height
+   away where the browser can interpolate to `auto` — declared in the same rule that sets the 0
+   (measured in Edge: the after-change style's interpolate-size is the one the transition reads).
+   Elsewhere it fades only. The box goes to 0 whatever set it: measured in Edge, a row whose padding
+   out-ranked this rule folded to a 21px sliver. */
+@supports (interpolate-size: allow-keywords) {
+  :not(tr)[data-leaving] {
+    interpolate-size: allow-keywords;
+    block-size: 0 !important;
+    min-block-size: 0 !important;
+    padding-block: 0 !important;
+    margin-block: 0 !important;
+    border-block-width: 0 !important;
+    overflow: clip;
+    transition:
+      opacity var(--t-fast) var(--ease-out),
+      block-size var(--t-fast) var(--ease-out),
+      padding-block var(--t-fast) var(--ease-out),
+      margin-block var(--t-fast) var(--ease-out),
+      border-block-width var(--t-fast) var(--ease-out);
+  }
+}
+
+/* ── A row flashing (flashElement) ─────────────────────────────────── */
+/* The one "this changed" cue, generalized from reorder's saved flash (reorder.css, which keeps its own
+   attribute): the same accent wash fading out over --t-flash — the timer that clears the attribute
+   reads the same token. A table row washes its cells (a row's own background shows through none of
+   them); an opaque pinned cell washes over, and ends on, its own --surface. Not for an element that
+   runs an entrance of its own (a .card): taking the attribute away would replay that entrance. */
+@keyframes flash-wash {
+  from {
+    background-color: var(--surface-2);
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes flash-wash-pinned {
+  from {
+    background-color: var(--surface-2);
+    background-color: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  }
+  to {
+    background-color: var(--surface);
+  }
+}
+
+tr[data-flash] > td,
+:not(tr)[data-flash] {
+  animation: flash-wash var(--t-flash) var(--ease-out);
+}
+
+tr[data-flash] > td.row-actions,
+tr[data-flash] > td.col-identity {
+  animation: flash-wash-pinned var(--t-flash) var(--ease-out);
+}
+
+/* ── Save status (SaveStatus) ──────────────────────────────────────── */
+.save-status {
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.save-status-dirty {
+  color: var(--muted);
+}
+
+.save-status-saved {
+  color: var(--positive);
+}
+
+.save-status-error {
+  color: var(--negative);
+}
+
+/* ── Motion ────────────────────────────────────────────────────────── */
+/* Gated like panels.css's motion grammar: under reduced motion none of this exists — the spinner sits
+   still (its ring still says "working"), the popover and the saved line simply appear. */
+@media (prefers-reduced-motion: no-preference) {
+  /* Literal, not a token: an INFINITE spinner's period is a rate, not a grammar duration — a --t-*
+     would freeze it mid-turn under reduce (the house spinners' rule; motion.test.ts exempts
+     `infinite`). */
+  .busy-spinner {
+    animation: busy-spin 0.8s linear infinite;
+  }
+
+  @keyframes busy-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Opened above its anchor, the popover rises into place instead of dropping onto it. */
+  .popover-surface.confirm-popover[data-placement='above'] {
+    animation-name: confirm-pop-up;
+  }
+
+  @keyframes confirm-pop-up {
+    from {
+      opacity: 0;
+      translate: 0 4px;
+    }
+  }
+
+  .save-status-saved {
+    animation: save-status-in var(--t-fast) var(--ease-out);
+  }
+
+  @keyframes save-status-in {
+    from {
+      opacity: 0;
+    }
+  }
+}

@@ -269,6 +269,29 @@ ul.guide-body li {
   min-width: 0;
 }
 
+/* The detail's foot (2026-09-25 polish spec §3.8, SGS-20): where the reader is on a numbered rail, and
+   the way to the neighbouring task — a walk through the checklist without the round trip to the rail.
+   The buttons keep the row's end whether or not a count leads it. */
+.guide-detail-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.guide-step-count {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.guide-detail-foot .button:first-of-type {
+  margin-left: auto;
+}
+
 /* ── Card selector (spec §3): a sticky chip tablist; the hash is the selection ─────────── */
 
 .guide-selector {

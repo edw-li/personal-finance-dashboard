@@ -199,7 +199,7 @@ beforeEach(() => {
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING, HSA])
   vi.mocked(createAccount).mockResolvedValue(CHECKING)
   vi.mocked(updateAccount).mockResolvedValue(HSA)
-  vi.mocked(deleteAccount).mockResolvedValue(undefined)
+  vi.mocked(deleteAccount).mockResolvedValue({ batchId: null })
   vi.mocked(fetchPortfolioAccounts).mockResolvedValue([BROKERAGE, JOINT_ROTH])
   vi.mocked(patchPortfolioAccount).mockResolvedValue({ ...BROKERAGE, person_id: 2 })
   vi.mocked(reorderAccounts).mockResolvedValue({

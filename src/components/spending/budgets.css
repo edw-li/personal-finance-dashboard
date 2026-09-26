@@ -1,17 +1,21 @@
 /* Budget meters (2026-08-24 spec §4.2): plain HTML/CSS in the StatTile family — thin
    4px rounded tracks, figures in the app's text tokens, tone only where over. */
 
+/* One column template for every row (2026-09-25 polish spec §3.7, NWSP-14): name · meter · figures ·
+   edit. Each row sized its own figures column before, so a wider figure (Housing's) ended that track
+   7px short of the rest; the list's figures column is now as wide as its widest figure, and every row —
+   and every entry around a row — takes the list's columns as a subgrid, so every track ends on one x. */
 .budget-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) minmax(0, 1fr) minmax(150px, max-content) auto;
+  gap: 0.55rem 0.75rem;
 }
 
 .budget-row {
   display: grid;
-  grid-template-columns: minmax(110px, 160px) 1fr minmax(150px, auto) auto;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 0.75rem;
+  column-gap: 0.75rem;
 }
 
 .budget-name {
@@ -55,7 +59,8 @@
   position: relative;
   height: 4px;
   border-radius: 2px;
-  background: var(--surface-2);
+  /* --fill, not --surface-2 (spec §3.7): an empty track has to read as a meter against the card. */
+  background: var(--fill);
 }
 
 .budget-fill {
@@ -94,7 +99,9 @@
 
 /* Rows and their inline editor (2026-09-13 polish §11): one editor open at a time, opened by the
    row's own Set/Edit button — no accordion inside an accordion. */
-.budget-entry { display: flex; flex-direction: column; gap: 0.35rem; }
+.budget-entry { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; row-gap: 0.35rem; }
+/* The row and its editor span the entry: the row borrows the columns, the editor the full width. */
+.budget-entry > * { grid-column: 1 / -1; }
 .budget-row-unbudgeted { grid-template-columns: minmax(110px, 160px) auto; justify-content: start; }
 .button.budget-editor-toggle { font-size: 0.72rem; padding: 0.2rem 0.55rem; }
 .budget-editor { margin: 0.1rem 0 0.4rem; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; }
@@ -146,9 +153,12 @@
 }
 
 @media (max-width: 720px) {
+  .budget-rows {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .budget-row {
-    grid-template-columns: 1fr;
-    gap: 0.3rem;
+    row-gap: 0.3rem;
   }
 }
 

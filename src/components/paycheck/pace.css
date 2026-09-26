@@ -3,15 +3,20 @@
    two. Its own sheet rather than an import of the spending one: a paycheck component
    must not depend on a spending stylesheet's class names. */
 
+/* One column template for the strip (2026-09-25 polish spec §3.7, TPC-22): name · meter · figures ·
+   verdict. Each row was its own grid before, and ESPP's wider "$21.7K / $21.3K practical" ended its
+   track 27px short of the others; the figures and verdict columns are now as wide as the widest in the
+   strip and every row takes them as a subgrid, so the "100%" ends line up. */
 .pace-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
+  display: grid;
+  grid-template-columns: minmax(150px, 240px) minmax(0, 1fr) minmax(160px, max-content) minmax(90px, max-content);
+  gap: 0.55rem 0.75rem;
 }
 
 .pace-row {
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(150px, 240px) 1fr minmax(160px, auto) minmax(90px, auto);
+  grid-template-columns: subgrid;
   align-items: center;
   gap: 0.75rem;
 }
@@ -120,8 +125,8 @@
 }
 
 @media (max-width: 720px) {
-  .pace-row {
-    grid-template-columns: 1fr auto;
+  .pace-rows {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .pace-meter {

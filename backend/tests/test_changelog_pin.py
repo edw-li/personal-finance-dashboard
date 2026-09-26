@@ -15,6 +15,47 @@ from pathlib import Path
 API = Path(__file__).resolve().parents[1] / "app" / "api"
 
 LOGGED: dict[str, set[str]] = {
+    # Exact undo everywhere (2026-09-25 polish spec §6.1, lane L3b): every user-intent write in
+    # these routers records through its ChangeBatch and answers X-Change-Batch. The card
+    # router's deletes image their dependents (pins, credits, cells, limit history) so the
+    # Activity card's Undo restores them with their ids, and its two list reorders are logged
+    # like the accounts' — unlogged, an older edit's Undo could silently move a row back.
+    "comp.py": {
+        "create_event",
+        "update_event",
+        "delete_event",
+        "create_grant",
+        "update_grant",
+        "delete_grant",
+    },
+    "credit_cards.py": {
+        "create_reward_category",
+        "reorder_reward_categories",
+        "update_reward_category",
+        "delete_reward_category",
+        "put_reward_rates",
+        "create_credit_card",
+        "reorder_credit_cards",
+        "update_credit_card",
+        "delete_credit_card",
+        "create_card_credit",
+        "update_card_credit",
+        "delete_card_credit",
+        "create_limit_event",
+        "delete_limit_event",
+    },
+    "espp.py": {
+        "create_lot",
+        "update_lot",
+        "delete_lot",
+        "create_period",
+        "update_period",
+        "delete_period",
+        "create_offering",
+        "update_offering",
+        "delete_offering",
+    },
+    "paycheck.py": {"create_profile", "update_profile", "delete_profile"},
     "net_worth.py": {
         "create_account",
         "update_account",
@@ -39,6 +80,32 @@ LOGGED: dict[str, set[str]] = {
     # joined on 2026-09-23 (spec §W8): it moves every figure the year computes, so it is a
     # deliberate setting with an Undo, not a toggle.
     "taxes.py": {"put_inputs", "update_year"},
+    # Exact undo everywhere (2026-09-25 polish spec §6.1, D1): every user-intent write in these
+    # records its rows, and a delete images what hangs off the row it removes. The two
+    # allocation routes have logged since 2026-09-13 and are pinned here now too.
+    "portfolio.py": {
+        "update_portfolio_account",
+        "create_security",
+        "update_security",
+        "delete_security",
+        "reorder_transactions",
+        "create_transaction",
+        "update_transaction",
+        "delete_transaction",
+        "create_dividend",
+        "update_dividend",
+        "delete_dividend",
+        "update_classification",
+        "save_allocation_targets",
+    },
+    "calendar.py": {
+        "create_custom_event",
+        "update_custom_event",
+        "delete_custom_event",
+        "put_override",
+        "delete_override",
+        "create_feed_token",
+    },
 }
 # module -> {function: reason}. An exempt route still commits directly; the reason says
 # why that is the right answer for now, not that nobody looked.
@@ -50,7 +117,13 @@ EXEMPT: dict[str, dict[str, str]] = {
         "reference data the user retypes from the IRS/FTB, not their own figures",
         "clone_brackets": "copies those same tables into another filing status, and refuses "
         "when the target already has rows — the undo is a second clone",
-    }
+    },
+    "calendar.py": {
+        "feed_ics": "bumps a token's last_used_at at most hourly on the unauthenticated feed "
+        "route — machine bookkeeping, with no signed-in user to own a batch",
+        "revoke_feed_token": "an undo would revive a revoked credential; a new link is the way "
+        "back",
+    },
 }
 
 

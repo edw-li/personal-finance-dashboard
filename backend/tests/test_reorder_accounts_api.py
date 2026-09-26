@@ -295,7 +295,7 @@ async def test_a_group_change_appends_the_account_inside_the_same_batch(auth_cli
     [logged] = (await db.execute(select(ChangeLog))).scalars().all()
     assert (logged.before["group"], logged.before["sort_order"]) == ("cash", 1)
     assert (logged.after["group"], logged.after["sort_order"]) == ("other", 56)
-    assert logged.label == "Updated account Checking"
+    assert logged.label == "Edited account Checking"
 
 
 async def test_an_explicit_sort_order_wins_and_other_edits_never_move_a_row(auth_client, db):

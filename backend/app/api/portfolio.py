@@ -11,10 +11,12 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import (
     DividendPayment,
+    LatestPrice,
     Person,
     PortfolioAccount,
     PortfolioValueHistory,
     PositionTransaction,
+    PriceHistory,
     Security,
     SecurityDividendEvent,
 )
@@ -49,7 +51,16 @@ from app.schemas.portfolio import (
     TransactionUpdate,
 )
 from app.services import clock
-from app.services.changelog import CHANGE_BATCH_HEADER, ChangeBatch, change_batch, row_image
+from app.services.changelog import (
+    CHANGE_BATCH_HEADER,
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    lock_children,
+    lock_parent,
+    row_image,
+)
+from app.services.day_labels import long_day
 from app.services.money import (
     MONEY_MAX_ABS_10_2,
     MONEY_MAX_ABS_10_4,
@@ -64,6 +75,7 @@ from app.services.ordering import (
     SORT_INDEX_STEP,
     STALE_TRANSACTIONS,
     check_permutation,
+    moved_ids,
     next_sort_index,
     order_lock,
     position_changes,
@@ -143,6 +155,24 @@ def _owner_filter(owner: str | None) -> ColumnElement[bool] | None:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+async def _resolve_account(db: AsyncSession, batch: ChangeBatch, label: str) -> PortfolioAccount:
+    """resolve_portfolio_account, with the label row it mints — when it mints one — recorded in
+    `batch` ahead of the row that needs it. An Undo then removes a label the write brought into
+    being (refusing while another row still files under it), never one that was already there."""
+    account, minted = await resolve_portfolio_account(db, label)
+    if minted:
+        batch.record_insert(account)  # the service flushed: the image has its id
+    return account
+
+
+def _txn_name(ticker: str, txn: PositionTransaction) -> str:
+    """How an Activity label names a ledger row: "NVDA buy of Sep 2, 2026", or "VOO buy
+    (undated)" for the imported rows that carry no date."""
+    if txn.txn_date is None:
+        return f"{ticker} {txn.type} (undated)"
+    return f"{ticker} {txn.type} of {long_day(txn.txn_date)}"
+
+
 @router.get("/accounts", response_model=list[PortfolioAccountOut])
 async def list_portfolio_accounts(db: AsyncSession = Depends(get_db)) -> list[PortfolioAccount]:
     """Every label the ledger has ever seen, label-ordered — the roster Settings edits.
@@ -155,7 +185,11 @@ async def list_portfolio_accounts(db: AsyncSession = Depends(get_db)) -> list[Po
 
 @router.patch("/accounts/{account_id}", response_model=PortfolioAccountOut)
 async def update_portfolio_account(
-    account_id: int, body: PortfolioAccountUpdate, db: AsyncSession = Depends(get_db)
+    account_id: int,
+    body: PortfolioAccountUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> PortfolioAccount:
     """Ownership only. `person_id: null` is a REAL write — it is how an account becomes
     joint (the net-worth NULLABLE_ACCOUNT_FIELDS posture) — while an absent key is a no-op
@@ -171,8 +205,11 @@ async def update_portfolio_account(
     # surfacing asyncpg's ForeignKeyViolationError as a 500 (_validate_links' rule).
     if person_id is not None and (await db.get(Person, person_id)) is None:
         raise HTTPException(status_code=422, detail=f"unknown person_id: {person_id}")
+    before = row_image(account)
     account.person_id = person_id
-    await db.commit()
+    batch.record_update(account, before)
+    batch.label = f"Changed the owner of {account.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return account
 
 
@@ -190,7 +227,15 @@ async def list_securities(db: AsyncSession = Depends(get_db)) -> list[Security]:
 
 
 @router.post("/securities", response_model=SecurityOut, status_code=201)
-async def create_security(body: SecurityCreate, db: AsyncSession = Depends(get_db)) -> Security:
+async def create_security(
+    body: SecurityCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Security:
+    """Logged (2026-09-25 polish spec §6.1). Accepted: once a refresh has written prices for
+    the new security, undoing the create refuses (DEPENDENT_REFUSAL) — the price rows depend
+    on it."""
     ticker = _normalize_ticker(body.ticker)
     name = _validated_name(body.name)
     annual = body.annual_dividend
@@ -214,12 +259,20 @@ async def create_security(body: SecurityCreate, db: AsyncSession = Depends(get_d
         ex_div_date=ex_div_date,
     )
     db.add(security)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(security)
+    batch.label = f"Added security {security.ticker}"
+    response.headers.update(batch_header(await batch.commit()))
     return security
 
 
-async def _get_security(db: AsyncSession, security_id: int) -> Security:
-    security = await db.get(Security, security_id)
+async def _get_security(db: AsyncSession, security_id: int, *, lock: bool = False) -> Security:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    security = (
+        await lock_parent(db, Security, security_id)
+        if lock
+        else await db.get(Security, security_id)
+    )
     if security is None:
         raise HTTPException(status_code=404, detail="security not found")
     return security
@@ -231,8 +284,16 @@ NON_NULLABLE_SECURITY_FIELDS = {"name", "holding_type", "is_manual_priced", "is_
 
 @router.patch("/securities/{security_id}", response_model=SecurityOut)
 async def update_security(
-    security_id: int, body: SecurityUpdate, db: AsyncSession = Depends(get_db)
+    security_id: int,
+    body: SecurityUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> Security:
+    """Accepted (spec §6.1): the change log keeps whole-row images, so undoing an edit also
+    writes back the refresh-owned columns (annual dividend, ex-dates) as they stood at the
+    edit — the next refresh restores them. The refresh is unlogged, so the overlap refusal
+    cannot see it (update_classification has always had this property)."""
     security = await _get_security(db, security_id)
     # Validate EVERY field before touching the ORM object: a 422 raised halfway through a
     # multi-field PATCH would otherwise leave half the row mutated for the next autoflush.
@@ -248,15 +309,31 @@ async def update_security(
             elif field_name == "ex_div_date":
                 value = require_reasonable_date(value, "ex_div_date")
         validated[field_name] = value
+    before = row_image(security)
     for field_name, value in validated.items():
         setattr(security, field_name, value)
-    await db.commit()
+    batch.record_update(security, before)
+    batch.label = f"Edited security {security.ticker}"
+    response.headers.update(batch_header(await batch.commit()))
     return security
 
 
 @router.delete("/securities/{security_id}", status_code=204)
-async def delete_security(security_id: int, db: AsyncSession = Depends(get_db)) -> Response:
-    security = await _get_security(db, security_id)
+async def delete_security(
+    security_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Refused while transactions or dividends reference the security (deactivate instead).
+    Otherwise its derived rows go first — the historical ex-dividend markers, the daily closes
+    (~780 for the employer ticker) and the latest quote — each imaged and deleted through the
+    ORM rather than left to ON DELETE CASCADE, then the security LAST, so an Undo (which
+    replays in reverse) restores the security and then every row that hung off it, ids
+    included. Accepted (spec §6.1): once the ticker is created again, that Undo refuses
+    (REPLAY_REFUSAL) — the ticker is taken. The security is read FOR UPDATE first, so a
+    transaction, dividend or price another tab or the refresh writes meanwhile waits rather than
+    leaving with the cascade unimaged."""
+    security = await _get_security(db, security_id, lock=True)
     txn_count = (
         await db.execute(
             select(func.count())
@@ -279,9 +356,33 @@ async def delete_security(security_id: int, db: AsyncSession = Depends(get_db)) 
                 " — deactivate it instead"
             ),
         )
-    await db.delete(security)  # latest/history price rows CASCADE — derived data
-    await db.commit()
-    return Response(status_code=204)
+    events = await lock_children(
+        db,
+        select(SecurityDividendEvent)
+        .where(SecurityDividendEvent.security_id == security_id)
+        .order_by(SecurityDividendEvent.id),
+    )
+    history = await lock_children(
+        db,
+        select(PriceHistory)
+        .where(PriceHistory.security_id == security_id)
+        .order_by(PriceHistory.id),
+    )
+    latest = await lock_children(
+        db, select(LatestPrice).where(LatestPrice.security_id == security_id)
+    )
+    for row in [*events, *history, *latest]:
+        batch.record_delete(row)
+        await db.delete(row)
+    # Out before the security's own DELETE: no relationship() orders these mappers, and the
+    # unit of work would otherwise delete the security first and let the cascade take the
+    # markers from under their own DELETEs.
+    await db.flush()
+    batch.record_delete(security)
+    await db.delete(security)
+    batch.label = f"Deleted security {security.ticker}"
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 def _validated_txn_fields(
@@ -365,8 +466,10 @@ async def list_transactions(
 @router.put("/transactions/order", response_model=TransactionOrderOut)
 async def reorder_transactions(
     body: OrderIn,
+    response: Response,
     owner: OwnerQuery = None,
     db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> TransactionOrderOut:
     """Change the REPLAY order (2026-09-23 drag-to-reorder spec §3.2). `ids` is every row
     `GET /transactions?owner=` returns, in its new order. The visible rows take the slots
@@ -378,13 +481,21 @@ async def reorder_transactions(
     A scope never splits a holding: a position is keyed by an account label, and a label
     belongs to one owner (or joint), so each position is wholly visible or wholly hidden.
 
-    NOT change-logged, on purpose (spec §0.10): undo replays whole-row images, and this
-    table's other writers (the CRUD routes here, the importer) are unlogged, so undoing a
-    logged reorder after an unlogged edit of a moved row would silently revert that edit.
-    The client's Undo re-sends the previous order through this same route instead.
+    Change-logged since 2026-09-25 (polish spec §6.1): one update per renumbered row. The
+    ledger's CRUD is logged now too, and undo replays whole-row images, so an UNLOGGED reorder
+    would let an older edit's Undo write that row's old sort_index back and silently move it;
+    logged, that Undo meets the overlap refusal instead. The client's own Undo still re-sends
+    the previous order through this route.
+
+    Accepted: undoing a reorder puts back the renumbered rows' old numbers and nothing else, so
+    a row APPENDED since keeps the number it was given after the reorder's max — and where the
+    old numbers ran higher (a ledger's first renumbering), it lands mid-ledger. Rare in
+    practice: once renumbered the ledger is contiguous (10, 20, …), and an append then sorts
+    after any number an Undo can restore.
 
     Serialized per ledger (decision 16): the order lock is the first statement, so two tabs'
-    replay orders never blend into one neither sent — the later request wins whole.
+    replay orders never blend into one neither sent — the later request wins whole, with fresh
+    before-images.
 
     Declared before the /transactions/{txn_id} routes so a later PUT on that path can never
     shadow it."""
@@ -410,14 +521,24 @@ async def reorder_transactions(
     by_id = {txn.id: txn for txn in ledger}
     before = fold_transactions(ledger)  # folded BEFORE renumber touches a row
     new_order = subset_in_slots([txn.id for txn in ledger], body.ids)
-    renumber(
+    renumbered = renumber(
         [by_id[txn_id] for txn_id in new_order],
         "sort_index",
         start=SORT_INDEX_STEP,
         step=SORT_INDEX_STEP,
     )
     changed = position_changes(before, fold_transactions(ledger), tickers)
-    await db.commit()
+    for txn, old, _new in renumbered:
+        # renumber set sort_index and nothing else, so the row's image with its OLD number is
+        # exactly what the row held — no need to image the whole ledger up front.
+        batch.record_update(txn, {**row_image(txn), "sort_index": old})
+    moved = moved_ids(visible_ids, body.ids)
+    if len(moved) == 1:
+        mover = by_id[moved[0]]
+        batch.label = f"Moved {_txn_name(tickers[mover.security_id], mover)}"
+    else:
+        batch.label = f"Reordered {len(moved)} transactions"
+    response.headers.update(batch_header(await batch.commit()))
     return TransactionOrderOut(
         transactions=[TransactionOut.model_validate(by_id[txn_id]) for txn_id in body.ids],
         changed_positions=changed,
@@ -426,9 +547,13 @@ async def reorder_transactions(
 
 @router.post("/transactions", response_model=TransactionOut, status_code=201)
 async def create_transaction(
-    body: TransactionCreate, db: AsyncSession = Depends(get_db)
+    body: TransactionCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> PositionTransaction:
-    if await db.get(Security, body.security_id) is None:
+    security = await db.get(Security, body.security_id)
+    if security is None:
         raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
     fields = _validated_txn_fields(body.type, body.shares, body.price, body.fees, body.split_factor)
     if body.txn_date is not None:
@@ -440,7 +565,7 @@ async def create_transaction(
     sort_index = (await db.execute(next_sort_index())).scalar_one()
     # Resolve only after every 422 above: get-or-create flushes, and a label minted for a
     # request that then fails validation would be a row nobody asked for.
-    account = await resolve_portfolio_account(db, label)
+    account = await _resolve_account(db, batch, label)
     # UI rows fold chronologically LAST (locked decision) until the user drags them
     # elsewhere (PUT /transactions/order). A later import appends its new sheet rows after
     # the ledger's max the same way — import_key, not sort_index, is the importer's identity.
@@ -456,7 +581,10 @@ async def create_transaction(
         **fields,
     )
     db.add(txn)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(txn)
+    batch.label = f"Added {_txn_name(security.ticker, txn)}"
+    response.headers.update(batch_header(await batch.commit()))
     return txn
 
 
@@ -469,7 +597,11 @@ async def _get_transaction(db: AsyncSession, txn_id: int) -> PositionTransaction
 
 @router.patch("/transactions/{txn_id}", response_model=TransactionOut)
 async def update_transaction(
-    txn_id: int, body: TransactionUpdate, db: AsyncSession = Depends(get_db)
+    txn_id: int,
+    body: TransactionUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> PositionTransaction:
     txn = await _get_transaction(db, txn_id)
     provided = body.model_dump(exclude_unset=True)
@@ -492,8 +624,9 @@ async def update_transaction(
     # Resolve after the last raise and before the first mutation: get-or-create flushes,
     # and a flush of a half-mutated row is exactly what the rule below forbids.
     new_account = (
-        await resolve_portfolio_account(db, provided["account"]) if "account" in provided else None
+        await _resolve_account(db, batch, provided["account"]) if "account" in provided else None
     )
+    before = row_image(txn)
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
     if new_account is not None:
@@ -510,18 +643,31 @@ async def update_transaction(
     # source/sort_index/import_key are ownership metadata — never PATCHable (the replay
     # order moves only through PUT /transactions/order). Edits to source='import' rows are
     # legal but the next re-import reverts them (sheet wins).
-    await db.commit()
+    # The relationship moves portfolio_account_id only at a flush: image after one.
+    await db.flush()
+    batch.record_update(txn, before)
+    batch.label = f"Edited {_txn_name((await _get_security(db, txn.security_id)).ticker, txn)}"
+    response.headers.update(batch_header(await batch.commit()))
     return txn
 
 
 @router.delete("/transactions/{txn_id}", status_code=204)
-async def delete_transaction(txn_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_transaction(
+    txn_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Imaged, so an Undo puts the row back with its id and sort_index — in its old place in
+    the replay order, not at the ledger's end."""
     txn = await _get_transaction(db, txn_id)
     # Import-owned rows resurrect on the next re-import — appended at the ledger's end,
     # matched by import_key — documented.
+    ticker = (await _get_security(db, txn.security_id)).ticker
+    batch.record_delete(txn)
+    batch.label = f"Deleted {_txn_name(ticker, txn)}"
     await db.delete(txn)
-    await db.commit()
-    return Response(status_code=204)
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 @router.get("/dividends", response_model=list[DividendOut])
@@ -554,16 +700,20 @@ def _validated_dividend_amount(amount: Decimal) -> Decimal:
 
 @router.post("/dividends", response_model=DividendOut, status_code=201)
 async def create_dividend(
-    body: DividendCreate, db: AsyncSession = Depends(get_db)
+    body: DividendCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> DividendPayment:
-    if await db.get(Security, body.security_id) is None:
+    security = await db.get(Security, body.security_id)
+    if security is None:
         raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
     require_reasonable_date(body.pay_date, "pay_date")
     amount = _validated_dividend_amount(body.amount)
     # Blank/whitespace collapse to None — never persist '' as a second spelling of "no
     # account" (Task 9 review I1), and never mint a portfolio_accounts row for it.
     label = (body.account or "").strip() or None
-    account = None if label is None else await resolve_portfolio_account(db, label)
+    account = None if label is None else await _resolve_account(db, batch, label)
     dividend = DividendPayment(
         security_id=body.security_id,
         portfolio_account=account,
@@ -572,7 +722,10 @@ async def create_dividend(
         notes=body.notes,
     )
     db.add(dividend)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(dividend)
+    batch.label = f"Added {security.ticker} dividend of {long_day(dividend.pay_date)}"
+    response.headers.update(batch_header(await batch.commit()))
     return dividend
 
 
@@ -585,8 +738,16 @@ async def _get_dividend(db: AsyncSession, dividend_id: int) -> DividendPayment:
 
 @router.patch("/dividends/{dividend_id}", response_model=DividendOut)
 async def update_dividend(
-    dividend_id: int, body: DividendUpdate, db: AsyncSession = Depends(get_db)
+    dividend_id: int,
+    body: DividendUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> DividendPayment:
+    """Accepted (spec §6.1, the security-refresh class): the refresh's ingest owns source='auto'
+    rows inside its window and rewrites them unlogged, so undoing an edit of an auto dividend
+    writes the edit's before-image over whatever the ingest wrote since — until the next
+    refresh writes it again. The overlap refusal cannot see the ingest."""
     dividend = await _get_dividend(db, dividend_id)
     provided = body.model_dump(exclude_unset=True)
     # Validate EVERY field before touching the ORM object (update_security posture): a 422
@@ -605,21 +766,37 @@ async def update_dividend(
         validated.pop("account")  # not a column any more — it is the relationship below
         account_change = True
         label = (provided["account"] or "").strip() or None
-        new_account = None if label is None else await resolve_portfolio_account(db, label)
+        new_account = None if label is None else await _resolve_account(db, batch, label)
+    before = row_image(dividend)
     for field_name, value in validated.items():
         setattr(dividend, field_name, value)
     if account_change:
         dividend.portfolio_account = new_account
-    await db.commit()
+    # The relationship moves portfolio_account_id only at a flush: image after one.
+    await db.flush()
+    batch.record_update(dividend, before)
+    ticker = (await _get_security(db, dividend.security_id)).ticker
+    batch.label = f"Edited {ticker} dividend of {long_day(dividend.pay_date)}"
+    response.headers.update(batch_header(await batch.commit()))
     return dividend
 
 
 @router.delete("/dividends/{dividend_id}", status_code=204)
-async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_dividend(
+    dividend_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Imaged, so an Undo restores the row as it was. Accepted (spec §6.1): once a refresh has
+    written the same auto dividend again, that Undo refuses (REPLAY_REFUSAL) — the auto-event
+    key is taken."""
     dividend = await _get_dividend(db, dividend_id)
+    ticker = (await _get_security(db, dividend.security_id)).ticker
+    batch.record_delete(dividend)
+    batch.label = f"Deleted {ticker} dividend of {long_day(dividend.pay_date)}"
     await db.delete(dividend)
-    await db.commit()
-    return Response(status_code=204)
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 @router.get("/dividend-events", response_model=list[DividendEventOut])

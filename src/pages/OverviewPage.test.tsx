@@ -2529,6 +2529,16 @@ describe('OverviewPage chart cards (charts C2)', () => {
     expect(within(last).getByText('Future month (in progress)')).toBeTruthy()
   })
 
+  // 2026-09-25 polish spec §3.2: the elastic card of the wealth column is the trend, which grows its
+  // plot from 220px; "Changes" under it keeps its own height.
+  it('lets the Net worth trend fill the wealth column', async () => {
+    serve()
+    renderPage()
+    const trend = (await screen.findByRole('heading', { name: /Net worth trend/ })).closest('section.chart-card') as HTMLElement
+    expect(trend.classList.contains('chart-card-fill')).toBe(true)
+    expect(trend.style.getPropertyValue('--chart-h')).toBe('220px')
+  })
+
   it('has no footnote when no shown month is in progress', async () => {
     serve()
     renderPage()
@@ -2556,6 +2566,78 @@ describe('OverviewPage chart cards (charts C2)', () => {
     const table = within(card).getByRole('table')
     const row = within(table).getAllByRole('row').at(-1) as HTMLElement
     expect(within(row).getByText(/^Spending partly entered \(due by /)).toBeTruthy()
+  })
+})
+
+// 2026-09-25 polish spec §3.2 (OU-16): the half-width charts pair only when adjacent in the order the
+// reader chose; a chart with no half-width neighbour runs the full row.
+describe('OverviewPage deeper spans follow the chosen order', () => {
+  const spanOf = (name: RegExp): number | null => {
+    const card = screen.getByRole('heading', { name }).closest('section.chart-card') as HTMLElement
+    return card.classList.contains('span-6') ? 6 : card.classList.contains('span-12') ? 12 : null
+  }
+  const saveCards = (cards: string[]) =>
+    localStorage.setItem(STORAGE_KEYS.overview_layout, JSON.stringify({ tiles: [...DEFAULT_OVERVIEW_LAYOUT.tiles], cards }))
+
+  it('runs Recent spending across the row when Portfolio performance is hidden', async () => {
+    saveCards(['ytd', 'spending', 'money_flow'])
+    serve()
+    renderPage()
+    await screen.findByRole('heading', { name: /Recent spending/ })
+    expect(spanOf(/Recent spending/)).toBe(12)
+  })
+
+  it('runs both charts across the row when Money flow sits between them', async () => {
+    saveCards(['performance', 'money_flow', 'spending', 'ytd'])
+    serve()
+    renderPage()
+    await screen.findByRole('heading', { name: /Recent spending/ })
+    expect(spanOf(/Portfolio performance/)).toBe(12)
+    expect(spanOf(/Recent spending/)).toBe(12)
+  })
+
+  it('pairs the two charts in either order when they are adjacent', async () => {
+    saveCards(['spending', 'performance', 'ytd', 'money_flow'])
+    serve()
+    renderPage()
+    await screen.findByRole('heading', { name: /Recent spending/ })
+    expect(spanOf(/Portfolio performance/)).toBe(6)
+    expect(spanOf(/Recent spending/)).toBe(6)
+  })
+
+  // Year to date draws nothing once its feeds answer without the rollup; an absent card is no
+  // neighbour, so the two charts either side of it still pair.
+  it('pairs the two charts across a Year to date that draws nothing', async () => {
+    saveCards(['performance', 'ytd', 'spending', 'money_flow'])
+    serve()
+    vi.mocked(fetchYearly).mockRejectedValue(new ApiError('rollup offline', 503))
+    renderPage()
+    await screen.findByRole('alert')
+    await screen.findByRole('heading', { name: /Recent spending/ })
+    expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
+    expect(document.querySelector('.overview-deeper .loading-fallback')).toBeNull()
+    expect(spanOf(/Portfolio performance/)).toBe(6)
+    expect(spanOf(/Recent spending/)).toBe(6)
+  })
+
+  // The popover's reflow is FLIPped (spec §3.2). jsdom lays every box at 0,0, so nothing "moves" —
+  // but a view shown again has no old box, and fades in.
+  it('fades a view shown again from the Customize popover in', async () => {
+    const animate = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'animate', { value: animate, configurable: true, writable: true })
+    onTestFinished(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, 'animate')
+    })
+    serve()
+    renderPage()
+    await screen.findByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
+    animate.mockClear()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
+    const flow = screen.getByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) }).closest('.chart-card-slot')
+    const fades = animate.mock.instances.filter((_, i) => JSON.stringify(animate.mock.calls[i][0]) === JSON.stringify([{ opacity: 0 }, { opacity: 1 }]))
+    expect(fades).toEqual([flow])
   })
 })
 

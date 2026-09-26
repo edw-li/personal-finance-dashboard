@@ -159,8 +159,8 @@ async def test_account_create_update_delete_are_logged(auth_client, db):
     assert deleted.status_code == 204
     logged = (await db.execute(select(ChangeLog).order_by(ChangeLog.id))).scalars().all()
     assert [(r.op, r.label) for r in logged] == [
-        ("insert", "Created account Brokerage"),
-        ("update", "Updated account Brokerage"),
+        ("insert", "Added account Brokerage"),
+        ("update", "Edited account Brokerage"),
         ("delete", "Deleted account Brokerage"),
     ]
     # one batch per request; the no-op PATCH logged none
@@ -298,7 +298,7 @@ async def test_a_bogus_claimed_source_reads_as_ui(auth_client, db):
     )
     assert created.status_code == 201
     logged = (await db.execute(select(ChangeLog))).scalars().all()
-    assert [(r.source, r.label) for r in logged] == [("ui", "Created category Fun")]
+    assert [(r.source, r.label) for r in logged] == [("ui", "Added category Fun")]
 
 
 # ── categories and budgets ───────────────────────────────────────────────────────────
@@ -324,8 +324,8 @@ async def test_category_and_budget_paths_are_logged(auth_client, db):
     assert deleted.status_code == 204
     logged = (await db.execute(select(ChangeLog).order_by(ChangeLog.id))).scalars().all()
     assert [(r.op, r.table_name, r.label, r.month) for r in logged] == [
-        ("insert", "spending_categories", "Created category Fun", None),
-        ("update", "spending_categories", "Updated category Leisure", None),
+        ("insert", "spending_categories", "Added category Fun", None),
+        ("update", "spending_categories", "Edited category Leisure", None),
         ("insert", "category_budgets", "Set Leisure budget from Sep 2026", date(2026, 9, 1)),
         ("update", "category_budgets", "Set Leisure budget from Sep 2026", date(2026, 9, 1)),
         ("delete", "category_budgets", "Removed Leisure budget row for Sep 2026", date(2026, 9, 1)),

@@ -1,4 +1,4 @@
-import { api, apiReadOnly } from './client'
+import { api, apiDeleteLogged, apiReadOnly } from './client'
 import type {
   PaycheckBreakdownOut,
   PaycheckPreviewIn,
@@ -32,8 +32,9 @@ export function updateProfile(
   })
 }
 
-export function deleteProfile(id: number): Promise<void> {
-  return api<void>(`/paycheck/profiles/${id}`, { method: 'DELETE' })
+// Logged (2026-09-25 polish spec §6.1): the answer names the batch an Undo reverts.
+export function deleteProfile(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/paycheck/profiles/${id}`)
 }
 
 // No id = the profile in force today (the latest one effective now or earlier, falling
