@@ -217,31 +217,28 @@
 
 /* ── Sidebar footer (rendered by SidebarFooter) ─────────────────────────── */
 
-/* ONE row (2026-09-25 polish spec §2): the email takes the slack and ellipsises; the theme toggle
-   and Log out are 28px icon buttons at the row's end. The four stacked rows before it (email, the
-   environment pill with the build hash, two labelled buttons) cost ~90px — enough, with the nav, to
-   push both buttons below the sidebar's fold on a 768–864px laptop. */
+/* The signed-in address gets the sidebar's full width (2026-09-26 request). The compact
+   icon row below it preserves laptop-height fit without cutting the identity short. */
 .sidebar-footer {
   margin-top: auto;
   padding: 0.5rem 0.25rem 0;
   border-top: 1px solid var(--border);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  /* The buttons keep the row's end with or without an email (the session still loading); beside an
-     email, which takes the slack, this changes nothing. */
+  /* The buttons keep their row's end even while the session has no email yet. */
   justify-content: flex-end;
-  gap: 0.15rem;
+  gap: 0.2rem 0.15rem;
   font-size: 0.72rem;
   color: var(--muted);
 }
 
 .sidebar-footer-email {
-  flex: 1;
+  flex: 0 0 100%;
   min-width: 0;
-  padding: 0 0.35rem 0 0.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 0 0.5rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 /* Off production the address wears the advisory tint (the retired pill's dev colour), so a dev tab and a
@@ -267,6 +264,11 @@
 .sidebar-footer-icon:hover {
   background: var(--surface-2);
   color: var(--text);
+}
+
+/* Keep Log out's danger tint while hovered as well as at rest, in either theme. */
+.sidebar-footer-icon.sidebar-footer-logout {
+  color: var(--negative);
 }
 
 .sidebar-footer-icon:focus-visible {

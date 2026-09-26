@@ -27,9 +27,9 @@ export function getLastSystemStatus(): SystemStatus | null {
 
 // Identity at the bottom of the sidebar (2026-09-03 shell spec §12) — who is signed in, which
 // deployment and which build, so two tabs (dev vs prod) can never be confused — plus a one-click
-// theme toggle and Log out. ONE row since 2026-09-25 (polish spec §2): the four stacked rows cost
-// ~90px, which on a 768–864px laptop pushed both buttons below the sidebar's fold. The environment
-// and the build now ride the email's tooltip (Settings › Data › System states them too).
+// theme toggle and Log out. The full-width address sits above the two compact icon buttons so the
+// signed-in identity stays readable (2026-09-26 request). The environment and build ride its
+// tooltip; Settings › Data › System states them too.
 export default function SidebarFooter({ buildHash }: { buildHash: string }) {
   const { email, logout } = useAuth()
   const { theme, resolved, setTheme } = useTheme()
@@ -97,7 +97,7 @@ export default function SidebarFooter({ buildHash }: { buildHash: string }) {
       <button type="button" className="sidebar-footer-icon" onClick={onToggleTheme} aria-label={themeLabel} title={themeLabel}>
         {resolved === 'dark' ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
       </button>
-      <button type="button" className="sidebar-footer-icon" onClick={logout} aria-label="Log out" title="Log out">
+      <button type="button" className="sidebar-footer-icon sidebar-footer-logout" onClick={logout} aria-label="Log out" title="Log out">
         <LogOut size={16} aria-hidden="true" />
       </button>
     </div>

@@ -51,13 +51,13 @@ describe('the sidebar on a short screen (Layout.css)', () => {
 
 const SHELL = flat('shell/shell.css')
 
-describe('the one-row account footer (shell.css)', () => {
-  it('lays the footer out as one row, the email taking the slack and ellipsising', () => {
-    expect(SHELL).toMatch(/\.sidebar-footer \{[^}]*display: flex;[^}]*align-items: center;/)
-    expect(SHELL).not.toMatch(/\.sidebar-footer \{[^}]*flex-direction: column;/)
+describe('the compact account footer (shell.css)', () => {
+  it('gives the identity its full width and wraps long addresses instead of cutting them off', () => {
+    expect(SHELL).toMatch(/\.sidebar-footer \{[^}]*display: flex;[^}]*flex-wrap: wrap;[^}]*align-items: center;/)
     expect(SHELL).toMatch(
-      /\.sidebar-footer-email \{[^}]*flex: 1;[^}]*min-width: 0;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/,
+      /\.sidebar-footer-email \{[^}]*flex: 0 0 100%;[^}]*min-width: 0;[^}]*overflow-wrap: anywhere;/,
     )
+    expect(SHELL).not.toMatch(/\.sidebar-footer-email \{[^}]*(?:overflow: hidden|text-overflow: ellipsis|white-space: nowrap);/)
   })
 
   it('draws the theme toggle and Log out as 28px icon buttons that never shrink', () => {
@@ -75,8 +75,9 @@ describe('the one-row account footer (shell.css)', () => {
     expect(SHELL).toContain('.sidebar-footer-email.is-nonprod { color: var(--warn); }')
   })
 
-  it('keeps the house hover and focus ring on the icon buttons', () => {
+  it('keeps the house hover and focus ring, with a persistent danger tint for Log out', () => {
     expect(SHELL).toContain('.sidebar-footer-icon:hover { background: var(--surface-2); color: var(--text); }')
+    expect(SHELL).toContain('.sidebar-footer-icon.sidebar-footer-logout { color: var(--negative); }')
     expect(SHELL).toContain('.sidebar-footer-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }')
   })
 

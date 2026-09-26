@@ -23,17 +23,16 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 describe('SidebarFooter', () => {
-  // ONE row (2026-09-25 polish spec §2): the four stacked rows cost the sidebar ~90px, which on a
-  // 768–864px laptop pushed theme and Log out below its fold.
-  it('is one row — the email, then the theme and log-out icon buttons — and logs out', () => {
+  it('shows the full identity before the theme and danger log-out buttons, and logs out', () => {
+    vi.mocked(useAuth).mockReturnValue({ email: 'person2000@example.com', isAuthenticated: true, isLoading: false, login: vi.fn(), logout, authError: null, retry: vi.fn() })
     render(<ThemeProvider><SidebarFooter buildHash="abc123" /></ThemeProvider>)
     const footer = document.querySelector('.sidebar-footer') as HTMLElement
     expect(Array.from(footer.children).map((child) => child.className)).toEqual([
       'sidebar-footer-email',
       'sidebar-footer-icon',
-      'sidebar-footer-icon',
+      'sidebar-footer-icon sidebar-footer-logout',
     ])
-    expect(screen.getByText('me@example.com')).toBeTruthy()
+    expect(screen.getByText('person2000@example.com')).toBeTruthy()
     // Icons only: the name is for a screen reader, the title for a pointer.
     const theme = screen.getByRole('button', { name: 'Switch to light theme' })
     expect(theme.textContent).toBe('')

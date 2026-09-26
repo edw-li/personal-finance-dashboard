@@ -13,7 +13,7 @@
    long page the nav scrolled away at the top and logout sat at the document's bottom.
    Pinned to the viewport instead (height is the viewport exactly — border-box, so the padding
    is inside it). Its own scrollbar is a fallback now, for a window under ~700px: the short-screen
-   rhythm below and the one-row footer (shell.css) fit it from 768px of height up. */
+   rhythm below and the compact footer (shell.css) fit it from 768px of height up. */
 .sidebar {
   position: sticky;
   top: 0;
