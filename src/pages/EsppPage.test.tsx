@@ -371,7 +371,7 @@ describe('EsppPage — frame', () => {
 
     expect(await screen.findByText('Loading the ESPP headline…')).toBeTruthy()
     expect(document.querySelectorAll('.kpi-row .stat-tile.skeleton-tile').length).toBe(5)
-    expect(document.querySelector('.kpi-row-lone')).toBeNull()
+    expect(document.querySelector('.kpi-row')?.classList.contains('kpi-row-5')).toBe(true)
 
     // The lots land first: four real tiles, the $25k slot still a ghost — same row, same box.
     // 'Unrealized gain', not 'Market value': that one also heads a column of the lots table.

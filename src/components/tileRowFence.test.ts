@@ -10,8 +10,8 @@ import { describe, expect, it } from 'vitest'
 // TypeScript AST (noNativeConfirm.test.ts's way, so comments and strings never count): every JSX element
 // whose class names `kpi-row` may hold only tiles — <StatTile>, <GhostTile>, <JurisdictionTile> (a
 // StatTile) — or a `.stat-tile-slot` wrapping one, reached through fragments, conditionals, `&&`,
-// `.map(…)` callbacks and a same-file table of tile elements (the Overview's). Anything the walk cannot
-// see through fails too: name the tile where the row is written.
+// `.map(…)` / `Array.from(…)` callbacks and a same-file table of tile elements (the Overview's). Anything
+// the walk cannot see through fails too: name the tile where the row is written.
 
 const SRC = path.resolve(__dirname, '..')
 
@@ -55,7 +55,7 @@ function classNames(node: Jsx, source: ts.SourceFile): string[] {
   return classPieces(attribute.initializer, source).flatMap((piece) => piece.split(/\s+/)).filter(Boolean)
 }
 
-/** A top-level function or const of the file, by name — the body a call or a lookup resolves to. */
+/** A function or const of the file by name (the first so named) — what a call or a lookup resolves to. */
 function declarationOf(name: string, source: ts.SourceFile): ts.Node | undefined {
   let found: ts.Node | undefined
   const visit = (n: ts.Node): void => {
