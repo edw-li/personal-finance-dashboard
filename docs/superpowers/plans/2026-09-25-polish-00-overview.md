@@ -342,6 +342,12 @@ browser comparison in both themes reproduced the old 42.1875px body movement / C
 movement / CLS 0.005675 with the fix. All four cases have clean post-close logs and unchanged source during the proof,
 recorded in `scratchpad/codex-cosmetic-final/scope-owner-arrival/report.json`.
 
+Screenshot review also identified ESPP's year-bearing limit title extending past its header by 25.19px at 1366 and
+10.41px at 1440. A page-scoped wrapping rule keeps the text and info control inside the five-tile row. All ten final
+viewport/theme measurements fit with clean logs; root visually reviewed the before/after 1366 light and final 1440
+dark captures. Evidence is in `scratchpad/codex-cosmetic-final/espp-title-{bounds,final}/report.json`. The affected
+Net worth, Portfolio and ESPP cold-load cases are being rerun; the original matrix remains a retained failed attempt.
+
 Gate logs and interrupted/failed attempts are preserved in ignored `scratchpad/codex-takeover-*` files. Lane V's
 fresh-copy browser acceptance and final report remain the last step; its plan records source provenance, measured
 before/after results, corrected probe attempts, cleanup and the precise product commit for each run. Nothing has

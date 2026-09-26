@@ -9,6 +9,12 @@
   margin-bottom: 1rem;
 }
 
+/* The year-bearing limit title must fit even when five headline tiles share a narrow row.
+   Its info button stays with the final word through StatTile's shared inline wrapper. */
+.espp-page .kpi-row-5 .stat-label-text {
+  white-space: normal;
+}
+
 /* No `pointer-events: none` on this page's .loading-dim.is-loading, deliberately.
    TaxesPage takes that guard because its arriving payload REPLACES the editors, so a
    keystroke landing during the fetch is typing thrown away. Here every load keeps the
