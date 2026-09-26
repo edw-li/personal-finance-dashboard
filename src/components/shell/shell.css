@@ -244,6 +244,12 @@
   white-space: nowrap;
 }
 
+/* Off production the address wears the advisory tint (the retired pill's dev colour), so a dev tab and a
+   prod tab still tell themselves apart at a glance; the tooltip names the deployment. */
+.sidebar-footer-email.is-nonprod {
+  color: var(--warn);
+}
+
 .sidebar-footer-icon {
   flex: none;
   display: inline-grid;

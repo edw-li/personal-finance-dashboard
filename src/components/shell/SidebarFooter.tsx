@@ -79,13 +79,17 @@ export default function SidebarFooter({ buildHash }: { buildHash: string }) {
   }
 
   // `{email} · {environment} · build {hash}`; the environment only once the status answered — an
-  // unlabeled footer is honest, a stale or guessed environment is not.
-  const identity = [email, status?.environment, `build ${buildHash}`].filter(Boolean).join(' · ')
+  // unlabeled footer is honest, a stale or guessed environment is not. Off production the address
+  // wears the warn tint, and the tooltip says why: dev vs prod at a glance, with no pill to spend
+  // height on (review, 2026-09-25).
+  const nonProd = status !== null && status.environment !== 'prod'
+  const environment = status === null ? null : nonProd ? `${status.environment} (not production)` : status.environment
+  const identity = [email, environment, `build ${buildHash}`].filter(Boolean).join(' · ')
   const themeLabel = `Switch to ${next} theme`
   return (
     <div className="sidebar-footer">
       {email && (
-        <span className="sidebar-footer-email" title={identity}>
+        <span className={`sidebar-footer-email${nonProd ? ' is-nonprod' : ''}`} title={identity}>
           {email}
         </span>
       )}

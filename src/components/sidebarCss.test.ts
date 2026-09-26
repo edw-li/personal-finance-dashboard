@@ -71,6 +71,10 @@ describe('the one-row account footer (shell.css)', () => {
     expect(SHELL).not.toContain(':first-of-type')
   })
 
+  it('tints the address in the warn colour off production', () => {
+    expect(SHELL).toContain('.sidebar-footer-email.is-nonprod { color: var(--warn); }')
+  })
+
   it('keeps the house hover and focus ring on the icon buttons', () => {
     expect(SHELL).toContain('.sidebar-footer-icon:hover { background: var(--surface-2); color: var(--text); }')
     expect(SHELL).toContain('.sidebar-footer-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }')

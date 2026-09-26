@@ -51,6 +51,18 @@ describe('SidebarFooter', () => {
     await waitFor(() => expect(email.getAttribute('title')).toBe('me@example.com · prod · build abc123'))
     expect(screen.queryByText('prod')).toBeNull()
     expect(screen.queryByText('abc123')).toBeNull()
+    // Production wears no tint.
+    expect(email.classList.contains('is-nonprod')).toBe(false)
+  })
+
+  // Dev vs prod at a glance, now that the environment pill is gone: off production the address wears
+  // the warn tint — no height spent — and its tooltip says why.
+  it('tints the email and says so when the deployment is not production', async () => {
+    vi.mocked(fetchSystemStatus).mockResolvedValue({ environment: 'dev', database: { alembic_head: 'f7d3b2a91c40', size_bytes: 1 } } as never)
+    render(<ThemeProvider><SidebarFooter buildHash="abc123" /></ThemeProvider>)
+    const email = screen.getByText('me@example.com')
+    await waitFor(() => expect(email.classList.contains('is-nonprod')).toBe(true))
+    expect(email.getAttribute('title')).toBe('me@example.com · dev (not production) · build abc123')
   })
 
   it('toggles the theme explicitly', async () => {
@@ -105,8 +117,9 @@ describe('SidebarFooter', () => {
     vi.mocked(fetchSystemStatus).mockRejectedValue(new Error('offline'))
     render(<ThemeProvider><SidebarFooter buildHash="abc123" /></ThemeProvider>)
     await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalled())
-    // An unlabeled environment is honest; a stale or guessed one is not.
+    // An unlabeled environment is honest; a stale or guessed one is not — and neither is a tint.
     expect(screen.getByText('me@example.com').getAttribute('title')).toBe('me@example.com · build abc123')
+    expect(screen.getByText('me@example.com').classList.contains('is-nonprod')).toBe(false)
   })
 
   it('keeps both buttons, and only them, while there is no email yet', () => {
