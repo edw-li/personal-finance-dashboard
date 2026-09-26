@@ -1,4 +1,22 @@
-.chart-card-slot { min-width: 0; }
+/* The slot chain (2026-09-25 polish spec §3.1): ChartSurface portals the card into a class-less host
+   div inside .chart-card-slot, and the grid stretched only the slot — the host and the card kept their
+   content height, so paired cards ended 17–95px apart. slot → host → card is now a column flexbox
+   chain, the Expand dialog's own (below), so a card always fills its slot. A slot nothing stretches is
+   as tall as its card, exactly as before. */
+.chart-card-slot { min-width: 0; display: flex; flex-direction: column; }
+.chart-card-slot > div { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.chart-card-slot .chart-card { flex: 1; display: flex; flex-direction: column; }
+/* A filling card (ChartCard `fill`) hands its extra height to the PLOT: the configured height
+   (--chart-h, set on the card) is the floor and the plot grows with the row, so the footer ends on the
+   card's bottom edge. contain: size keeps the canvas out of the row's measurement — a card that grew
+   never ratchets the row, and when the neighbour's Table closes both shrink back. The skeleton holds
+   the same box while the data is out. The chart's own floor is a guard for a box nothing resolves. */
+.chart-card-slot .chart-card-fill > :is(.loading-dim, .chart-card-skeleton) { flex: 1 0 auto; min-height: var(--chart-h); contain: size; }
+.chart-card-slot .chart-card-fill > .loading-dim > [role='img'] { min-height: var(--chart-h); }
+/* A card that holds its plot (`fill={false}` — Spending › Trends, whose linked month axes must share a
+   line) is still stretched by its row: its caption rides the card's foot, so the pair ends together and
+   the space opens above the caption instead of under it. */
+.chart-card-slot .chart-card:not(.chart-card-fill) > .chart-card-row-caption { margin-top: auto; }
 .chart-expanded-dialog { position: fixed; inset: 24px; width: calc(100vw - 48px); max-width: none; height: calc(100vh - 48px); max-height: none; margin: 0; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; overflow: auto; }
 /* --scrim is F2's light-theme token (spec §6); the fallback is today's value. */
 .chart-expanded-dialog::backdrop { background: var(--scrim, #0009); }
@@ -51,6 +69,10 @@
 .chart-card-has-aside { container-type: inline-size; }
 .chart-card-with-aside { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .9fr); gap: 1rem 1.5rem; align-items: start; }
 .chart-card-with-aside > .chart-card-plot, .chart-card-with-aside > .chart-card-aside { min-width: 0; }
+/* The plot sits in the middle of its row (2026-09-25 polish spec §3.6, PE-20), not at the top of a
+   column a long legend stretched — the donut floated over ~294px of nothing. The aside keeps the top.
+   Under the slot only: in the Expand dialog the plot column must stretch to the dialog's row. */
+.chart-card-slot .chart-card-with-aside > .chart-card-plot { align-self: center; }
 @container (max-width: 899px) {
   .chart-card-with-aside { grid-template-columns: minmax(0, 1fr); }
 }

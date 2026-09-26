@@ -1077,12 +1077,20 @@ describe('BracketsEditor — per-person tables', () => {
     expect(addFor('Disability', 'Alex')).toBeTruthy()
   })
 
-  it('lays the jurisdictions out as a grid of groups, each table over its own strip', () => {
+  it('lays the jurisdictions out in two independent stacks, in JURISDICTIONS order, each table over its own strip', () => {
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
-    // 2026-09-13 polish spec §12 (audit W3: seven 560px tables in a one-column ribbon).
-    const grid = document.querySelector('.bracket-grid') as HTMLElement
-    expect(grid).toBeTruthy()
-    const groups = Array.from(grid.children)
+    // 2026-09-25 polish spec §3.5 (TPC-12d): two stacks, not grid rows — a short table leaves no
+    // ragged gap beside a tall one. The fixture's estimated heights (Federal 212, State 150, Medicare
+    // 150 | Social Security 233, Disability 191, Capital gains 150 px) split three and three.
+    const columns = document.querySelector('.bracket-columns') as HTMLElement
+    expect(Array.from(columns.children).map((column) => column.className)).toEqual(['bracket-column', 'bracket-column'])
+    expect(
+      Array.from(columns.children).map((column) => Array.from(column.children).map((group) => group.querySelector('h3')?.textContent)),
+    ).toEqual([
+      ['Federal brackets', 'State brackets', 'Medicare brackets'],
+      ['Social Security brackets — default for everyone', 'Disability brackets — default for everyone', 'Capital gains brackets'],
+    ])
+    const groups = Array.from(columns.querySelectorAll('.bracket-column > *'))
     expect(groups).toHaveLength(6)
     expect(groups.every((group) => group.classList.contains('bracket-group'))).toBe(true)
     // A per-worker group holds its default table AND its per-person strip.
@@ -1103,5 +1111,40 @@ describe('BracketsEditor — per-person tables', () => {
     // filing status in the scope row (audit S3).
     const row = screen.getByText('Tables for status').closest('.bracket-status-row') as HTMLElement
     expect(row.contains(screen.getByRole('group', { name: 'Tables for status' }))).toBe(true)
+  })
+
+  // Each column is charged the 1rem between its tables: five one-row tables against a nine-row one
+  // measure 814 vs 646 split 5 | 1, but 648 vs 812 split 4 | 2 — without the gaps the first looks closer.
+  it('charges each column the gaps between its tables when it splits', () => {
+    const row = (rate: string, threshold: string, index: number) => ({ bracket_index: index, rate, threshold })
+    const brackets: TaxBracketsOut = {
+      ...bracketsFixture(),
+      people: [],
+      per_person: [],
+      jurisdictions: {
+        federal: [row('0.1000', '0.00', 1)],
+        state: [row('0.0100', '0.00', 1)],
+        medicare: [row('0.0145', '0.00', 1)],
+        social_security: [row('0.0620', '0.00', 1)],
+        disability: [row('0.0100', '0.00', 1)],
+        capital_gains: Array.from({ length: 9 }, (_, i) => row('0.1500', `${i * 1000}.00`, i + 1)),
+      },
+    }
+    render(<BracketsEditor brackets={brackets} onSaved={vi.fn()} />)
+    const stacks = Array.from(document.querySelectorAll('.bracket-column')).map(
+      (column) => column.querySelectorAll(':scope > .bracket-group').length,
+    )
+    expect(stacks).toEqual([4, 2])
+  })
+
+  // The split is read off the SAVED tables and held while editing: an added row grows its column in
+  // place and never moves a table — or a focused Save — to the other side.
+  it('holds the split while rows are added', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    const stacks = () =>
+      Array.from(document.querySelectorAll('.bracket-column')).map((column) => column.querySelectorAll(':scope > .bracket-group').length)
+    expect(stacks()).toEqual([3, 3])
+    for (let i = 0; i < 6; i += 1) fireEvent.click(screen.getByRole('button', { name: 'Add Federal bracket' }))
+    expect(stacks()).toEqual([3, 3])
   })
 })

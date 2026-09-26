@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { EChartsOption } from '../charts/echarts'
 import type { ZoomWindow } from '../charts/timeZoom'
@@ -18,6 +18,7 @@ import SelectionDetail from './details/SelectionDetail'
 import { usePageFrame } from './shell/PageFrame'
 import { inputSince } from './shell/holdPosition'
 import { useLocalSectionVisible } from './shell/localSectionContext'
+import { prefersReducedMotion } from './useReducedMotion'
 import './panels.css'
 
 // The one chart mount (chart spec §6): header · hint · controls · export row · states · chart ·
@@ -64,6 +65,15 @@ export interface ChartCardProps {
   /** Card-local advisory — never the page banner. */
   error?: string | null
   span?: 6 | 12
+  /** Grow the plot to the card's height inside a stretched grid row (2026-09-25 polish spec §3.1,
+   *  contract C5): the card ends on its partner's line and the extra height goes to the chart, not
+   *  to a blank band under the footer. `height` stays the plot's floor. On by default at span 6 —
+   *  every half-width card has a partner — and passed explicitly by the Overview's Net worth trend.
+   *  Never with an `aside`: that plot sits inside the aside wrapper, which does not grow. */
+  fill?: boolean
+  /** Reserve the header's controls row with nothing in it, so this card's plot starts on the same
+   *  line as a paired card whose header carries controls (Spending › Trends, spec §3.1). */
+  reserveControls?: boolean
   // Pass-through to EChart.
   onClick?: (params: EChartEventParams) => void
   onHover?: (params: EChartEventParams) => void
@@ -88,11 +98,13 @@ export interface ChartCardProps {
 
 export default function ChartCard({
   title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede, aside,
-  zoomable = false, group, busy = false, error = null, span = 12,
+  zoomable = false, group, busy = false, error = null, span = 12, fill, reserveControls = false,
   onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, onWidth, zoomWindow,
   selectionAdapter, rowSelection, selection, onSelectionChange, renderSelection, selectionScopeKey = '', independentRangeLabel, allowExpand = true,
 }: ChartCardProps) {
   const { fromCache } = usePageFrame()
+  // C5: a half-width card fills unless it says otherwise; an aside card never does (above).
+  const filled = aside === undefined && (fill ?? span === 6)
   const [tableOpen, setTableOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const activeView = useLocalSectionVisible()
@@ -151,6 +163,22 @@ export default function ChartCard({
   }, [])
   const showTable = tableOpen && csv !== undefined && option !== null
   const table = showTable && csv ? csv() : null
+  // The Table twin opens where the reader is looking (2026-09-25 polish spec §5.5, MOTION-11): under a
+  // tall chart it opened below the fold and the click looked like it did nothing. Only the click that
+  // OPENS it scrolls — `nearest`, so a twin already on screen stays put — smoothly unless the reader
+  // asked for less motion. In the Expand dialog it scrolls the dialog, the twin's own scroller.
+  const revealTableRef = useRef(false)
+  const toggleTable = () => {
+    revealTableRef.current = !tableOpen
+    setTableOpen((open) => !open)
+  }
+  useEffect(() => {
+    if (!showTable || !revealTableRef.current) return
+    revealTableRef.current = false
+    cardRef.current
+      ?.querySelector<HTMLElement>('.chart-table')
+      ?.scrollIntoView?.({ block: 'nearest', behavior: prefersReducedMotion() ? 'instant' : 'smooth' })
+  }, [showTable])
   const dismissSelection = useCallback(() => {
     setPinned({ scope: selectionScopeKey, value: null })
     onSelectionChange?.(null)
@@ -223,7 +251,7 @@ export default function ChartCard({
       <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
         <EChart
           option={option}
-          height={expanded ? 'fill' : height}
+          height={expanded || filled ? 'fill' : height}
           ariaLabel={ariaLabel}
           animateEntrance={!fromCache}
           group={group}
@@ -244,13 +272,19 @@ export default function ChartCard({
     <>
     {selected && panel && !expanded && createPortal(selectionContent, detailHost)}
     <ChartSurface title={title} expanded={expanded} onClose={() => setExpanded(false)} span={span}>
-    <section ref={cardRef} className={`card chart-card span-${span}${aside !== undefined ? ' chart-card-has-aside' : ''}`}>
+    <section
+      ref={cardRef}
+      className={`card chart-card span-${span}${filled ? ' chart-card-fill' : ''}${aside !== undefined ? ' chart-card-has-aside' : ''}`}
+      // The configured plot height as a variable: a filling plot's floor (chartInteractions.css) and
+      // the Allocation aside's cap (allocation.css) read it.
+      style={{ '--chart-h': `${height}px` } as CSSProperties}
+    >
       <div className="chart-card-header">
         <h2 className="eyebrow">
           {title}
           <InfoHint text={hint} />
         </h2>
-        {(controls !== undefined || actions !== undefined) && (
+        {(controls !== undefined || actions !== undefined || reserveControls) && (
           <div className="chart-card-controls">
             {controls}
             {actions}
@@ -272,7 +306,7 @@ export default function ChartCard({
             config={{ name: exportName, csv, title, caption }}
             getChart={() => chartRef.current}
             tableShown={showTable}
-            onToggleTable={csv === undefined ? undefined : () => setTableOpen((open) => !open)}
+            onToggleTable={csv === undefined ? undefined : toggleTable}
           />
           </div>
         )}

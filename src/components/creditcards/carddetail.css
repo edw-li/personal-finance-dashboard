@@ -54,3 +54,26 @@
   padding: 0.3rem 0.6rem;
   font-size: 0.78rem;
 }
+
+/* The credits card ends with the credit-line chart card beside it (2026-09-25 polish spec §3.1,
+   PCC-28: 20–44px apart). The chart card fills its row (ChartCard `fill`); this non-chart partner is
+   stretched by the grid's default, and as a column it pins its add-credit row — with the rewards line
+   under it — to its foot, so the space a taller neighbour leaves opens between the credits and their
+   Add row, never under the card's last line. The row's air becomes padding, so it holds when nothing
+   pushes it down. */
+.card-detail .card-grid > .card {
+  display: flex;
+  flex-direction: column;
+}
+
+.card-detail .card-grid > .card > .credit-add {
+  margin-top: auto;
+  padding-top: 0.6rem;
+}
+
+/* As a column the card's children no longer collapse their margins, so an empty note ("No credits
+   tracked.", "No multipliers yet") gained ~13px above and ~10px below. The note's own 1.5rem padding is
+   its air here. */
+.card-detail .card-grid > .card > .empty-note {
+  margin: 0;
+}

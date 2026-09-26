@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import { renderSteps } from './renderSteps'
 import TaskDetail from './TaskDetail'
 import TaskRail from './TaskRail'
-import type { GuideCard as GuideCardData } from './types'
+import type { GuideCard as GuideCardData, GuideTask } from './types'
 import { useTaskSelection } from './useTaskSelection'
 
 // The card grammar after the 2026-09-15 polish: Purpose · views · body, then a rail of tasks on
@@ -15,6 +15,16 @@ export default function GuideCard({ card }: { card: GuideCardData }) {
   const all = [...card.tasks, ...(card.more ?? [])]
   const selected = all.find((task) => task.id === selection.selectedId) ?? card.tasks[0]
   const detailId = `${card.id}-detail`
+  // The detail's foot (2026-09-25 polish spec §3.8): Previous / Next select the neighbouring row, and
+  // focus moves with the selection onto it — the rail's arrow-key idiom: preventScroll holds the page,
+  // then the row is brought into the rail's own view.
+  const index = selected ? all.findIndex((task) => task.id === selected.id) : -1
+  const go = (task: GuideTask) => {
+    selection.select(task.id)
+    const row = document.getElementById(task.id)
+    row?.focus({ preventScroll: true })
+    row?.scrollIntoView?.({ block: 'nearest' })
+  }
   const watchBlock = watch.length > 0 && (
     <>
       <h3 className="guide-h3">Watch out</h3>
@@ -51,7 +61,11 @@ export default function GuideCard({ card }: { card: GuideCardData }) {
             <TaskRail card={card} selectedId={selected.id} onSelect={selection.select} detailId={detailId} />
           </div>
           <div className="guide-detail-col">
-            <TaskDetail task={selected} id={detailId} />
+            <TaskDetail
+              task={selected}
+              id={detailId}
+              step={{ index, count: all.length, numbered: card.numbered === true, previous: all[index - 1] ?? null, next: all[index + 1] ?? null, onGo: go }}
+            />
             {watchBlock}
           </div>
         </div>

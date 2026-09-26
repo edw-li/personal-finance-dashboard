@@ -121,6 +121,37 @@ describe('GuideCard (master–detail)', () => {
     }
   })
 
+  // 2026-09-25 polish spec §3.8 (SGS-20): a numbered rail's detail says where the reader is and walks
+  // to the neighbouring task; focus moves with the selection, onto the rail row now selected.
+  it('a numbered rail’s detail says Step N of M and walks forward and back, focus moving with it', () => {
+    renderCard(numberedCard, '/guide?section=routines')
+    const foot = () => detail().querySelector('.guide-detail-foot') as HTMLElement
+    expect(within(foot()).getByText('Step 1 of 2')).toBeTruthy()
+    expect(within(foot()).queryByRole('button', { name: /^Previous/ })).toBeNull()
+    fireEvent.click(within(foot()).getByRole('button', { name: 'Next: Look afterwards' }))
+    const second = document.getElementById('checklist-after') as HTMLElement
+    expect(second.getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(second)
+    expect(within(detail()).getByRole('heading', { level: 4, name: 'Look afterwards' })).toBeTruthy()
+    expect(within(foot()).getByText('Step 2 of 2')).toBeTruthy()
+    expect(within(foot()).queryByRole('button', { name: /^Next/ })).toBeNull()
+    fireEvent.click(within(foot()).getByRole('button', { name: 'Previous: Open the fixture' }))
+    expect(document.getElementById('checklist-open')?.getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(document.getElementById('checklist-open'))
+  })
+
+  it('an un-numbered rail’s detail offers Next only, and nothing on the last task', () => {
+    renderCard()
+    const foot = () => detail().querySelector('.guide-detail-foot')
+    expect(foot()?.textContent).not.toMatch(/Step/)
+    expect(within(foot() as HTMLElement).queryByRole('button', { name: /^Previous/ })).toBeNull()
+    fireEvent.click(within(foot() as HTMLElement).getByRole('button', { name: 'Next: Export the example' }))
+    expect(document.getElementById('example-export')?.getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(within(foot() as HTMLElement).getByRole('button', { name: 'Next: Show the table' }))
+    expect(document.getElementById('example-table')?.getAttribute('aria-selected')).toBe('true')
+    expect(foot()).toBeNull()
+  })
+
   it('a numbered card shows 1-based numbers on its rows', () => {
     renderCard(numberedCard, '/guide?section=routines')
     expect(Array.from(document.querySelectorAll('.guide-rail-num')).map((n) => n.textContent)).toEqual(['1', '2'])

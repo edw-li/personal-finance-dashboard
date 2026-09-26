@@ -76,6 +76,18 @@ describe('AllocationPanel — one card', () => {
     expect(screen.queryByText('Missing quotes (0)')).toBeNull()
   })
 
+  // 2026-09-25 polish spec §3.6 (PE-20): the ranked list scrolls in a capped box under a pinned header
+  // instead of growing the card by up to 294px when the breakdown has many categories.
+  it('puts the ranked list in a named, capped table box inside the aside', async () => {
+    renderPanel()
+    await screen.findByLabelText('Portfolio allocation by asset class')
+    const box = screen.getByRole('region', { name: 'Allocation categories' })
+    expect(box.classList.contains('table-scroll')).toBe(true)
+    expect(box.classList.contains('allocation-table-scroll')).toBe(true)
+    expect(box.parentElement?.classList.contains('allocation-aside')).toBe(true)
+    expect(box.firstElementChild?.classList.contains('allocation-ranked-table')).toBe(true)
+  })
+
   // Two columns from the first paint (P2 review round 5): an aside that only appears with the data
   // let the card reflow from one column to two under the reader.
   it('reserves the aside column while the first payload is in flight', async () => {
