@@ -2163,6 +2163,29 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('this change was already undone'))
   })
 
+  it('preserves focus chosen while filing-status Undo is pending', async () => {
+    const answer = deferred<Awaited<ReturnType<typeof undoBatch>>>()
+    vi.mocked(undoBatch).mockReturnValueOnce(answer.promise)
+    renderPage('/taxes?section=summary')
+    await readyInputs()
+    await chooseStatus('Married filing separately')
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenLastCalledWith(2024, 'married_separate'))
+    const options = toast.success.mock.calls[0][1] as { action: { onAction: () => Promise<unknown> } }
+    screen.getByRole('button', { name: 'Change…' }).focus()
+    let completion!: Promise<unknown>
+    act(() => { completion = options.action.onAction() })
+    const elsewhere = screen.getByRole('button', { name: '2023' })
+    elsewhere.focus()
+    await act(async () => {
+      answer.reject(new ApiError('this change was already undone', 409))
+      await completion
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    })
+    expect(toast.error).toHaveBeenCalledWith('this change was already undone')
+    expect(document.activeElement).toBe(elsewhere)
+  })
+
   it('a status flip refetches the all-years trend — the composition follows the new status', async () => {
     renderPage('/taxes?section=summary')
     await readyInputs()

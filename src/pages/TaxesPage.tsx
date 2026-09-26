@@ -503,6 +503,7 @@ export default function TaxesPage() {
   // only when that year is the one on screen (nothing else reloads), and an accepted answer
   // forgets its drafts as `confirmDiscard` does (§W9). Single-flight with the dialog's confirm.
   const undoFilingStatus = async (year: number, restored: FilingStatus, batchId: string) => {
+    const anchor = actionAnchor()
     if (currentYearRef.current === year && dirtyRef.current) {
       if (!await confirmDiscard()) return false
     }
@@ -521,7 +522,10 @@ export default function TaxesPage() {
       })
       .finally(() => {
         setStatusSaving(false)
-        pageRef.current?.querySelector<HTMLElement>('.tax-scope-bar button[aria-pressed="true"]')?.focus()
+        requestAnimationFrame(() => {
+          if (document.activeElement !== anchor && document.activeElement !== document.body) return
+          pageRef.current?.querySelector<HTMLElement>('.tax-scope-bar button[aria-pressed="true"]')?.focus({ preventScroll: true })
+        })
       })
   }
 

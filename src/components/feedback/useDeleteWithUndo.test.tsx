@@ -313,6 +313,51 @@ describe('a hook owned by the row it deletes (review #4)', () => {
 })
 
 describe('the caret never falls to <body> (spec §6.3, review #5)', () => {
+  it('holds the Undo control while its request is pending', async () => {
+    request.mockImplementationOnce(deletes(1))
+    const answer = deferred<ActivityBatch>()
+    vi.mocked(undoBatch).mockReturnValueOnce(answer.promise)
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete VOO' }))
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    undo.focus()
+    fireEvent.click(undo)
+    expect(undo.getAttribute('aria-busy')).toBe('true')
+    expect(document.activeElement).toBe(undo)
+    stored = [...ALL]
+    answer.resolve(BATCH)
+    await waitFor(() => expect(polite()).toContain('Restored security VOO'))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Edit VOO' }))
+  })
+
+  it('returns to a surviving control when a restored row is absent from the current list', async () => {
+    request.mockImplementationOnce(deletes(1))
+    vi.mocked(undoBatch).mockResolvedValueOnce(BATCH)
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete VOO' }))
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    undo.focus()
+    fireEvent.click(undo)
+    await waitFor(() => expect(polite()).toContain('Restored security VOO'))
+    expect(row(1)).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete VTI' }))
+  })
+
+  it('preserves a newer focus choice even when the caller supplies a delete fallback', async () => {
+    const answer = deferred<{ batchId: string | null }>()
+    request.mockReturnValueOnce(answer.promise)
+    renderList()
+    const del = screen.getByRole('button', { name: 'Delete VOO' })
+    del.focus()
+    fireEvent.click(del)
+    const elsewhere = screen.getByRole('button', { name: 'Edit BND' })
+    elsewhere.focus()
+    stored = stored.filter((s) => s.id !== 1)
+    answer.resolve({ batchId: 'b-1' })
+    await waitFor(() => expect(polite()).toContain('Deleted security VOO'))
+    expect(document.activeElement).toBe(elsewhere)
+  })
+
   it('with no focusAfter, goes to the row that stood after the deleted one, where the delete was pressed', async () => {
     request.mockImplementationOnce(deletes(1))
     renderList({ withFocusAfter: false })
