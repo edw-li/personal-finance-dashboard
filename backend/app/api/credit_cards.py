@@ -1,3 +1,17 @@
+"""Credit cards API: the rewards matrix (reward categories x cards -> multipliers), the card
+roster, and each card's credits and limit history (2026-08-25 spec).
+
+Every write is change-logged (2026-09-25 polish spec §6.1): one ChangeBatch per request, an
+Activity label, and the X-Change-Batch header, so the Activity card — and the page's own toast
+— can undo it exactly. The two deletes that have dependents image them through the ORM,
+children first and the row LAST, instead of leaving them to the FKs' ON DELETE: undo_batch
+replays in reverse, so the row is back before anything that points at it, and every row comes
+back with the id it had. Undoing a delete after a new row took the same name refuses with the
+replay sentence (the unique index is the conflict); undoing a create while other rows now
+point at it — a card's credits, cells, limit history or pins — refuses with the dependent one.
+"""
+
+from collections.abc import Sequence
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -46,6 +60,7 @@ from app.services.ordering import (
     STALE_REWARD_CATEGORIES,
     apply_order,
     in_list_order,
+    moved_ids,
     next_sort_order,
     order_lock,
 )
@@ -86,6 +101,17 @@ def _credit_name(label: str) -> str:
     """'Travel' -> 'Travel credit'. The card page names a credit "the {label} credit", so a
     label that already ends in the word keeps its own."""
     return label if label.lower().endswith("credit") else f"{label} credit"
+
+
+def _reorder_label(
+    rows: Sequence[CreditCard | RewardCategory], new_order: list[int], noun: str, plural: str
+) -> str:
+    """A reorder's label, the spending categories' rule (2026-09-23 spec §8.4): the one row
+    whose move explains the whole change is named, else the minimal moved set is counted."""
+    moved = moved_ids([row.id for row in rows], new_order)
+    if len(moved) == 1:
+        return f"Moved {noun} {next(row.name for row in rows if row.id == moved[0])}"
+    return f"Reordered {len(moved)} {plural}"
 
 
 # --- reward categories (matrix rows) ------------------------------------------------------
@@ -175,18 +201,29 @@ async def create_reward_category(
 
 @router.put("/categories/order", response_model=list[RewardCategoryOut])
 async def reorder_reward_categories(
-    body: OrderIn, db: AsyncSession = Depends(get_db)
+    body: OrderIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[RewardCategory]:
     """Drag-to-reorder the Categories & weights rows (2026-09-23 spec §3.2): `ids` is every
     reward category in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
-    rows whose value moves are written. Unlogged like the rest of this router — the client's
-    Undo re-sends the previous order. Serialized per list (decision 16): the order lock
-    comes first. Declared before /categories/{category_id}."""
+    rows whose value moves are written — as ONE change batch (2026-09-25 polish spec §6.1).
+    Logged because every other write to these rows is: an older edit's Undo puts its whole
+    old row back, sort_order included, so after an unlogged reorder it would silently move
+    the row; logged, that Undo meets the overlap refusal instead. The client's own Undo still
+    re-sends the previous order. Serialized per list (decision 16): the order lock comes
+    first. Declared before /categories/{category_id}."""
     await db.execute(order_lock(RewardCategory))
     categories = list((await db.execute(in_list_order(RewardCategory))).scalars())
+    before = {category.id: row_image(category) for category in categories}
     ordered, changed = apply_order(categories, body.ids, stale_detail=STALE_REWARD_CATEGORIES)
-    if changed:  # the order as stored writes nothing
-        await db.commit()
+    if not changed:  # the order as stored: nothing written, nothing logged
+        return ordered
+    for category, _old, _new in changed:
+        batch.record_update(category, before[category.id])
+    batch.label = _reorder_label(categories, body.ids, "reward category", "reward categories")
+    response.headers.update(batch_header(await batch.commit()))
     return ordered
 
 
@@ -552,18 +589,26 @@ async def create_credit_card(
 
 @router.put("/order", response_model=list[CreditCardOut])
 async def reorder_credit_cards(
-    body: OrderIn, db: AsyncSession = Depends(get_db)
+    body: OrderIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[CreditCardOut]:
     """Drag-to-reorder the card list (2026-09-23 spec §3.2): `ids` is every card, active
     and inactive, in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
-    rows whose value moves are written. Answers exactly as the list GET does. Unlogged like
-    the rest of this router — the client's Undo re-sends the previous order. Serialized per
+    rows whose value moves are written — as ONE change batch, logged for the reason
+    reorder_reward_categories gives (2026-09-25 polish spec §6.1). Answers exactly as the
+    list GET does. The client's own Undo still re-sends the previous order. Serialized per
     list (decision 16): the order lock comes first. Declared before the /{card_id} routes."""
     await db.execute(order_lock(CreditCard))
     cards = list((await db.execute(in_list_order(CreditCard))).scalars())
+    before = {card.id: row_image(card) for card in cards}
     ordered, changed = apply_order(cards, body.ids, stale_detail=STALE_CARDS)
-    if changed:  # the order as stored writes nothing
-        await db.commit()
+    if changed:  # the order as stored writes and logs nothing
+        for card, _old, _new in changed:
+            batch.record_update(card, before[card.id])
+        batch.label = _reorder_label(cards, body.ids, "card", "cards")
+        response.headers.update(batch_header(await batch.commit()))
     return await _cards_out(db, ordered)
 
 

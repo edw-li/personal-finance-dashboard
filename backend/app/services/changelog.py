@@ -316,11 +316,11 @@ async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> 
     row_level = [row for row in rows if row.op != "batch"]
     if rows[0].source not in UNDOABLE_SOURCES or not row_level:
         raise UndoRefused(409, SUMMARY_REFUSAL)
-    # An Undo that rewrites accounts or spending categories rewrites a list's order too, so
-    # it serializes with that list's reorders and appends (2026-09-23 reorder plan decision
-    # 16): racing a reorder in another tab, it must not blend the two orders. In the fixed
-    # order, and BEFORE the review-input table locks below, so an Undo can never hold those
-    # while an import that holds the order locks waits for them.
+    # An Undo that rewrites a list's rows (services.ordering.LOGGED_LISTS) rewrites that list's
+    # order too, so it serializes with the list's reorders and appends (2026-09-23 reorder plan
+    # decision 16): racing a reorder in another tab, it must not blend the two orders. In the
+    # fixed order, and BEFORE the review-input table locks below, so an Undo can never hold
+    # those while an import that holds the order locks waits for them.
     for statement in order_locks_for({row.table_name for row in row_level}):
         await db.execute(statement)
     if any(row.table_name in REVIEW_INPUT_TABLES for row in row_level):

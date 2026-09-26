@@ -8,9 +8,21 @@ pinned to it; a reward category with its cells — every id the same."""
 
 from datetime import date
 from decimal import Decimal
+from uuid import UUID
+
+import pytest
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models import CardCredit, CreditCard, CreditLimitEvent, RewardCategory, RewardRate
-from app.services.changelog import DEPENDENT_REFUSAL, REPLAY_REFUSAL
+from app.services.changelog import (
+    DEPENDENT_REFUSAL,
+    OVERLAP_REFUSAL,
+    REPLAY_REFUSAL,
+    undo_batch,
+)
+from app.services.ordering import order_lock, order_locks_for
 from tests.changelog_asserts import label_of, logged, ops, table_rows, undo
 from tests.ordering_helpers import first_position, recorded_sql
 
@@ -416,3 +428,131 @@ async def test_limit_add_and_delete_each_log_one_batch_and_a_delete_undoes(auth_
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
     assert await table_rows(db, CreditLimitEvent) == before
+
+
+# ── the two list reorders ────────────────────────────────────────────────────────────
+
+CARD_ORDER = f"{CARDS}/order"
+CATEGORY_ORDER = f"{CATEGORIES}/order"
+
+
+async def sort_orders(db, model) -> list[tuple[int, int]]:
+    rows = await db.execute(select(model.id, model.sort_order).order_by(model.sort_order, model.id))
+    return [tuple(row) for row in rows]
+
+
+async def test_a_card_reorder_is_one_batch_named_for_what_moved(auth_client, db):
+    seeded = [card("A"), card("B", 1), card("C", 2)]
+    db.add_all(seeded)
+    await db.commit()
+    a, b, c = (row.id for row in seeded)
+    moved = await auth_client.put(CARD_ORDER, json={"ids": [c, a, b]})
+    assert moved.status_code == 200, moved.text
+    rows = await logged(db, moved)
+    assert ops(rows) == [("update", "credit_cards")] * 3
+    assert label_of(rows) == "Moved card C"
+    assert [(r.pk["id"], r.before["sort_order"], r.after["sort_order"]) for r in rows] == [
+        (c, 2, 0),
+        (a, 0, 1),
+        (b, 1, 2),
+    ]
+    swapped = await auth_client.put(CARD_ORDER, json={"ids": [b, a, c]})
+    assert label_of(await logged(db, swapped)) == "Reordered 2 cards"
+    same = await auth_client.put(CARD_ORDER, json={"ids": [b, a, c]})
+    assert same.status_code == 200 and "x-change-batch" not in same.headers
+
+
+async def test_undoing_an_older_card_edit_after_a_reorder_moved_it_refuses(auth_client, db):
+    """Why the reorder is logged at all (spec §6.1): the edit's Undo writes the card's whole
+    old row back, sort_order included, so after an unlogged reorder it would silently move
+    the card. Logged, the reorder is a later change to the same row: undo that first."""
+    seeded = [card("A"), card("B", 1), card("C", 2)]
+    db.add_all(seeded)
+    await db.commit()
+    a, b, c = (row.id for row in seeded)
+    edited = await auth_client.patch(f"{CARDS}/{b}", json=card_body("B"))
+    assert edited.status_code == 200, edited.text
+    reordered = await auth_client.put(CARD_ORDER, json={"ids": [b, a, c]})
+    assert reordered.status_code == 200, reordered.text
+    refused = await undo(auth_client, edited)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == OVERLAP_REFUSAL
+    assert await sort_orders(db, CreditCard) == [(b, 0), (a, 1), (c, 2)]  # nothing moved back
+    resp = await undo(auth_client, reordered)
+    assert resp.status_code == 200, resp.text
+    assert await sort_orders(db, CreditCard) == [(a, 0), (b, 1), (c, 2)]
+
+
+async def test_a_reward_category_reorder_is_one_batch_named_for_what_moved(auth_client, db):
+    seeded = [category("Dining"), category("Groceries", 1), category("Travel", 2)]
+    db.add_all(seeded)
+    await db.commit()
+    d, g, t = (row.id for row in seeded)
+    moved = await auth_client.put(CATEGORY_ORDER, json={"ids": [t, d, g]})
+    assert moved.status_code == 200, moved.text
+    rows = await logged(db, moved)
+    assert ops(rows) == [("update", "reward_categories")] * 3
+    assert label_of(rows) == "Moved reward category Travel"
+    swapped = await auth_client.put(CATEGORY_ORDER, json={"ids": [g, d, t]})
+    assert label_of(await logged(db, swapped)) == "Reordered 2 reward categories"
+    same = await auth_client.put(CATEGORY_ORDER, json={"ids": [g, d, t]})
+    assert same.status_code == 200 and "x-change-batch" not in same.headers
+
+
+async def test_undoing_an_older_reward_category_edit_after_a_reorder_moved_it_refuses(
+    auth_client, db
+):
+    seeded = [category("Dining"), category("Groceries", 1), category("Travel", 2)]
+    db.add_all(seeded)
+    await db.commit()
+    d, g, t = (row.id for row in seeded)
+    edited = await auth_client.patch(f"{CATEGORIES}/{g}", json={"annual_spend": "6000"})
+    assert edited.status_code == 200, edited.text
+    reordered = await auth_client.put(CATEGORY_ORDER, json={"ids": [g, d, t]})
+    assert reordered.status_code == 200, reordered.text
+    refused = await undo(auth_client, edited)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == OVERLAP_REFUSAL
+    resp = await undo(auth_client, reordered)
+    assert resp.status_code == 200, resp.text
+    assert await sort_orders(db, RewardCategory) == [(d, 0), (g, 1), (t, 2)]
+
+
+def test_an_undo_takes_the_card_lists_locks_after_the_workbook_lists():
+    """One fixed order for every path that takes several order locks (reorder plan decision
+    16): an Undo whose batch spans lists takes the workbook's first and the two dashboard-only
+    card lists last — the importer never takes those, so they can close no cycle with it."""
+    tables = {"reward_categories", "credit_cards", "accounts", "card_credits"}
+    keys = [lock.compile().params["key"] for lock in order_locks_for(tables)]
+    assert keys == ["reorder:accounts", "reorder:credit_cards", "reorder:reward_categories"]
+
+
+@pytest.mark.parametrize(
+    "model", [CreditCard, RewardCategory], ids=["credit_cards", "reward_categories"]
+)
+async def test_an_undo_of_a_card_list_reorder_waits_for_its_lists_order_lock(
+    auth_client, db, engine, model
+):
+    """Decision 16, now that these reorders are logged: an Activity-card Undo rewrites the
+    list's numbers, so while another session holds the list's order lock (a reorder or an
+    append in flight in another tab) the Undo waits — here out to a short lock_timeout,
+    having written nothing — and goes through once the lock is free."""
+    seeded = [card("A"), card("B", 1)] if model is CreditCard else [category("A"), category("B", 1)]
+    db.add_all(seeded)
+    await db.commit()
+    a, b = (row.id for row in seeded)
+    path = CARD_ORDER if model is CreditCard else CATEGORY_ORDER
+    reordered = await auth_client.put(path, json={"ids": [b, a]})
+    assert reordered.status_code == 200, reordered.text
+    batch_id = UUID(reordered.headers["x-change-batch"])
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as holder:
+        await holder.execute(order_lock(model))  # a reorder or an append in flight elsewhere
+        async with sessions() as undoing:
+            await undoing.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                await undo_batch(undoing, batch_id, actor="tab 2")
+        assert await sort_orders(db, model) == [(b, 0), (a, 1)]  # nothing undone meanwhile
+    async with sessions() as undoing:  # the holder's transaction is over: the lock is free
+        await undo_batch(undoing, batch_id, actor="tab 2")
+    assert await sort_orders(db, model) == [(a, 0), (b, 1)]
