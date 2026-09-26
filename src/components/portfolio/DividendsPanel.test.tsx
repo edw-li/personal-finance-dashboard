@@ -1,13 +1,17 @@
+import { useState } from 'react'
+import { undoBatch } from '../../api/lifecycle'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DividendOut, SecurityOut } from '../../types/api'
 import DividendsPanel, { GLIDE_ROWS, REVEAL_WINDOW_MS } from './DividendsPanel'
 import ToastProvider from '../ToastProvider'
 
+vi.mock('../../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) }))
+
 vi.mock('../../api/portfolio', () => ({
   createDividend: vi.fn().mockResolvedValue({}),
   updateDividend: vi.fn().mockResolvedValue({}),
-  deleteDividend: vi.fn().mockResolvedValue(undefined),
+  deleteDividend: vi.fn().mockResolvedValue({ batchId: 'dividend-batch' }),
 }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what the bars
 // carry is pinned in dividendChartOptions.test.ts; this marker says whether one is up and,
@@ -227,16 +231,21 @@ describe('DividendsPanel manual entry', () => {
     expect(vi.mocked(createDividend).mock.calls[0][0]).toMatchObject({ amount: '1050' })
   })
 
-  it('refuses a whitespace-only amount client-side', () => {
+  it('refuses a whitespace-only amount client-side and focuses Amount', async () => {
     renderPanel([])
     fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
     fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '   ' } })
     // Spaces are not a number: the guard trims, matching TransactionsPanel's. Untrimmed it
     // would reach the API as "" and 422 as an opaque pydantic decimal-parse error.
-    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    const add = screen.getByRole('button', { name: /add dividend/i })
+    add.focus()
+    fireEvent.click(add)
     expect(screen.getByText('Security, pay date and amount are required')).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Amount')))
     expect(createDividend).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+    expect(screen.queryByText('Security, pay date and amount are required')).toBeNull()
   })
 })
 
@@ -281,12 +290,12 @@ describe('DividendsPanel editing', () => {
 
   it('deleting the row being edited resets the form — on success only', async () => {
     const onChanged = vi.fn()
-    renderPanel([dividend()], '432.10', onChanged)
+    render(<ToastProvider><DividendsPanel securities={securities} dividends={[dividend()]} annualIncome="432.10" onChanged={onChanged} /></ToastProvider>)
     fireEvent.click(screen.getByRole('button', { name: 'Edit this dividend' }))
     // A FAILED delete leaves the row standing, so the edit session must survive it.
     vi.mocked(deleteDividend).mockRejectedValueOnce(new Error('network'))
     fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
-    await waitFor(() => expect(screen.getByText('Delete failed')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('network')).toBeTruthy())
     expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy()
     expect(onChanged).not.toHaveBeenCalled()
     // The successful one takes the row away — a stale editingId would PATCH a 404 next save.
@@ -296,58 +305,31 @@ describe('DividendsPanel editing', () => {
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
   })
 
-  it('deletes instantly and Undo re-creates the payment through the POST', async () => {
-    const onChanged = vi.fn()
-    render(
-      <ToastProvider>
-        <DividendsPanel
-          securities={securities}
-          dividends={[dividend()]}
-          annualIncome="432.10"
-          onChanged={onChanged}
-        />
-      </ToastProvider>,
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
-    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-    expect(screen.getByText('Deleted the NVDA dividend entry dated Dec 15, 2025')).toBeTruthy()
-
+  it.each(['manual', 'auto'] as const)('restores the exact %s dividend through its batch', async (source) => {
+    const original = source === 'auto' ? AUTO : dividend()
+    let restored = false
+    vi.mocked(undoBatch).mockImplementationOnce(async () => { restored = true; return {} as Awaited<ReturnType<typeof undoBatch>> })
+    function Host() {
+      const [rows, setRows] = useState([original])
+      return <ToastProvider><DividendsPanel securities={securities} dividends={rows} annualIncome="432.10"
+        onChanged={async () => { await Promise.resolve(); setRows(restored ? [original] : []) }} /></ToastProvider>
+    }
+    render(<Host />)
+    const remove = screen.getByRole('button', { name: 'Delete this dividend' })
+    remove.focus()
+    fireEvent.click(remove)
+    await screen.findByRole('button', { name: 'Undo' })
+    expect(screen.queryByRole('button', { name: 'Edit this dividend' })).toBeNull()
+    expect(document.activeElement).not.toBe(document.body)
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-    // DividendCreate's shape exactly — no id, no provenance fields (an undone auto row
-    // comes back as manual, which is honest: the refresh re-writes auto rows anyway).
-    await waitFor(() =>
-      expect(vi.mocked(createDividend)).toHaveBeenCalledWith({
-        security_id: 1,
-        account: 'RH Taxable',
-        pay_date: '2025-12-15',
-        amount: '100.00',
-        notes: null,
-      }),
-    )
-    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
+    const edit = await screen.findByRole('button', { name: 'Edit this dividend' })
+    await waitFor(() => expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true))
+    expect(undoBatch).toHaveBeenCalledWith('dividend-batch')
+    expect(createDividend).not.toHaveBeenCalled()
+    expect(edit.closest('tr')?.getAttribute('data-dividend-id')).toBe(String(original.id))
+    expect(edit.closest('tr')?.contains(document.activeElement)).toBe(true)
   })
 
-  it('offers NO Undo on an auto row — an undo would double-count the next refresh', async () => {
-    const onChanged = vi.fn()
-    render(
-      <ToastProvider>
-        <DividendsPanel
-          securities={securities}
-          dividends={[AUTO]}
-          annualIncome="432.10"
-          onChanged={onChanged}
-        />
-      </ToastProvider>,
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
-    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-    // The receipt still lands — only the offer is withheld: an undone auto row re-enters
-    // as 'manual' and the next refresh re-adds its auto twin on top (double-counted
-    // income). The ingest self-heals, so the row comes back on its own next run.
-    expect(screen.getByText('Deleted the NVDA dividend entry dated Jun 19, 2026')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
-    expect(createDividend).not.toHaveBeenCalled()
-  })
 })
 
 describe('DividendsPanel entry session', () => {
@@ -411,10 +393,10 @@ describe('DividendsPanel entry session', () => {
     // Still the typed row, not the ledger row's 2025-12-15 seed.
     expect((screen.getByLabelText(/pay date/i) as HTMLInputElement).value).toBe('2026-08-03')
     expect(
-      (screen.getByRole('button', { name: 'Edit this dividend' }) as HTMLButtonElement).disabled,
+      screen.getByRole('button', { name: 'Edit this dividend' }).getAttribute('aria-disabled') === 'true',
     ).toBe(true)
     expect(
-      (screen.getByRole('button', { name: 'Delete this dividend' }) as HTMLButtonElement).disabled,
+      screen.getByRole('button', { name: 'Delete this dividend' }).getAttribute('aria-disabled') === 'true',
     ).toBe(true)
   })
 
@@ -739,7 +721,7 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     const june = document.querySelector<HTMLElement>('tr[data-dividend-id="11"]')!
     const deleteButton = within(june).getByRole('button', { name: 'Delete this dividend' }) as HTMLButtonElement
-    await waitFor(() => expect(deleteButton.disabled).toBe(false)) // the save's busy gate lifts
+    await waitFor(() => expect(deleteButton.getAttribute('aria-disabled')).not.toBe('true')) // the save's busy gate lifts
     fireEvent.click(deleteButton)
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
     // One refetch brings both: the saved row in, the deleted one out. The box stays put.
@@ -761,7 +743,7 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     const june = document.querySelector<HTMLElement>('tr[data-dividend-id="11"]')!
     const editButton = within(june).getByRole('button', { name: 'Edit this dividend' }) as HTMLButtonElement
-    await waitFor(() => expect(editButton.disabled).toBe(false))
+    await waitFor(() => expect(editButton.getAttribute('aria-disabled')).not.toBe('true'))
     fireEvent.click(editButton)
     view.rerender(
       <DividendsPanel securities={securities} dividends={[JUNE_A, JUNE_B, MARCH, saved, DECEMBER]} annualIncome="432.10" onChanged={onChanged} />,

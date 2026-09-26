@@ -1,7 +1,6 @@
 import { ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FocusEvent as ReactFocusEvent, ReactNode } from 'react'
-import { ApiError } from '../../api/client'
 import { createDividend, deleteDividend, updateDividend } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import ChartCard from '../ChartCard'
@@ -9,7 +8,13 @@ import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import TableScroll from '../TableScroll'
 import { revealInBox } from '../tableScrollDom'
-import { useToast } from '../ToastProvider'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { flashElement, useEscapeCancel } from '../feedback/reveal'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { useLatest } from '../reorder/useLatest'
+import { useRecordFeedback } from './useRecordFeedback'
 import type { DividendOut, SecurityOut } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
@@ -140,7 +145,7 @@ export default function DividendsPanel({
   /** Who a NEW account would be assigned to, for that note; null falls back to a
    *  description rather than inventing a name. */
   primaryName?: string | null
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -150,7 +155,19 @@ export default function DividendsPanel({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
-  const toast = useToast()
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, [], 'data-dividend-id')
+  const latest = useLatest({ onChanged, editingId })
+  const deleteWithUndo = useDeleteWithUndo()
+  const cancelEdit = () => {
+    if (busy) return
+    feedback.focusRow(editingId)
+    setEditingId(null)
+    setForm(EMPTY)
+    feedback.begin(EMPTY)
+    setKept(false)
+    setError(null)
+  }
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
   const accountNote = newAccountNote(form.account, accounts, primaryName)
   // Only the CHART option is memoized (EChart keys its notMerge setOption on [option], so
   // a fresh object per keystroke in the form below would redraw it); the tiles are plain
@@ -274,7 +291,7 @@ export default function DividendsPanel({
   // leaves it armed, and the next snapshot the page applies — a price refresh, a scope switch — can
   // land at any later moment, when scrolling the box to the old row would only be a jolt. A ref,
   // not state: it is never drawn.
-  const pendingReveal = useRef<{ id: number; ledger: DividendOut[]; at: number } | null>(null)
+  const pendingReveal = useRef<{ id: number; ledger: DividendOut[]; at: number; focus: boolean } | null>(null)
   useEffect(() => {
     const pending = pendingReveal.current
     if (pending === null || pending.ledger === dividends) return
@@ -288,6 +305,8 @@ export default function DividendsPanel({
       // The month line pins under the column header, so the row lands below both.
       const monthLine = row.closest('tbody')?.querySelector<HTMLElement>('.dividend-month-row')
       revealInBox(box, row, monthLine?.getBoundingClientRect().height ?? 0)
+      flashElement(row)
+      if (pending.focus) row.querySelector<HTMLButtonElement>('[data-edit]')?.focus({ preventScroll: true })
     }
     // A month still gliding (toggled just before the save) is still moving the rows the reveal
     // measures, so it waits for the ledger to come to rest.
@@ -328,13 +347,18 @@ export default function DividendsPanel({
     // and the cue that narrates it, are over.
     setKept(false)
     setForm(seedFrom(dividend))
+    feedback.begin(seedFrom(dividend))
+    setError(null)
+    feedback.reveal()
   }
 
   const submit = () => {
+    if (busy) return
     // .trim() on the amount, matching TransactionsPanel's guard: whitespace is not a
     // number, and untrimmed it reaches the API as "" — an opaque pydantic decimal error.
     if (!form.security_id || !form.pay_date || !form.amount.trim()) {
       setError('Security, pay date and amount are required')
+      feedback.reveal(!form.security_id ? '#div-security' : !form.pay_date ? '#div-pay-date' : '#div-amount')
       return
     }
     setBusy(true)
@@ -344,7 +368,7 @@ export default function DividendsPanel({
       editingId !== null
         ? updateDividend(editingId, body)
         : createDividend({ ...body, security_id: Number(form.security_id) })
-    request
+    void saveState.run(() => request
       .then((saved) => {
         if (editingId === null) {
           // The next payment starts here — BEFORE the reset, and that order is load-bearing
@@ -366,12 +390,16 @@ export default function DividendsPanel({
           // Functional, so it composes over any blur write above rather than racing it.
           // `kept` says so out loud, because a form that keeps its values after a save
           // otherwise reads as a save that never happened.
-          setForm((f) => ({ ...f, amount: '', notes: '' }))
+          const next = { ...form, amount: '', notes: '' }
+          setForm(next)
+          feedback.saved(next, null, false)
           setKept(true)
         } else {
           // An edit is a one-off correction rather than a session: full reset, create mode
           // back, cue down.
+          feedback.focusRow(editingId)
           setForm(EMPTY)
+          feedback.saved(EMPTY, null, true)
           setEditingId(null)
           setKept(false)
         }
@@ -383,68 +411,38 @@ export default function DividendsPanel({
         // the amount box stays in view.
         openMonth(monthKeyOf(body.pay_date))
         const id = typeof saved?.id === 'number' ? saved.id : editingId
-        if (id !== null) pendingReveal.current = { id, ledger: dividends, at: performance.now() }
-        onChanged()
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Save failed')
-      })
-      .finally(() => setBusy(false))
+        if (id !== null) pendingReveal.current = { id, ledger: dividends, at: performance.now(), focus: editingId !== null }
+        return latest.current.onChanged()
+      })).finally(() => setBusy(false))
   }
 
   const remove = (dividend: DividendOut) => {
-    // A delete moves the reader on: an earlier save's reveal is moot (see pendingReveal).
+    if (busy) return
     pendingReveal.current = null
-    const ticker = tickers.get(dividend.security_id) ?? '?'
-    // An UNDONE auto row would come back as 'manual', and the next refresh would re-add
-    // its auto twin on top — the same payment counted twice. The ingest already self-heals
-    // ("a delete comes back next run", types/api.ts DividendOut), so an auto row's toast
-    // is a receipt, not an offer. Manual rows are the user's alone and keep Undo.
-    const undoable = dividend.source !== 'auto'
-    // Instant + Undo (2026-08-25 polish §8) — the confirm interrupt is gone; Undo
-    // re-POSTs the captured payment (new id, and always source 'manual', by design).
-    // busy for the duration (RsuGrantsPanel's posture): without the confirm dialog to
-    // absorb it, a double-click would fire a second DELETE on the same id and drop a 404
-    // into the error banner beside the success toast.
     setBusy(true)
-    deleteDividend(dividend.id)
-      .then(() => {
-        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
-        // (Task 14 review I3, TransactionsPanel's rule). Reset on SUCCESS only: a failed
-        // delete leaves the row standing, and the edit session with it.
-        if (dividend.id === editingId) {
+    const index = dividends.findIndex((row) => row.id === dividend.id)
+    const neighbour = dividends[index + 1] ?? dividends[index - 1]
+    void deleteWithUndo({
+      name: `the ${tickers.get(dividend.security_id) ?? '?'} dividend entry dated ${formatDate(dividend.pay_date)}`,
+      row: feedback.row(dividend.id),
+      request: () => deleteDividend(dividend.id),
+      onDeleted: () => {
+        if (latest.current.editingId === dividend.id) {
           setEditingId(null)
           setForm(EMPTY)
+          feedback.begin(EMPTY)
         }
-        // The ledger just changed under the cue — whatever entry session it narrated is over.
         setKept(false)
-        onChanged()
-        toast.success(
-          `Deleted the ${ticker} dividend entry dated ${formatDate(dividend.pay_date)}`,
-          undoable
-            ? {
-                action: {
-                  label: 'Undo',
-                  onAction: () => {
-                    createDividend({
-                      security_id: dividend.security_id,
-                      account: dividend.account,
-                      pay_date: dividend.pay_date,
-                      amount: dividend.amount,
-                      notes: dividend.notes,
-                    })
-                      .then(() => onChanged())
-                      .catch(() => toast.error(`Could not restore the ${ticker} dividend`))
-                  },
-                },
-              }
-            : undefined,
-        )
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Delete failed')
-      })
-      .finally(() => setBusy(false))
+        return latest.current.onChanged()
+      },
+      onRestored: () => {
+        openMonth(monthKeyOf(dividend.pay_date))
+        return latest.current.onChanged()
+      },
+      restoredRow: () => feedback.row(dividend.id),
+      focusAfter: () => (neighbour ? feedback.row(neighbour.id)?.querySelector<HTMLButtonElement>('[data-delete]') : null)
+        ?? editorRef.current?.querySelector<HTMLButtonElement>('[type="submit"]') ?? null,
+    }).finally(() => setBusy(false))
   }
 
   return (
@@ -490,7 +488,6 @@ export default function DividendsPanel({
           />
         </>
       )}
-      <FeedBanner error={error} />
       {kept && (
         // role=status: the cue appears in the same beat the focus jumps into the amount
         // box, so a screen-reader user would otherwise never learn why the form is still
@@ -501,6 +498,8 @@ export default function DividendsPanel({
         </p>
       )}
       <form
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="entry-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -512,6 +511,7 @@ export default function DividendsPanel({
           {/* disabled while editing: DividendUpdate carries no security_id, so the ticker a
               stored payment belongs to is not editable — TransactionsPanel's rule. */}
           <select
+            id="div-security"
             value={form.security_id}
             disabled={editingId !== null}
             onChange={(e) => {
@@ -552,7 +552,7 @@ export default function DividendsPanel({
         </label>
         <label>
           Pay date
-          <input className="field-input" type="date" value={form.pay_date} onChange={(e) => setForm((f) => ({ ...f, pay_date: e.target.value }))} />
+          <input id="div-pay-date" className="field-input" type="date" value={form.pay_date} onChange={(e) => setForm((f) => ({ ...f, pay_date: e.target.value }))} />
         </label>
         <label>
           Amount
@@ -563,22 +563,15 @@ export default function DividendsPanel({
           <input className="field-input" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
         </label>
         <div className="form-actions">
-          <button type="submit" disabled={busy}>
+          <SaveButton className="button" type="submit" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {/* The label is the second half of the carry-forward cue: "Add another" is what
                 a form still holding the last row's context is actually about to do. */}
             {editingId !== null ? 'Save changes' : kept ? 'Add another' : 'Add dividend'}
-          </button>
+          </SaveButton>
+          <SaveStatus state={saveState} />
+          <FeedBanner error={error} />
           {editingId !== null && (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY)
-                setKept(false)
-              }}
-            >
-              Cancel
-            </button>
+            <BusyButton className="button" type="button" inert={busy} onClick={cancelEdit}>Cancel</BusyButton>
           )}
         </div>
       </form>
@@ -655,11 +648,12 @@ export default function DividendsPanel({
                         <tr
                           key={d.id}
                           data-dividend-id={d.id}
-                          className={
+                          aria-current={editingId === d.id ? true : undefined}
+                          className={(editingId === d.id ? 'is-editing ' : '') + (
                             glide === 'enter' ? 'dividend-entry is-entering'
                               : glide === 'leave' ? 'dividend-entry is-leaving'
                                 : 'dividend-entry'
-                          }
+                          )}
                           inert={glide === 'leave'}
                         >
                           <Cell>{tickers.get(d.security_id) ?? '?'}</Cell>
@@ -685,22 +679,26 @@ export default function DividendsPanel({
                                 MORE since the delete went instant (2026-08-25 polish §8): the
                                 confirm() sentence that used to name the row before anything
                                 happened is gone, so the button is the last chance to say it. */}
-                            <button
+                            <BusyButton
+                              className="button"
                               type="button"
-                              disabled={busy}
+                              inert={busy}
+                              data-edit
                               aria-label="Edit this dividend"
                               onClick={() => startEdit(d)}
                             >
                               Edit
-                            </button>
-                            <button
+                            </BusyButton>
+                            <BusyButton
+                              className="button"
                               type="button"
-                              disabled={busy}
+                              inert={busy}
+                              data-delete
                               aria-label="Delete this dividend"
                               onClick={() => remove(d)}
                             >
                               Delete
-                            </button>
+                            </BusyButton>
                           </Cell>
                         </tr>
                       ))}

@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import ToastProvider from '../ToastProvider'
+import { undoBatch } from '../../api/lifecycle'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecurityOut } from '../../types/api'
@@ -6,17 +9,58 @@ import SecuritiesPanel from './SecuritiesPanel'
 vi.mock('../../api/portfolio', () => ({
   createSecurity: vi.fn().mockResolvedValue({}),
   updateSecurity: vi.fn().mockResolvedValue({}),
-  deleteSecurity: vi.fn().mockResolvedValue(undefined),
+  deleteSecurity: vi.fn().mockResolvedValue({ batchId: 'security-batch' }),
 }))
 vi.mock('../../api/prices', () => ({
   putManualPrice: vi.fn().mockResolvedValue({}),
 }))
-import { updateSecurity } from '../../api/portfolio'
+import { createSecurity, updateSecurity } from '../../api/portfolio'
 import { putManualPrice } from '../../api/prices'
+
+vi.mock('../../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) }))
 
 afterEach(cleanup)
 // Call counts are per-test; clearAllMocks keeps the factory's mockResolvedValue.
 beforeEach(() => vi.clearAllMocks())
+
+it('focuses the newly created security after its list reloads', async () => {
+  vi.mocked(createSecurity).mockResolvedValueOnce(manualPriced)
+  function Host() {
+    const [rows, setRows] = useState<SecurityOut[]>([])
+    return <SecuritiesPanel securities={rows} onChanged={() => Promise.resolve().then(() => setRows([manualPriced]))} />
+  }
+  render(<Host />)
+  fireEvent.change(screen.getByLabelText('Ticker'), { target: { value: 'HOUSE' } })
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Primary home' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add security' }))
+  const edit = await screen.findByRole('button', { name: 'Edit' })
+  await waitFor(() => expect(document.activeElement).toBe(edit))
+  expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true)
+})
+
+it('focuses the missing security field and the missing manual price', async () => {
+  render(<SecuritiesPanel securities={[manualPriced]} onChanged={vi.fn()} />)
+  fireEvent.change(screen.getByLabelText('Ticker'), { target: { value: 'NEW' } })
+  const add = screen.getByRole('button', { name: 'Add security' })
+  add.focus()
+  fireEvent.click(add)
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Name')))
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New' } })
+  expect(screen.queryByText('Ticker and name are required')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Set price' }))
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Price')))
+  const savePrice = screen.getByRole('button', { name: 'Save price' })
+  savePrice.focus()
+  fireEvent.click(savePrice)
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Price')))
+  expect(screen.getByText('Price is required')).toBeTruthy()
+})
+
+it('focuses the manual price when its editor opens', async () => {
+  render(<SecuritiesPanel securities={[manualPriced]} onChanged={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Set price' }))
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Price')))
+})
 
 // Auto-priced: refresh owns annual_dividend/ex_div_date, so the panel hides the field.
 const autoPriced: SecurityOut = {
@@ -44,7 +88,8 @@ describe('SecuritiesPanel', () => {
     // …and hidden on auto-priced ones (Task 14 review I2): refresh would overwrite it.
     fireEvent.click(editButtons[0])
     expect(screen.queryByLabelText(/annual dividend/i)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // Exercise the serializer directly; the unchanged form's Save is correctly quiet.
+    fireEvent.submit(screen.getByRole('button', { name: /save changes/i }).closest('form')!)
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     // Hidden must not mean blanked: the PATCH carries the stored value back unchanged,
     // otherwise saving any other field silently nulls the dividend. Exact shape — an
@@ -112,8 +157,7 @@ describe('SecuritiesPanel', () => {
     expect((screen.getByLabelText(/annual dividend/i) as HTMLInputElement).value).toBe('1.2345')
   })
 
-  it('confirm-deleting the row being edited resets the form to create mode', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('instant-deleting the row being edited resets the form to create mode', async () => {
     const onChanged = vi.fn()
     render(<SecuritiesPanel securities={[autoPriced]} onChanged={onChanged} />)
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
@@ -135,4 +179,30 @@ describe('SecuritiesPanel', () => {
     expect(scroller.classList.contains('table-scroll')).toBe(true)
     expect(screen.getByRole('region', { name: 'Securities table' })).toBe(scroller)
   })
+})
+
+
+it('restores the original security and focuses it after the list reload', async () => {
+  let restored = false
+  vi.mocked(undoBatch).mockImplementationOnce(async () => { restored = true; return {} as Awaited<ReturnType<typeof undoBatch>> })
+  function Host() {
+    const [rows, setRows] = useState([manualPriced])
+    return <ToastProvider><SecuritiesPanel securities={rows}
+      onChanged={async () => { await Promise.resolve(); setRows(restored ? [manualPriced] : []) }} /></ToastProvider>
+  }
+  render(<Host />)
+  const remove = screen.getByRole('button', { name: 'Delete' })
+  remove.focus()
+  fireEvent.click(remove)
+  await screen.findByText('Deleted security HOUSE')
+  expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
+  expect(document.activeElement).not.toBe(document.body)
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Restored security HOUSE')
+  const row = screen.getByRole('button', { name: 'Edit' }).closest('tr')!
+  expect(row.getAttribute('data-security-id')).toBe('2')
+  expect(row.contains(document.activeElement)).toBe(true)
+  expect(row.hasAttribute('data-flash')).toBe(true)
+  expect(undoBatch).toHaveBeenCalledWith('security-batch')
+  expect(createSecurity).not.toHaveBeenCalled()
 })

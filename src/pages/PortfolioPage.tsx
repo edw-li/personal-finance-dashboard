@@ -412,7 +412,7 @@ export default function PortfolioPage() {
   const reload = () => {
     ledgersMoved()
     setReloading(true)
-    void load()
+    return load()
   }
 
   // Mount AND every owner switch: `load` changes identity with the scope, which is what

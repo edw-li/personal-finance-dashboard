@@ -92,3 +92,9 @@
 .entry-form button:focus-visible,
 .form-actions button:focus-visible,
 .row-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The row an open editor describes; the same theme token as the other money tables. */
+.port-table tr.is-editing > td,
+.port-table tr.is-editing > th { background: var(--surface-2); }
+.entry-form .form-actions { flex-wrap: wrap; align-items: center; grid-column: 1 / -1; }
+.entry-form .form-actions .error-banner { flex-basis: 100%; margin: 0; }

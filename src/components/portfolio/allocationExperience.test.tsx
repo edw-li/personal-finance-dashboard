@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { allocationLabel, displayLabel, saveAllocationTargets } from '../../api/allocation'
 import type { AllocationData } from '../../api/allocation'
 import AllocationTargetEditor from './AllocationTargetEditor'
+import ToastProvider from '../ToastProvider'
+import { undoBatch } from '../../api/lifecycle'
 import { exposureCsv, exposureOption } from './allocationChartOptions'
 
 vi.mock('../../api/allocation', async (original) => ({
   ...await original<typeof import('../../api/allocation')>(),
   saveAllocationTargets: vi.fn(), saveClassification: vi.fn(),
 }))
+vi.mock('../../api/lifecycle', () => ({ undoBatch: vi.fn() }))
 
 const data: AllocationData = {
   by: 'asset_class', scope_key: 'person:7', total_market_value: '500.00', as_of: '2026-09-10T00:00:00Z',
@@ -27,6 +30,44 @@ beforeEach(() => vi.clearAllMocks())
 afterEach(cleanup)
 
 describe('allocation targets', () => {
+  it('focuses the first editable target and returns Escape to the trigger', async () => {
+    render(<AllocationTargetEditor data={data} owner={7} onChanged={vi.fn()} />)
+    const trigger = screen.getByRole('button', { name: 'Set targets' })
+    fireEvent.click(trigger)
+    const target = screen.getByLabelText('Equity target percent')
+    await waitFor(() => expect(document.activeElement).toBe(target))
+    fireEvent.keyDown(target, { key: 'Escape' })
+    expect(screen.queryByLabelText('Equity target percent')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('focuses the targets trigger when logged Undo fails after the editor closes', async () => {
+    vi.mocked(saveAllocationTargets).mockResolvedValue({ data: {} as never, headers: new Headers({ 'X-Change-Batch': 'target-batch' }) })
+    vi.mocked(undoBatch).mockRejectedValueOnce(new Error('A later change prevents this Undo'))
+    render(<ToastProvider><AllocationTargetEditor data={data} owner={7} onChanged={vi.fn()} /></ToastProvider>)
+    const trigger = screen.getByRole('button', { name: 'Set targets' })
+    fireEvent.click(trigger)
+    fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    undo.focus()
+    fireEvent.click(undo)
+    await screen.findByText('A later change prevents this Undo')
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+    expect(undoBatch).toHaveBeenCalledWith('target-batch')
+  })
+
+  it('shows progress only on the allocation action that was pressed', () => {
+    vi.mocked(saveAllocationTargets).mockReturnValueOnce(new Promise(() => {}))
+    render(<AllocationTargetEditor data={data} owner={7} onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Set targets' }))
+    fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    expect(screen.getByRole('button', { name: 'Save draft' }).getAttribute('aria-busy')).toBe('true')
+    const activate = screen.getByRole('button', { name: 'Activate targets' })
+    expect(activate.getAttribute('aria-busy')).toBeNull()
+    expect(activate.getAttribute('aria-disabled')).toBe('true')
+  })
   it('seeds only classified categories, offers no Unclassified target, and points at the classify path', async () => {
     vi.mocked(saveAllocationTargets).mockResolvedValue({ data: {} as never, headers: new Headers() })
     const onChanged = vi.fn()
@@ -46,7 +87,7 @@ describe('allocation targets', () => {
     expect(onClassify).toHaveBeenCalledOnce()
     // Activation still needs exactly 100% — and stays available, drift stays honest.
     fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '60' } })
-    expect((screen.getByRole('button', { name: 'Activate targets' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Activate targets' }).getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledOnce())
     expect(saveAllocationTargets).toHaveBeenCalledWith('asset_class', 7, 'draft', [

@@ -8,6 +8,12 @@ import {
 } from '../../api/portfolio'
 import type { OwnerScope } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useEscapeCancel } from '../feedback/reveal'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { useRecordFeedback } from './useRecordFeedback'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
 import {
@@ -230,7 +236,7 @@ export default function TransactionsPanel({
    *  after a change (PortfolioPage's `reloading`, the frame's dim). The grips go inert: a drop
    *  in that window could save an order the landing rows replace. */
   reloading?: boolean
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -280,6 +286,19 @@ export default function TransactionsPanel({
     layer !== null && layer.scope === owner ? layer.rows : null
   const rows = inScope(pendingOrder) ?? inScope(savedOrder) ?? transactions
   const rowById = new Map(rows.map((txn) => [txn.id, txn]))
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, transactions, 'data-transaction-id')
+  const editingRef = useLatest(editingId)
+  const deleteWithUndo = useDeleteWithUndo()
+  const cancelEdit = () => {
+    if (busy) return
+    feedback.focusRow(editingId)
+    setEditingId(null)
+    setForm(EMPTY)
+    feedback.begin(EMPTY)
+    setKept(false)
+    setError(null)
+  }
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
 
   // Undo re-sends the order that stood before the drop (spec §5): the endpoint is not
   // change-logged, so the client holds the previous order — and the scope it was made in. Not
@@ -381,6 +400,9 @@ export default function TransactionsPanel({
     // and the cue that narrates it, are over.
     setKept(false)
     setForm(seedFrom(txn))
+    feedback.begin(seedFrom(txn))
+    setError(null)
+    feedback.reveal()
   }
 
   const duplicate = (txn: TransactionOut) => {
@@ -397,18 +419,23 @@ export default function TransactionsPanel({
     // rule has nothing to say here: the click on this button already blurred whatever cell
     // held the caret (and committed it), so this transfer blurs nothing and the microtask
     // runs after the seed has flushed — there is no pre-reset text left to resurrect.
-    queueMicrotask(() => focusFirstAmount(txn.type))
+    feedback.begin(EMPTY)
+    setError(null)
+    feedback.reveal(txn.type === 'split' ? '#txn-split-factor' : '#txn-shares')
   }
 
   const submit = () => {
+    if (busy) return
     if (!form.security_id || !form.account.trim()) {
       setError('Security and account are required')
+      feedback.reveal(!form.security_id ? '#txn-security' : '[aria-label="Account"]')
       return
     }
     // Type-appropriate numeric guard: an empty string reaches the API as `""`, which
     // 422s as an opaque pydantic decimal-parse error (Task 14 review M2).
     if (form.type === 'split' ? !form.split_factor.trim() : !(form.shares.trim() && form.price.trim())) {
       setError(form.type === 'split' ? 'Split factor is required' : 'Shares and price are required')
+      feedback.reveal(form.type === 'split' ? '#txn-split-factor' : !form.shares.trim() ? '#txn-shares' : '#txn-price')
       return
     }
     setError(null)
@@ -417,9 +444,9 @@ export default function TransactionsPanel({
       editingId !== null
         ? updateTransaction(editingId, payload)
         : createTransaction({ ...payload, security_id: Number(form.security_id) })
-    void track(() =>
+    void track(() => saveState.run(() =>
       request
-        .then(() => {
+        .then((saved) => {
           if (editingId === null) {
             // The next lot starts here — BEFORE the reset, and that order is load-bearing
             // (998f05c's invariant, proven on the paycheck/comp/ESPP panels). This form
@@ -438,74 +465,43 @@ export default function TransactionsPanel({
             // THIS lot are cleared. Functional, so it composes over the blur's write above
             // rather than racing it. `kept` then says so out loud, because a form that keeps
             // its values after a save otherwise reads as a save that never happened.
-            setForm((f) => ({ ...f, shares: '', price: '', fees: '', split_factor: '', notes: '' }))
+            const next = { ...form, shares: '', price: '', fees: '', split_factor: '', notes: '' }
+            setForm(next)
+            feedback.saved(next, saved?.id ?? null, false)
             setKept(true)
           } else {
             // An edit is a one-off correction rather than a session: full reset, create mode
             // back, cue down.
+            feedback.focusRow(editingId)
             setForm(EMPTY)
+            feedback.saved(EMPTY, saved?.id ?? editingId, true)
             setEditingId(null)
             setKept(false)
           }
-          onChangedRef.current()
-        })
-        .catch((err: unknown) => {
-          setError(err instanceof ApiError ? err.message : 'Save failed')
+          return onChangedRef.current()
         }),
-    )
+    ))
   }
 
   const remove = (txn: TransactionOut) => {
-    const ticker = tickerOf(txn)
-    // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone and the
-    // recovery affordance replaces it — Undo re-POSTs the captured row (new id, by
-    // design). Only this low-risk flow converts; cascade deletes elsewhere keep confirm.
-    // busy for the duration (RsuGrantsPanel's posture): without the confirm dialog to
-    // absorb it, a double-click would fire a second DELETE on the same id and drop a 404
-    // into the error banner beside the success toast.
-    void track(() =>
-      deleteTransaction(txn.id)
-        .then(() => {
-          // The edited row is gone — a stale editingId would PATCH a 404 on the next save
-          // (Task 14 review I3). Reset on SUCCESS only: a failed delete leaves the row.
-          if (txn.id === editingId) {
-            setEditingId(null)
-            setForm(EMPTY)
-          }
-          // The ledger just changed under the cue — whatever entry session it narrated is over.
-          setKept(false)
-          onChangedRef.current()
-          toast.success(`Deleted the ${ticker} ${txn.type}`, {
-            action: {
-              label: 'Undo',
-              onAction: () => {
-                // TransactionOut carries every TransactionCreate field verbatim, split
-                // dummies included (toPayload's convention) — POST accepts them as-is.
-                // Counted like any request of the ledger, so no drop races the row coming back
-                // (CardsPanel's and CategoriesPanel's delete Undo).
-                void track(() =>
-                  createTransaction({
-                    security_id: txn.security_id,
-                    account: txn.account,
-                    type: txn.type,
-                    txn_date: txn.txn_date,
-                    shares: txn.shares,
-                    price: txn.price,
-                    fees: txn.fees,
-                    split_factor: txn.split_factor,
-                    notes: txn.notes,
-                  })
-                    .then(() => onChangedRef.current())
-                    .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`)),
-                )
-              },
-            },
-          })
-        })
-        .catch((err: unknown) => {
-          setError(err instanceof ApiError ? err.message : 'Delete failed')
-        }),
-    )
+    if (busy) return
+    void track(() => deleteWithUndo({
+      name: `the ${tickerOf(txn)} ${txn.type}`,
+      row: feedback.row(txn.id),
+      request: () => deleteTransaction(txn.id),
+      onDeleted: () => {
+        if (editingRef.current === txn.id) {
+          setEditingId(null)
+          setForm(EMPTY)
+          feedback.begin(EMPTY)
+        }
+        setKept(false)
+        return onChangedRef.current()
+      },
+      onRestored: () => track(() => Promise.resolve(onChangedRef.current())),
+      restoredRow: () => feedback.row(txn.id),
+      focusAfter: feedback.focusAfterDelete(txn.id),
+    }))
   }
 
   return (
@@ -521,7 +517,6 @@ export default function TransactionsPanel({
         out cost basis and gains — with no dates on the rows, it is the ledger's timeline.
         Drag a row to move a trade earlier or later.
       </p>
-      <FeedBanner error={error} />
       {kept && (
         // role=status: the cue appears in the same beat the focus jumps into the shares
         // box, so a screen-reader user would otherwise never learn why the form is still
@@ -532,6 +527,8 @@ export default function TransactionsPanel({
         </p>
       )}
       <form
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="entry-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -541,6 +538,7 @@ export default function TransactionsPanel({
         <label>
           Security
           <select
+            id="txn-security"
             value={form.security_id}
             onChange={(e) => {
               // The cue claims the security was kept; the moment it is changed the
@@ -637,7 +635,7 @@ export default function TransactionsPanel({
               {/* kind="plain", not money: price is Numeric(14, 4), so the $-echo would
                   render "$123.46" over a stored 123.4567 and hide two digits — and plain
                   also refuses the 2dp "=" evaluator the belt refuses. */}
-              <AmountInput kind="plain" value={form.price} onValueChange={set('price')} />
+              <AmountInput id="txn-price" kind="plain" value={form.price} onValueChange={set('price')} />
             </label>
             <label>
               Fees
@@ -656,22 +654,15 @@ export default function TransactionsPanel({
           />
         </label>
         <div className="form-actions">
-          <button type="submit" disabled={busy}>
+          <SaveButton className="button" type="submit" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {/* The label is the second half of the carry-forward cue: "Add another" is what
                 a form still holding the last row's context is actually about to do. */}
             {editingId !== null ? 'Save changes' : kept ? 'Add another' : 'Add transaction'}
-          </button>
+          </SaveButton>
+          <SaveStatus state={saveState} />
+          <FeedBanner error={error} />
           {editingId !== null && (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY)
-                setKept(false)
-              }}
-            >
-              Cancel
-            </button>
+            <BusyButton className="button" type="button" inert={busy} onClick={cancelEdit}>Cancel</BusyButton>
           )}
         </div>
       </form>
@@ -694,7 +685,7 @@ export default function TransactionsPanel({
             </thead>
             <tbody>
               {rows.map((t) => (
-                <tr key={t.id} {...reorder.itemProps(t.id)}>
+                <tr key={t.id} {...reorder.itemProps(t.id)} data-transaction-id={t.id} className={editingId === t.id ? 'is-editing' : undefined} aria-current={editingId === t.id ? true : undefined}>
                   <td className="reorder-grip-cell">
                     <DragHandle name={rowName(t, tickerOf(t))} {...reorder.handleProps(t.id)} />
                   </td>
@@ -717,29 +708,32 @@ export default function TransactionsPanel({
                       row is lifted too (lane R0 consumer rule 5): a click mid-drag would act on
                       a row that is about to move. */}
                   <td className="row-actions">
-                    <button type="button" disabled={busy || reorder.active} onClick={() => startEdit(t)}>Edit</button>
+                    <BusyButton className="button" data-edit type="button" inert={busy || reorder.active} onClick={() => startEdit(t)}>Edit</BusyButton>
                     {/* aria-label: "Duplicate"/"Delete" alone never say WHAT they act on, and
                         the type is the row's shortest distinguishing word. Delete needs the
                         naming MORE since the delete went instant (2026-08-25 polish §8): the
                         confirm() sentence that used to name the row before anything happened
                         is gone, so the button is the last chance to say it. Edit keeps its
                         bare name — it opens a form showing the row, and changes nothing. */}
-                    <button
+                    <BusyButton
+                      className="button"
                       type="button"
-                      disabled={busy || reorder.active}
+                      inert={busy || reorder.active}
                       aria-label={`Duplicate this ${t.type}`}
                       onClick={() => duplicate(t)}
                     >
                       Duplicate
-                    </button>
-                    <button
+                    </BusyButton>
+                    <BusyButton
+                      className="button"
                       type="button"
-                      disabled={busy || reorder.active}
+                      inert={busy || reorder.active}
+                      data-delete
                       aria-label={`Delete this ${t.type}`}
                       onClick={() => remove(t)}
                     >
                       Delete
-                    </button>
+                    </BusyButton>
                   </td>
                 </tr>
               ))}

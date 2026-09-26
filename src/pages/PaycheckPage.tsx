@@ -1,3 +1,10 @@
+import BusyButton from '../components/feedback/BusyButton'
+import { SaveButton } from '../components/feedback/SaveButton'
+import { SaveStatus } from '../components/feedback/SaveStatus'
+import { useEscapeCancel } from '../components/feedback/reveal'
+import { useDeleteWithUndo } from '../components/feedback/useDeleteWithUndo'
+import { useLatest } from '../components/reorder/useLatest'
+import { useRecordFeedback } from '../components/portfolio/useRecordFeedback'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -53,11 +60,6 @@ const MIN_PAY_PERIODS = 1
 const MAX_PAY_PERIODS = 366
 // The sheet's semi-monthly cadence, and the router's own default for a create.
 const DEFAULT_PAY_PERIODS = '24'
-
-function message(err: unknown, fallback: string): string {
-  // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
-  return err instanceof ApiError ? err.message : fallback
-}
 
 // ── Breakdown ───────────────────────────────────────────────────────────────────────────
 
@@ -525,7 +527,7 @@ function ProfilesPanel({
   onSelect: (id: number) => void
   onShowCurrent: () => void
   /** `deletedId` is set only by a delete, so the page can drop a selection that just died. */
-  onChanged: (deletedId?: number) => void
+  onChanged: (deletedId?: number) => void | Promise<void>
   /** Apply from the Try it card: the form opens on these values (a keyed remount, see the page). */
   initialForm?: ApplySeed
 }) {
@@ -537,6 +539,18 @@ function ProfilesPanel({
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, profiles, 'data-profile-id', newProfileForm(latest))
+  const current = useLatest({ onChanged, editingId, profiles })
+  const deleteWithUndo = useDeleteWithUndo()
+
+  const fail = (field: keyof ProfileFormState, text: string) => {
+    setError(text)
+    feedback.reveal(`[name="${field}"], #paycheck-${field}`)
+  }
+  const focusNamedError = (text: string) => {
+    const field = (Object.keys(form) as (keyof ProfileFormState)[]).find((key) => text.toLowerCase().includes(key))
+    if (field) feedback.reveal(`[name="${field}"], #paycheck-${field}`)
+  }
   // The history scroller's edge cue (data-scroll-more, 2026-09-13 polish spec §7) — the shared
   // hook; a null ref (no rows yet, no table) is a no-op.
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -564,28 +578,43 @@ function ProfilesPanel({
 
   const startEdit = (profile: PaycheckProfileOut) => {
     setEditingId(profile.id)
-    setForm(formFrom(profile))
+    const next = formFrom(profile)
+    setForm(next)
+    feedback.begin(next)
+    setError(null)
+    feedback.reveal('#paycheck-effective-date')
   }
 
   const stopEditing = (seed: PaycheckProfileOut | undefined) => {
     setEditingId(null)
-    setForm(newProfileForm(seed))
+    const next = newProfileForm(seed)
+    setForm(next)
+    feedback.begin(next)
   }
 
+  const cancelEdit = () => {
+    if (busy) return
+    feedback.focusRow(editingId)
+    stopEditing(latestOf(current.current.profiles))
+    setError(null)
+  }
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
+
   const submit = () => {
+    if (busy) return
     const salary = form.annual_salary.trim()
     const periodsText = form.pay_periods_per_year.trim()
     if (!form.effective_date || !salary || !periodsText) {
       // An empty string reaches the API as `""` and 422s as an opaque decimal-parse error
       // (TransactionsPanel's Task 14 review M2 lesson).
-      setError('Effective date, annual salary and pay periods are required')
+      fail(!form.effective_date ? 'effective_date' : !salary ? 'annual_salary' : 'pay_periods_per_year', 'Effective date, annual salary and pay periods are required')
       return
     }
     const periods = Number(periodsText)
     if (!Number.isInteger(periods) || periods < MIN_PAY_PERIODS || periods > MAX_PAY_PERIODS) {
       // The server's own sentence: a count is a count on both sides of the wire, so one
       // wording covers one rule.
-      setError(`pay_periods_per_year must be between ${MIN_PAY_PERIODS} and ${MAX_PAY_PERIODS}`)
+      fail('pay_periods_per_year', `pay_periods_per_year must be between ${MIN_PAY_PERIODS} and ${MAX_PAY_PERIODS}`)
       return
     }
     for (const { field, label } of PCT_FIELDS) {
@@ -602,7 +631,7 @@ function ProfilesPanel({
       // the cell marks invalid, or the belt below would evaluate it anyway.
       if (text !== '' && !isAmount(text, { expressions: false })) {
         // The InputsForm/BracketsEditor sentence, in this box's own vocabulary.
-        setError(`${label} must be a number`)
+        fail(field, `${label} must be a number`)
         return
       }
       // The CANONICAL value: a tolerant entry arrives here exactly as typed, and
@@ -616,7 +645,7 @@ function ProfilesPanel({
         // STORED fraction's vocabulary, and this box is labelled "ESPP %" and holds 11 for
         // 11%. Quoting it would call a perfectly good 11 out of range and wave a 0.5
         // (half a percent) through.
-        setError(`${label} must be between 0 and 100`)
+        fail(field, `${label} must be between 0 and 100`)
         return
       }
     }
@@ -626,12 +655,12 @@ function ProfilesPanel({
       const text = form[field].trim()
       if (text === '') continue
       if (!isAmount(text, { expressions: false })) {
-        setError(`${label} must be a number`)
+        fail(field, `${label} must be a number`)
         return
       }
       const value = Number(canonicalAmount(text, { expressions: false }))
       if (value < 0 || value > 100) {
-        setError(`${label} must be between 0 and 100`)
+        fail(field, `${label} must be between 0 and 100`)
         return
       }
     }
@@ -639,16 +668,16 @@ function ProfilesPanel({
       const text = form[field].trim()
       // Percent boxes refuse expressions and exponents, exactly as the five pcts do.
       if (text !== '' && !isAmount(text, rate ? { expressions: false } : undefined)) {
-        setError(`${label} must be a number`)
+        fail(field, `${label} must be a number`)
         return
       }
       const value = Number(canonicalAmount(text || '0', rate ? { expressions: false } : undefined))
       if (value < 0) {
-        setError(`${label} must be >= 0`)
+        fail(field, `${label} must be >= 0`)
         return
       }
       if (rate && value > 200) {
-        setError(`${label} must be between 0 and 200`)
+        fail(field, `${label} must be between 0 and 200`)
         return
       }
     }
@@ -659,18 +688,18 @@ function ProfilesPanel({
         // vocabulary rather than the column's `hsa_dependents`.
         const covered = Number(text || '0')
         if (!Number.isInteger(covered) || covered < 0 || covered > MAX_HSA_DEPENDENTS) {
-          setError(`${label} must be a whole number between 0 and ${MAX_HSA_DEPENDENTS}`)
+          fail(field, `${label} must be a whole number between 0 and ${MAX_HSA_DEPENDENTS}`)
           return
         }
         continue
       }
       // Money boxes: the match BANDS' rule, expressions and all.
       if (text !== '' && !isAmount(text)) {
-        setError(`${label} must be a number`)
+        fail(field, `${label} must be a number`)
         return
       }
       if (Number(canonicalAmount(text || '0')) < 0) {
-        setError(`${label} must be >= 0`)
+        fail(field, `${label} must be >= 0`)
         return
       }
     }
@@ -739,55 +768,36 @@ function ProfilesPanel({
       ...(editingId === null && personId !== null ? { person_id: personId } : {}),
     }
     const request = editingId !== null ? updateProfile(editingId, body) : createProfile(body)
-    request
-      .then((echo) => {
-        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1).
-        // BEFORE the reseed, and that order is load-bearing: this form carries no
-        // data-entry-scope, so Enter is the browser's implicit submit and the caret is
-        // still sitting in an AmountInput when this lands. Moving it BLURS that box
-        // synchronously, and the blur's commit closes over the box's PRE-reset text —
-        // canonicalizing a "$150,000" into an enqueued write. Focusing first aims that
-        // write at the state the full-object reseed below then replaces; the other order
-        // lets it land on the reseeded form, where a resurrected salary would read as
-        // carry-forward and be indistinguishable from one. One shape across all five
-        // panels (EsppPage/CompPage/RsuGrantsPanel), so the order cannot drift here.
-        // getElementById is the house DOM protocol (like data-entry-scope), so AmountInput
-        // keeps its no-ref API; the target is a plain <input type="date">, so focusing it
-        // runs no React handler of its own.
-        document.getElementById('paycheck-effective-date')?.focus()
-        // Back to "new profile", seeded from whichever row is newest NOW — the stored list
-        // with the echo standing in for its own row (a create is not in it yet, so it is
-        // appended). Comparing the echo against the OLD `latest` instead would reseed from
-        // a row that no longer exists as it was: moving the latest profile's date BACKWARD
-        // makes some other row the newest, and the form would carry the moved row's salary
-        // forward anyway (review M3). Editing a historical row still leaves the real latest
-        // in place, which is the case the comparison was written for.
-        stopEditing(latestOf([...profiles.filter((p) => p.id !== echo.id), echo]))
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
+    void saveState.run(() => request.then((echo) => {
+      // Commit a focused AmountInput's old text before reseeding the next profile.
+      if (editingId !== null) feedback.focusRow(editingId)
+      else document.getElementById('paycheck-effective-date')?.focus()
+      const next = newProfileForm(latestOf([...current.current.profiles.filter((p) => p.id !== echo.id), echo]))
+      setForm(next)
+      feedback.saved(next, echo.id, true)
+      setEditingId(null)
+      return current.current.onChanged()
+    }).catch((err: unknown) => { focusNamedError(errorDetail(err)); throw err }))
       .finally(() => setBusy(false))
   }
 
   const remove = (profile: PaycheckProfileOut) => {
-    if (!window.confirm(`Delete the profile effective ${formatDate(profile.effective_date)}?`)) {
-      return
-    }
+    if (busy) return
     setBusy(true)
-    // Cleared on entry like submit's: a delete that succeeds must not leave the previous
-    // save's 409 sitting over the panel as if it still described the table.
-    setError(null)
-    deleteProfile(profile.id)
-      .then(() => {
-        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
-        // (Task 14 review I3). Reset on SUCCESS only, and re-seed from what is left.
-        if (profile.id === editingId) {
-          stopEditing(latestOf(profiles.filter((p) => p.id !== profile.id)))
+    void deleteWithUndo({
+      name: `the profile effective ${formatDate(profile.effective_date)}`,
+      row: feedback.row(profile.id),
+      request: () => deleteProfile(profile.id),
+      onDeleted: () => {
+        if (current.current.editingId === profile.id) {
+          stopEditing(latestOf(current.current.profiles.filter((p) => p.id !== profile.id)))
         }
-        onChanged(profile.id)
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+        return current.current.onChanged(profile.id)
+      },
+      onRestored: () => current.current.onChanged(),
+      restoredRow: () => feedback.row(profile.id),
+      focusAfter: feedback.focusAfterDelete(profile.id),
+    }).finally(() => setBusy(false))
   }
 
   return (
@@ -804,8 +814,9 @@ function ProfilesPanel({
       </p>
       {/* A save that failed, not a feed that is behind: the bare alert, with no stale cue
           and nothing to retry — the form itself is the retry. */}
-      <FeedBanner error={error} />
       <form
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="paycheck-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -820,7 +831,7 @@ function ProfilesPanel({
             id="paycheck-effective-date"
             className="field-input"
             type="date"
-            value={form.effective_date}
+            name="effective_date" value={form.effective_date}
             onChange={(e) => set('effective_date')(e.target.value)}
           />
         </label>
@@ -830,14 +841,14 @@ function ProfilesPanel({
             stays the browser's own implicit submit. */}
         <label>
           Annual salary
-          <AmountInput value={form.annual_salary} onValueChange={set('annual_salary')} />
+          <AmountInput id="paycheck-annual_salary" value={form.annual_salary} onValueChange={set('annual_salary')} />
         </label>
         <label>
           Pay periods per year
           <input
             className="field-input"
             inputMode="numeric"
-            value={form.pay_periods_per_year}
+            name="pay_periods_per_year" value={form.pay_periods_per_year}
             onChange={(e) => set('pay_periods_per_year')(e.target.value)}
           />
         </label>
@@ -846,19 +857,19 @@ function ProfilesPanel({
             {label}
             {/* State stays HUMAN-scale ("13" = 13%); the shift to the stored fraction
                 happens at the wire, in submit's `pct`. */}
-            <AmountInput kind="percent" value={form[field]} onValueChange={set(field)} />
+            <AmountInput kind="percent" id={`paycheck-${field}`} value={form[field]} onValueChange={set(field)} />
           </label>
         ))}
         <label>
           Dental &amp; vision
           <AmountInput
-            value={form.dental_vision_per_check}
+            id="paycheck-dental_vision_per_check" value={form.dental_vision_per_check}
             onValueChange={set('dental_vision_per_check')}
           />
         </label>
         <label>
           HSA
-          <AmountInput value={form.hsa_per_check} onValueChange={set('hsa_per_check')} />
+          <AmountInput id="paycheck-hsa_per_check" value={form.hsa_per_check} onValueChange={set('hsa_per_check')} />
         </label>
         <label>
           HSA coverage
@@ -866,7 +877,7 @@ function ProfilesPanel({
               a select and there is nothing to validate at submit. */}
           <select
             className="field-input"
-            value={form.hsa_coverage}
+            name="hsa_coverage" value={form.hsa_coverage}
             onChange={(e) => setCoverage(e.target.value)}
           >
             {HSA_COVERAGES.map(({ value, label }) => (
@@ -885,7 +896,7 @@ function ProfilesPanel({
               {label}
               <AmountInput
                 kind={rate ? 'percent' : 'money'}
-                value={form[field]}
+                id={`paycheck-${field}`} value={form[field]}
                 onValueChange={set(field)}
               />
             </label>
@@ -901,7 +912,7 @@ function ProfilesPanel({
             money ? (
               <label key={field}>
                 {label}
-                <AmountInput value={form[field]} onValueChange={set(field)} />
+                <AmountInput id={`paycheck-${field}`} value={form[field]} onValueChange={set(field)} />
               </label>
             ) : (
               // The note sits OUTSIDE the label: a label's text is its accessible name, and
@@ -913,7 +924,7 @@ function ProfilesPanel({
                   <input
                     className="field-input"
                     inputMode="numeric"
-                    value={form[field]}
+                    name={field} value={form[field]}
                     onChange={(e) => set(field)(e.target.value)}
                   />
                 </label>
@@ -940,7 +951,7 @@ function ProfilesPanel({
             {OPTIONAL_PCT_FIELDS.map(({ field, label }) => (
               <label key={field}>
                 {label}
-                <AmountInput kind="percent" value={form[field]} onValueChange={set(field)} />
+                <AmountInput kind="percent" id={`paycheck-${field}`} value={form[field]} onValueChange={set(field)} />
               </label>
             ))}
             <p className="paycheck-match-words">{WITHHOLDING_SPLIT_HINT}</p>
@@ -950,23 +961,25 @@ function ProfilesPanel({
           Notes
           <input
             className="field-input"
-            value={form.notes}
+            name="notes" value={form.notes}
             onChange={(e) => set('notes')(e.target.value)}
           />
         </label>
         <div className="paycheck-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
+          <SaveButton type="submit" className="button button-primary" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {editingId !== null ? 'Save profile' : 'Add profile'}
-          </button>
+          </SaveButton>
+          <SaveStatus state={saveState} />
+          <FeedBanner error={error} />
           {editingId !== null && (
-            <button
+            <BusyButton
               type="button"
               className="button"
               aria-label="Cancel the profile edit"
-              onClick={() => stopEditing(latest)}
+               onClick={cancelEdit} inert={busy}
             >
               Cancel
-            </button>
+            </BusyButton>
           )}
         </div>
       </form>
@@ -1000,7 +1013,7 @@ function ProfilesPanel({
             <tbody>
               {profiles.map((profile) => (
                 <tr
-                  key={profile.id}
+                  key={profile.id} data-profile-id={profile.id} aria-current={editingId === profile.id ? true : undefined}
                   className={profile.id === editingId ? 'is-editing' : undefined}
                 >
                   <td className="col-identity">
@@ -1049,27 +1062,27 @@ function ProfilesPanel({
                     {profile.notes ?? '—'}
                   </td>
                   <td className="row-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Edit the profile effective ${formatDate(
                         profile.effective_date,
                       )}`}
-                      onClick={() => startEdit(profile)}
+                      data-edit inert={busy} onClick={() => startEdit(profile)}
                     >
                       Edit
-                    </button>
-                    <button
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Delete the profile effective ${formatDate(
                         profile.effective_date,
                       )}`}
                       disabled={busy}
-                      onClick={() => remove(profile)}
+                      data-delete onClick={() => remove(profile)}
                     >
                       Delete
-                    </button>
+                    </BusyButton>
                   </td>
                 </tr>
               ))}
@@ -1224,7 +1237,7 @@ export default function PaycheckPage() {
   // The mount fetches are covered by the initial busy values; the handlers below flip them.
   const loadProfiles = () => {
     const seq = ++profilesSeq.current
-    fetchProfiles()
+    return fetchProfiles()
       .then((data) => {
         if (seq !== profilesSeq.current) return
         const previous = getSnapshot<PaycheckProfileOut[]>('paycheck:profiles')
@@ -1335,7 +1348,7 @@ export default function PaycheckPage() {
   const reloadProfiles = () => {
     setProfilesBusy(true)
     setProfilesError(null)
-    loadProfiles()
+    return loadProfiles()
   }
 
   /**
@@ -1496,7 +1509,7 @@ export default function PaycheckPage() {
   // profile takes its own breakdown with it, so the selection falls back to the server's
   // default rather than 404ing on an id that no longer exists).
   const onProfilesChanged = (deletedId?: number) => {
-    reloadProfiles()
+    const reloaded = reloadProfiles()
     // Decided on the CURRENT selection, not on the one this callback closed over when the
     // save was submitted: a row pressed DURING the write is the user's latest word, and
     // reading `selection.profileId` here would quietly revert it when the promise resolved.
@@ -1507,6 +1520,7 @@ export default function PaycheckPage() {
     // those are (a new row dated today displaces the current one). A nonce rather than a
     // direct call: the effect above owns the sequence guard.
     setHouseholdNonce((n) => n + 1)
+    return reloaded
   }
 
   // ONE banner for the page's two parallel loads (spec §9), with ONE Retry for whichever
@@ -1554,9 +1568,10 @@ export default function PaycheckPage() {
             />
           </div>
         </div>
+        <div hidden={views.section === 'profiles'}>
         <Feed
           data={summaryCheck}
-          busy={summaryBusy}
+          busy={views.section !== 'profiles' && summaryBusy}
           staleNoun="this breakdown"
           skeleton={{ height: FEED_SKELETON.paycheckBreakdown, label: 'Loading the breakdown…' }}
           empty={
@@ -1612,6 +1627,7 @@ export default function PaycheckPage() {
             </>
           )}
         </Feed>
+        </div>
         <LocalSectionPanel state={views} section="profiles">
           <Feed
             data={profiles}

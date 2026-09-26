@@ -109,6 +109,12 @@
   font-size: 0.78rem;
 }
 
+/* Reset carries a spinner in this dense row. The normal button's side padding gives
+   BusyButton room to hold its idle width while that spinner is present. */
+.espp-page .row-actions [data-reset] {
+  padding-inline: 0.9rem;
+}
+
 .espp-page tr.is-editing td {
   background: var(--surface-2);
 }
@@ -141,3 +147,8 @@
 }
 
 /* Year chips reuse the app's segmented control look; panels.css owns .segmented. */
+
+/* Save feedback belongs to the form's full action row. */
+.espp-form-actions { grid-column: 1 / -1; flex-wrap: wrap; align-items: center; }
+.espp-form-actions .button { white-space: nowrap; }
+.espp-form-actions .error-banner { flex-basis: 100%; margin: 0; }
