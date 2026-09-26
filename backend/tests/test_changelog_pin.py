@@ -57,6 +57,14 @@ LOGGED: dict[str, set[str]] = {
         "update_classification",
         "save_allocation_targets",
     },
+    "calendar.py": {
+        "create_custom_event",
+        "update_custom_event",
+        "delete_custom_event",
+        "put_override",
+        "delete_override",
+        "create_feed_token",
+    },
 }
 # module -> {function: reason}. An exempt route still commits directly; the reason says
 # why that is the right answer for now, not that nobody looked.
@@ -68,7 +76,13 @@ EXEMPT: dict[str, dict[str, str]] = {
         "reference data the user retypes from the IRS/FTB, not their own figures",
         "clone_brackets": "copies those same tables into another filing status, and refuses "
         "when the target already has rows — the undo is a second clone",
-    }
+    },
+    "calendar.py": {
+        "feed_ics": "bumps a token's last_used_at at most hourly on the unauthenticated feed "
+        "route — machine bookkeeping, with no signed-in user to own a batch",
+        "revoke_feed_token": "an undo would revive a revoked credential; a new link is the way "
+        "back",
+    },
 }
 
 

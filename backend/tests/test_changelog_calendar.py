@@ -5,8 +5,17 @@ revoke; tests/test_changelog_pin.py says why."""
 
 from datetime import date
 
+from sqlalchemy import func, select
+
 from app.api.calendar import _override_label
-from app.models import CalendarEventOverride, CustomEvent, NetWorthSnapshot
+from app.models import (
+    CalendarEventOverride,
+    CalendarFeedToken,
+    ChangeLog,
+    CustomEvent,
+    NetWorthSnapshot,
+)
+from app.services.changelog import REPLAY_REFUSAL
 from tests.exact_undo import images, logged, undo
 
 CALENDAR = "/api/v1/calendar"
@@ -188,3 +197,49 @@ async def test_a_key_no_event_carries_is_named_by_the_key(auth_client, db, monke
         assert resp.status_code == 200, resp.text
         [row] = await logged(db, resp.headers["x-change-batch"])
         assert row.label == f"Hid calendar event {key}"
+
+
+# ── feed links ───────────────────────────────────────────────────────────────────────
+
+
+async def test_a_new_feed_link_is_logged_without_its_hash_and_undo_takes_it_back(
+    auth_client, db, monkeypatch
+):
+    freeze_today(monkeypatch)
+    created = await auth_client.post(f"{CALENDAR}/feed-tokens", json={"label": " Phone "})
+    assert created.status_code == 201, created.text
+    plaintext = created.json()["token"]
+    batch_id = created.headers["x-change-batch"]
+    [row] = await logged(db, batch_id)
+    assert (row.op, row.table_name, row.label) == (
+        "insert",
+        "calendar_feed_tokens",
+        "Created calendar feed link Phone",
+    )
+    # The credential never sits in the log, not even as its hash.
+    assert "token_hash" not in row.after and row.after["label"] == "Phone"
+    undone = await undo(auth_client, batch_id)
+    assert undone.status_code == 200, undone.text
+    assert await images(db, CalendarFeedToken) == []
+    assert (await auth_client.get(f"{CALENDAR}/feed.ics?token={plaintext}")).status_code == 404
+    # Undoing that Undo would need the hash back; it refuses rather than revive the link.
+    revived = await undo(auth_client, undone.json()["batch_id"])
+    assert revived.status_code == 409, revived.text
+    assert revived.json()["detail"] == REPLAY_REFUSAL
+    await db.rollback()
+    assert await images(db, CalendarFeedToken) == []
+
+
+async def test_the_feed_bump_and_a_revoke_log_nothing(auth_client, db, monkeypatch):
+    """The two exempt routes (tests/test_changelog_pin.py says why)."""
+    freeze_today(monkeypatch)
+    created = await auth_client.post(f"{CALENDAR}/feed-tokens", json={"label": "Phone"})
+    token_id, plaintext = created.json()["id"], created.json()["token"]
+    count = select(func.count()).select_from(ChangeLog)
+    logged_before = (await db.execute(count)).scalar_one()
+    feed = await auth_client.get(f"{CALENDAR}/feed.ics?token={plaintext}")
+    assert feed.status_code == 200 and "x-change-batch" not in feed.headers
+    assert (await db.get(CalendarFeedToken, token_id)).last_used_at is not None  # it did write
+    revoked = await auth_client.delete(f"{CALENDAR}/feed-tokens/{token_id}")
+    assert revoked.status_code == 204 and "x-change-batch" not in revoked.headers
+    assert (await db.execute(count)).scalar_one() == logged_before

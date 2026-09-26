@@ -69,7 +69,7 @@ from app.services.calendar.generators.taxes import TaxFacts
 from app.services.calendar.ics import render
 from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
-from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.changelog import ChangeBatch, batch_header, change_batch, pk_of, row_image
 from app.services.coverage import load_coverage
 from app.services.day_labels import long_day
 from app.services.espp_calc import OfferingInfo, StoredPeriod
@@ -976,14 +976,25 @@ async def list_feed_tokens(
 
 @router.post("/feed-tokens", response_model=FeedTokenCreated, status_code=201)
 async def create_feed_token(
-    body: FeedTokenIn, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    body: FeedTokenIn,
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> FeedTokenCreated:
-    """Mint, store the hash, hand back the plaintext ONCE."""
+    """Mint, store the hash, hand back the plaintext ONCE. Logged, so an Undo can take a new
+    link back — deleting the row is always safe. The image leaves the hash out: an Undo of that
+    Undo then has no credential to put back and refuses, so no chain of Undos can revive a link
+    (the reason revoke_feed_token is exempt)."""
     plaintext = secrets.token_urlsafe(32)
     row = CalendarFeedToken(user_id=user.id, token_hash=_hash_token(plaintext), label=body.label)
     db.add(row)
-    await db.commit()
+    await db.flush()
     await db.refresh(row)  # created_at is a server default
+    image = {column: value for column, value in row_image(row).items() if column != "token_hash"}
+    batch.record(row.__tablename__, pk_of(row), None, image)
+    batch.label = f"Created calendar feed link {row.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return FeedTokenCreated(
         id=row.id, label=row.label, created_at=row.created_at, last_used_at=None, token=plaintext
     )
