@@ -52,7 +52,9 @@ const inspectFocus = async (input) => {
   }, await input.elementHandle())
   const box = await input.boundingBox()
   assert(box && box.y >= 0 && box.y + box.height <= 900)
-  return { focus: await active(), y: box.y, height: box.height }
+  const selection = await input.evaluate(el => ({ start: el.selectionStart, end: el.selectionEnd, length: el.value.length }))
+  if (selection.start !== null) assert(selection.start === 0 && selection.end === selection.length, 'editable text must be selected')
+  return { focus: await active(), y: box.y, height: box.height, selection }
 }
 const domainPaths = ['/credit-cards', '/credit-cards/categories', '/credit-cards/rates', '/calendar?start=2026-09-01&end=2026-09-30', '/spending/matrix']
 const domainHashes = async () => Object.fromEntries(await Promise.all(domainPaths.map(async pathname => [pathname, createHash('sha256').update(JSON.stringify((await api(pathname)).data)).digest('hex')])))
@@ -185,6 +187,7 @@ try {
   const eventChip = page.locator(`[data-custom-event-id="${eventId}"]`).first()
   await eventChip.waitFor()
   assert.equal(await eventChip.getAttribute('data-flash'), '')
+  const eventBeforeDelete = (await api('/calendar?start=2026-09-01&end=2026-09-30')).data.events.find(event => event.id === eventId)
   note('Calendar Enter save lands on active day and flashes late chip', { day, eventId, focus: await active() })
   await eventChip.click()
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
@@ -197,9 +200,8 @@ try {
   await undoToast(`Deleted ${eventName}`)
   await page.getByText(`Restored ${eventName}`, { exact: true }).waitFor()
   const restored = (await api('/calendar?start=2026-09-01&end=2026-09-30')).data.events.find((event) => event.id === eventId)
-  assert.equal(restored.id, eventId)
-  assert.equal(restored.date, day)
-  note('Calendar exact Undo retains custom id', { eventId, focus: await keptFocus('calendar undo') })
+  assert.deepEqual(restored, eventBeforeDelete)
+  note('Calendar exact Undo restores the complete event including custom id', { eventId, exactUndo: true, focus: await keptFocus('calendar undo') })
 
   await page.goto(`${BASE}/spending?section=budgets`)
   await page.getByRole('button', { name: /^(Edit|Set) .+ budget$/ }).first().click()
