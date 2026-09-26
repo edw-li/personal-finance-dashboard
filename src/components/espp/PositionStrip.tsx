@@ -1,7 +1,7 @@
 import { GhostTile, SkeletonTileRow } from '../PageSkeleton'
 import StatTile from '../StatTile'
 import type { EsppHeldTotals, EsppLotsResponse, EsppModelerOut } from '../../types/api'
-import { formatCurrency, formatPct, formatShares } from '../../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatPct, formatShares } from '../../utils/format'
 import '../panels.css'
 import './espp.css'
 
@@ -46,7 +46,7 @@ export default function PositionStrip({
     // Both feeds failed with nothing cached: the page banner carries that; a ghost that never
     // resolves would only promise something that is not coming.
     if (!lotsBusy && !modelerBusy) return null
-    return <SkeletonTileRow tiles={5} label={STRIP_LABEL} />
+    return <SkeletonTileRow tiles={5} row="five" label={STRIP_LABEL} />
   }
   // …and the same rule per feed once the OTHER one has painted: a failed feed with nothing
   // cached shows its slots as em dashes (the banner names why), and only a feed still in
@@ -59,7 +59,7 @@ export default function PositionStrip({
     <div className={`loading-dim${dim ? ' is-loading' : ''}`}>
       {/* Five tiles on ONE row at 1440 (2026-09-13 polish spec §12): the modifier pins five
           equal tracks above the 1000px container width, and .stat-value's cqi cap shrinks the
-          figures to fit; below it the row falls back to auto-fit. */}
+          figures to fit. Below 1000px it is 3 + 2 (panels.css), never 4 + 1. */}
       <div className="kpi-row kpi-row-5">
         {held === undefined || lots === null ? (
           lotsFailed ? (
@@ -82,13 +82,17 @@ export default function PositionStrip({
             <StatTile
               label="Market value"
               value={formatCurrency(held.market_value)}
-              delta={held.market_value === null ? unpricedNote(lots) : undefined}
+              // The quote the strip is priced at (2026-09-25 polish spec §4.4); unpriced, why not.
+              delta={held.market_value === null || lots.current_price === null ? unpricedNote(lots) : `${lots.espp_ticker ?? 'Quote'} ${formatCurrency(lots.current_price)}`}
               tone="neutral"
               hint="Your unsold lots at the current quote."
             />
             <StatTile
               label="Cost basis"
               value={formatCurrency(held.cost_basis)}
+              // What a held share cost, the server's own average (spec §4.4).
+              delta={held.avg_paid === null ? undefined : `avg ${formatCurrency(held.avg_paid)} / sh`}
+              tone="neutral"
               hint="What those lots cost you, after the plan discount."
             />
             <StatTile
@@ -122,7 +126,7 @@ export default function PositionStrip({
           <StatTile
             label={`$25k limit used — ${modeler.year}`}
             value={formatCurrency(modeler.totals.total_25k_value)}
-            delta={`${formatCurrency(modeler.totals.remaining_25k)} left`}
+            delta={`${formatCurrencyWhole(modeler.totals.remaining_25k)} left`}
             tone="neutral"
             hint="The Purchase modeler's chained total against the IRS §423 ceiling, at its current year and knobs — the meter in that card draws the same figure long."
           />
