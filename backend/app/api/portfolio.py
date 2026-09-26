@@ -58,6 +58,7 @@ from app.services.changelog import (
     change_batch,
     row_image,
 )
+from app.services.day_labels import long_day
 from app.services.money import (
     MONEY_MAX_ABS_10_2,
     MONEY_MAX_ABS_10_4,
@@ -149,6 +150,31 @@ def _owner_filter(owner: str | None) -> ColumnElement[bool] | None:
         return portfolio_owner_clause(owner)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def _resolve_account(db: AsyncSession, batch: ChangeBatch, label: str) -> PortfolioAccount:
+    """resolve_portfolio_account, with the label row it mints — when it mints one — recorded in
+    `batch` ahead of the row that needs it. An Undo then removes a label the write brought into
+    being (refusing while another row still files under it), never one that was already there."""
+    cleaned = label.strip()
+    existing = (
+        (await db.execute(select(PortfolioAccount).where(PortfolioAccount.label == cleaned)))
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        return existing
+    account = await resolve_portfolio_account(db, cleaned)  # flushes: the image has its id
+    batch.record_insert(account)
+    return account
+
+
+def _txn_name(ticker: str, txn: PositionTransaction) -> str:
+    """How an Activity label names a ledger row: "NVDA buy of Sep 2, 2026", or "VOO buy
+    (undated)" for the imported rows that carry no date."""
+    if txn.txn_date is None:
+        return f"{ticker} {txn.type} (undated)"
+    return f"{ticker} {txn.type} of {long_day(txn.txn_date)}"
 
 
 @router.get("/accounts", response_model=list[PortfolioAccountOut])
@@ -499,9 +525,13 @@ async def reorder_transactions(
 
 @router.post("/transactions", response_model=TransactionOut, status_code=201)
 async def create_transaction(
-    body: TransactionCreate, db: AsyncSession = Depends(get_db)
+    body: TransactionCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> PositionTransaction:
-    if await db.get(Security, body.security_id) is None:
+    security = await db.get(Security, body.security_id)
+    if security is None:
         raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
     fields = _validated_txn_fields(body.type, body.shares, body.price, body.fees, body.split_factor)
     if body.txn_date is not None:
@@ -513,7 +543,7 @@ async def create_transaction(
     sort_index = (await db.execute(next_sort_index())).scalar_one()
     # Resolve only after every 422 above: get-or-create flushes, and a label minted for a
     # request that then fails validation would be a row nobody asked for.
-    account = await resolve_portfolio_account(db, label)
+    account = await _resolve_account(db, batch, label)
     # UI rows fold chronologically LAST (locked decision) until the user drags them
     # elsewhere (PUT /transactions/order). A later import appends its new sheet rows after
     # the ledger's max the same way — import_key, not sort_index, is the importer's identity.
@@ -529,7 +559,10 @@ async def create_transaction(
         **fields,
     )
     db.add(txn)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(txn)
+    batch.label = f"Added {_txn_name(security.ticker, txn)}"
+    response.headers.update(batch_header(await batch.commit()))
     return txn
 
 
@@ -542,7 +575,11 @@ async def _get_transaction(db: AsyncSession, txn_id: int) -> PositionTransaction
 
 @router.patch("/transactions/{txn_id}", response_model=TransactionOut)
 async def update_transaction(
-    txn_id: int, body: TransactionUpdate, db: AsyncSession = Depends(get_db)
+    txn_id: int,
+    body: TransactionUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> PositionTransaction:
     txn = await _get_transaction(db, txn_id)
     provided = body.model_dump(exclude_unset=True)
@@ -565,8 +602,9 @@ async def update_transaction(
     # Resolve after the last raise and before the first mutation: get-or-create flushes,
     # and a flush of a half-mutated row is exactly what the rule below forbids.
     new_account = (
-        await resolve_portfolio_account(db, provided["account"]) if "account" in provided else None
+        await _resolve_account(db, batch, provided["account"]) if "account" in provided else None
     )
+    before = row_image(txn)
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
     if new_account is not None:
@@ -583,18 +621,31 @@ async def update_transaction(
     # source/sort_index/import_key are ownership metadata — never PATCHable (the replay
     # order moves only through PUT /transactions/order). Edits to source='import' rows are
     # legal but the next re-import reverts them (sheet wins).
-    await db.commit()
+    # The relationship moves portfolio_account_id only at a flush: image after one.
+    await db.flush()
+    batch.record_update(txn, before)
+    batch.label = f"Edited {_txn_name((await _get_security(db, txn.security_id)).ticker, txn)}"
+    response.headers.update(batch_header(await batch.commit()))
     return txn
 
 
 @router.delete("/transactions/{txn_id}", status_code=204)
-async def delete_transaction(txn_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_transaction(
+    txn_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Imaged, so an Undo puts the row back with its id and sort_index — in its old place in
+    the replay order, not at the ledger's end."""
     txn = await _get_transaction(db, txn_id)
     # Import-owned rows resurrect on the next re-import — appended at the ledger's end,
     # matched by import_key — documented.
+    ticker = (await _get_security(db, txn.security_id)).ticker
+    batch.record_delete(txn)
+    batch.label = f"Deleted {_txn_name(ticker, txn)}"
     await db.delete(txn)
-    await db.commit()
-    return Response(status_code=204)
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 @router.get("/dividends", response_model=list[DividendOut])

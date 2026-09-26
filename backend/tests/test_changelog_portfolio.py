@@ -6,12 +6,23 @@ ledger positions and price history included."""
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from app.models import LatestPrice, PriceHistory, Security, SecurityDividendEvent
+from sqlalchemy import select
+
+from app.models import (
+    LatestPrice,
+    PortfolioAccount,
+    PositionTransaction,
+    PriceHistory,
+    Security,
+    SecurityDividendEvent,
+)
 from app.services.changelog import DEPENDENT_REFUSAL, REPLAY_REFUSAL
 from tests.exact_undo import images, logged, shape, undo
+from tests.portfolio_factories import acct
 
 PORTFOLIO = "/api/v1/portfolio"
 SECURITIES = f"{PORTFOLIO}/securities"
+TRANSACTIONS = f"{PORTFOLIO}/transactions"
 VOO = {"ticker": "VOO", "name": "Vanguard S&P 500 ETF", "holding_type": "etf"}
 
 
@@ -53,6 +64,75 @@ async def priced_security(db) -> Security:
     )
     await db.commit()
     return security
+
+
+async def stock(db, ticker: str = "NVDA", name: str = "NVIDIA") -> int:
+    security = Security(ticker=ticker, name=name, holding_type="stock")
+    db.add(security)
+    await db.commit()
+    return security.id
+
+
+async def ledger(db) -> list[int]:
+    """Three NVDA rows at 10, 20, 30: a dated UI buy, an undated imported buy, a dated sell."""
+    security_id = await stock(db)
+    rows = [
+        PositionTransaction(
+            security_id=security_id,
+            portfolio_account=acct("RH Taxable"),
+            type="buy",
+            txn_date=date(2026, 9, 2),
+            shares=Decimal("10.000000"),
+            price=Decimal("120.5000"),
+            fees=Decimal("1.00"),
+            sort_index=10,
+            source="ui",
+        ),
+        PositionTransaction(
+            security_id=security_id,
+            portfolio_account=acct("RH Taxable"),
+            type="buy",
+            shares=Decimal("5.000000"),
+            price=Decimal("90.0000"),
+            sort_index=20,
+            source="import",
+            import_key=20,
+        ),
+        PositionTransaction(
+            security_id=security_id,
+            portfolio_account=acct("RH Taxable"),
+            type="sell",
+            txn_date=date(2026, 9, 10),
+            shares=Decimal("2.000000"),
+            price=Decimal("130.0000"),
+            sort_index=30,
+            source="ui",
+            notes="trim",
+        ),
+    ]
+    db.add_all(rows)
+    await db.commit()
+    return [row.id for row in rows]
+
+
+async def replay(db) -> list[tuple[int, int]]:
+    rows = await db.execute(
+        select(PositionTransaction.id, PositionTransaction.sort_index).order_by(
+            PositionTransaction.sort_index, PositionTransaction.id
+        )
+    )
+    return [(row.id, row.sort_index) for row in rows]
+
+
+def buy(security_id: int, account: str, **fields) -> dict:
+    return {
+        "security_id": security_id,
+        "account": account,
+        "type": "buy",
+        "shares": "10",
+        "price": "120.5",
+        **fields,
+    }
 
 
 # ── securities ───────────────────────────────────────────────────────────────────────
@@ -148,3 +228,84 @@ async def test_undoing_a_security_create_after_a_refresh_priced_it_refuses(auth_
     refused = await undo(auth_client, created.headers["x-change-batch"])
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == DEPENDENT_REFUSAL
+
+
+# ── transactions ─────────────────────────────────────────────────────────────────────
+
+
+async def test_a_transaction_on_a_new_label_logs_the_label_before_the_row(auth_client, db):
+    security_id = await stock(db)
+    first = await auth_client.post(
+        TRANSACTIONS, json=buy(security_id, "RH Joint Taxable", txn_date="2026-09-02")
+    )
+    assert first.status_code == 201, first.text
+    first_batch = first.headers["x-change-batch"]
+    rows = await logged(db, first_batch)
+    assert shape(rows) == [("insert", "portfolio_accounts"), ("insert", "position_transactions")]
+    assert {row.label for row in rows} == {"Added NVDA buy of Sep 2, 2026"}
+    assert rows[0].after["label"] == "RH Joint Taxable"
+    assert rows[1].after["portfolio_account_id"] == rows[0].after["id"]
+    # A label that already exists mints nothing: only the row is logged.
+    second = await auth_client.post(TRANSACTIONS, json=buy(security_id, "RH Joint Taxable"))
+    assert second.status_code == 201, second.text
+    second_batch = second.headers["x-change-batch"]
+    [row] = await logged(db, second_batch)
+    assert (row.table_name, row.label) == ("position_transactions", "Added NVDA buy (undated)")
+    # While the second row files under the label, undoing the first cannot take the label away.
+    refused = await undo(auth_client, first_batch)
+    assert refused.status_code == 409 and refused.json()["detail"] == DEPENDENT_REFUSAL
+    await db.rollback()
+    assert (await undo(auth_client, second_batch)).status_code == 200
+    assert (await undo(auth_client, first_batch)).status_code == 200
+    assert await images(db, PositionTransaction) == []
+    assert await images(db, PortfolioAccount) == []  # the label the first write minted went too
+
+
+async def test_moving_a_transaction_to_a_new_label_images_its_new_account_id(auth_client, db):
+    security_id = await stock(db)
+    created = await auth_client.post(
+        TRANSACTIONS, json=buy(security_id, "RH Taxable", txn_date="2026-09-02")
+    )
+    assert created.status_code == 201, created.text
+    txn_id = created.json()["id"]
+    [label_row, _] = await logged(db, created.headers["x-change-batch"])
+    path = f"{TRANSACTIONS}/{txn_id}"
+    edited = await auth_client.patch(path, json={"account": "Fidelity Taxable", "price": "121"})
+    assert edited.status_code == 200, edited.text
+    edit_batch = edited.headers["x-change-batch"]
+    rows = await logged(db, edit_batch)
+    assert shape(rows) == [("insert", "portfolio_accounts"), ("update", "position_transactions")]
+    assert {row.label for row in rows} == {"Edited NVDA buy of Sep 2, 2026"}
+    # The relationship moves the FK only at a flush — the image was taken after one.
+    assert rows[1].before["portfolio_account_id"] == label_row.after["id"]
+    assert rows[1].after["portfolio_account_id"] == rows[0].after["id"]
+    assert (rows[1].before["price"], rows[1].after["price"]) == ("120.5000", "121.0000")
+    unchanged = await auth_client.patch(path, json={"price": "121"})
+    assert unchanged.status_code == 200 and "x-change-batch" not in unchanged.headers
+    assert (await undo(auth_client, edit_batch)).status_code == 200
+    listed = (await auth_client.get(TRANSACTIONS)).json()
+    assert [(row["id"], row["account"], row["price"]) for row in listed] == [
+        (txn_id, "RH Taxable", "120.5000")
+    ]
+    labels = (await auth_client.get(f"{PORTFOLIO}/accounts")).json()
+    assert [row["label"] for row in labels] == ["RH Taxable"]  # the edit's new label went too
+
+
+async def test_deleting_a_transaction_and_undoing_it_restores_the_same_row(auth_client, db):
+    first, middle, last = await ledger(db)
+    before = await images(db, PositionTransaction)
+    deleted = await auth_client.delete(f"{TRANSACTIONS}/{middle}")
+    assert deleted.status_code == 204
+    batch_id = deleted.headers["x-change-batch"]
+    [row] = await logged(db, batch_id)
+    assert (row.op, row.table_name, row.label) == (
+        "delete",
+        "position_transactions",
+        "Deleted NVDA buy (undated)",
+    )
+    assert await replay(db) == [(first, 10), (last, 30)]
+    assert (await undo(auth_client, batch_id)).status_code == 200
+    # Same id, same sort_index: back in its place in the replay order, not at the ledger's end.
+    assert await images(db, PositionTransaction) == before
+    listed = (await auth_client.get(TRANSACTIONS)).json()
+    assert [row["id"] for row in listed] == [first, middle, last]
