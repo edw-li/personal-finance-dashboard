@@ -39,6 +39,7 @@ LOGGED: dict[str, set[str]] = {
         "update_offering",
         "delete_offering",
     },
+    "paycheck.py": {"create_profile", "update_profile", "delete_profile"},
     "net_worth.py": {
         "create_account",
         "update_account",
