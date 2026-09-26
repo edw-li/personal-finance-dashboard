@@ -330,6 +330,10 @@
    so the grid's columns still govern their cells. */
 .cal-grid {
   grid-template-columns: repeat(7, minmax(0, 1fr)) 84px;
+  /* Row 1 is the weekday header (2026-09-25 polish spec §3.4, PCC-04): sized to its labels. The auto
+     rows below still size the weeks — without this they sized the header too, a 76px row for 15px of
+     text that left a 65px band between the names and the first week. */
+  grid-template-rows: auto;
   grid-auto-rows: minmax(76px, auto);
 }
 
