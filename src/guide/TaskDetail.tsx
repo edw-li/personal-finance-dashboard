@@ -10,7 +10,23 @@ import type { GuideTask } from './types'
 // time. A tabpanel labelled by the rail row that selected it. On a task change it crossfades
 // (the LocalSectionPanel idiom: WAAPI so a re-render restarts it; skipped on first mount, under
 // reduced motion, and where animate() is missing — jsdom).
-export default function TaskDetail({ task, id }: { task: GuideTask; id: string }) {
+/** Where the selected task sits in its rail, and the way to its neighbours (2026-09-25 polish spec
+ *  §3.8). A numbered rail — a checklist read in order — says "Step N of M" and offers both ways; an
+ *  un-numbered one only Next. */
+export interface TaskStep {
+  /** 0-based position in the rail. */
+  index: number
+  count: number
+  numbered: boolean
+  previous: GuideTask | null
+  next: GuideTask | null
+  onGo: (task: GuideTask) => void
+}
+
+export default function TaskDetail({ task, id, step }: { task: GuideTask; id: string; step?: TaskStep }) {
+  // Only a numbered rail walks backwards; any rail walks forward while there is a next task.
+  const previous = step?.numbered ? step.previous : null
+  const next = step?.next ?? null
   const ref = useRef<HTMLDivElement>(null)
   const firstRef = useRef(true)
   useLayoutEffect(() => {
@@ -46,6 +62,28 @@ export default function TaskDetail({ task, id }: { task: GuideTask; id: string }
         <Link className="guide-go" to={task.to}>
           Go →
         </Link>
+      )}
+      {/* The foot (spec §3.8, SGS-20): the setup checklist had no Next and no sign of progress, so the
+          reader bounced between rail and detail. The buttons select the neighbouring rail row; the
+          card moves focus there with the selection. Named by the task they lead to. */}
+      {step !== undefined && (step.numbered || next !== null) && (
+        <div className="guide-detail-foot">
+          {step.numbered && (
+            <span className="guide-step-count">
+              Step {step.index + 1} of {step.count}
+            </span>
+          )}
+          {previous !== null && (
+            <button type="button" className="button" aria-label={`Previous: ${previous.title}`} onClick={() => step.onGo(previous)}>
+              ← Previous
+            </button>
+          )}
+          {next !== null && (
+            <button type="button" className="button" aria-label={`Next: ${next.title}`} onClick={() => step.onGo(next)}>
+              Next →
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
