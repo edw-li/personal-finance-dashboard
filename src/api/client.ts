@@ -201,6 +201,33 @@ export async function apiWithHeaders<T>(
   }
 }
 
+// The change batch a logged write recorded (2026-09-25 polish spec §6.1–6.2, contracts C1/C2): the
+// backend names it in this header and leaves the header off when the write recorded nothing. Read
+// lower-case — Headers are case-insensitive, and the house has always read it this way.
+const CHANGE_BATCH_HEADER = 'x-change-batch'
+
+/** A logged write's answer: its body and the change batch it recorded (null when nothing changed). */
+export interface Logged<T> {
+  data: T
+  batchId: string | null
+}
+
+/** apiWithHeaders + the X-Change-Batch header, lower-cased read (contract C2) — the one reader every
+ *  logged client goes through, so an absent or blank header can only ever mean "nothing to undo".
+ *  Same invalidation as api(): any non-GET drops the families its path can have moved. */
+export async function apiLogged<T>(path: string, options: RequestInit = {}): Promise<Logged<T>> {
+  const { data, headers } = await apiWithHeaders<T>(path, options)
+  const batch = headers.get(CHANGE_BATCH_HEADER)?.trim() ?? ''
+  return { data, batchId: batch === '' ? null : batch }
+}
+
+/** A logged DELETE (contract C2). A 204 has no body, so the answer is the batch alone — the id the
+ *  row's Undo toast hands to POST /activity/batches/{id}/undo, null when nothing was recorded. */
+export async function apiDeleteLogged(path: string): Promise<{ batchId: string | null }> {
+  const { batchId } = await apiLogged<void>(path, { method: 'DELETE' })
+  return { batchId }
+}
+
 async function request<T>(path: string, options: RequestInit): Promise<T> {
   return (await requestWithHeaders<T>(path, options)).data
 }

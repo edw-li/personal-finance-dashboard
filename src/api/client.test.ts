@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   api,
   ApiError,
+  apiDeleteLogged,
+  apiLogged,
   apiReadOnly,
   apiWithHeaders,
   describeError,
@@ -486,5 +488,62 @@ describe('the server day rides every response (2026-09-23 spec §K1)', () => {
     mockFetchOk({})
     await api('/anything')
     expect(getServerToday()).toBeNull()
+  })
+})
+
+describe('apiLogged — a logged write and the batch it recorded (2026-09-25 contract C2)', () => {
+  beforeEach(() => clearSnapshots())
+
+  /** fetch answers `status` with `body` and these response headers — a real Response, as a browser
+   *  hands one back. */
+  const respond = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(status === 204 ? null : JSON.stringify(body), { status, headers }),
+      ),
+    )
+
+  it('hands back the body and the batch the X-Change-Batch header names', async () => {
+    respond(200, { id: 4, kind: 'transfer' }, { 'X-Change-Batch': 'b-1' })
+    expect(await apiLogged('/spending/categories/4', { method: 'PATCH', body: '{}' })).toEqual({
+      data: { id: 4, kind: 'transfer' },
+      batchId: 'b-1',
+    })
+  })
+
+  it('reads the header in any case, and answers null when it is absent or blank', async () => {
+    respond(200, {}, { 'x-change-batch': 'b-2' })
+    expect((await apiLogged('/spending/categories/4', { method: 'PATCH' })).batchId).toBe('b-2')
+    respond(200, {})
+    expect((await apiLogged('/spending/categories/4', { method: 'PATCH' })).batchId).toBeNull()
+    respond(200, {}, { 'X-Change-Batch': ' ' })
+    expect((await apiLogged('/spending/categories/4', { method: 'PATCH' })).batchId).toBeNull()
+  })
+
+  it('tolerates an old fetch stub with no headers at all: no batch, so no Undo', async () => {
+    mockFetchOk({ ok: true })
+    expect(await apiLogged('/things', { method: 'PUT' })).toEqual({ data: { ok: true }, batchId: null })
+  })
+
+  it("invalidates like api(): the families a mutation's path can have moved go, on a failure too", async () => {
+    setSnapshot('portfolio:all', 1)
+    setSnapshot('taxes:years', 1)
+    respond(204, null, { 'X-Change-Batch': 'b-3' })
+    await apiLogged('/portfolio/securities/3', { method: 'DELETE' })
+    expect(getSnapshot('portfolio:all')).toBeUndefined()
+    expect(getSnapshot('taxes:years')).toBe(1)
+    setSnapshot('portfolio:all', 1)
+    mockFetchFailure(500, { detail: 'boom' })
+    await expect(apiLogged('/portfolio/securities/3', { method: 'DELETE' })).rejects.toBeInstanceOf(ApiError)
+    expect(getSnapshot('portfolio:all')).toBeUndefined()
+  })
+
+  it('apiDeleteLogged DELETEs the path and answers the batch alone — a 204 has no body', async () => {
+    respond(204, null, { 'X-Change-Batch': 'b-4' })
+    expect(await apiDeleteLogged('/comp/events/3')).toEqual({ batchId: 'b-4' })
+    const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/comp/events/3')
+    expect(init.method).toBe('DELETE')
   })
 })
