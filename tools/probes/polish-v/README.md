@@ -46,6 +46,8 @@ node tools/probes/polish-v/smoke.mjs
 
 `EXPECT_HEAD` must be an ancestor of the worktree, cannot be the wave-1 baseline, and is recorded separately from the probe commit. A final run requires a source manifest less than48hours old. The coordinator must first clear the heavy test gate and all writable browser flows so CPU/memory pressure and mutations do not distort CLS. Each browser/context closes in `finally`.
 
+The harness tracks each complete asynchronous route callback, including fulfillment and error logging. Closing a case first waits for a fresh 750ms quiet interval, then closes the context and drains canceled callbacks before returning a cloned log snapshot. A bounded drain timeout fails the case. This prevents late callbacks from changing a previously green verdict; it does not suppress request failures. Run `node tools/probes/polish-v/route-drain.check.mjs` for the four bounded lifecycle checks (pending fulfillment, lazy request, rejection/snapshot isolation and timeout). The check file deliberately does not join the product Vitest suite.
+
 Filters are comma lists and reject misspellings:
 
 - `ONLY_GROUP`: `sidebar,pairs,layout,walk,months,evidence`.
@@ -55,6 +57,8 @@ Filters are comma lists and reject misspellings:
 - `PREPARE=1`: a clearly marked instrument smoke; never a final acceptance result.
 
 Exit2 means refused preflight/arguments; exit1 means failed checks, driver error or zero coverage; exit0 means the requested checks passed. `completeMatrix` can become true only for an unfiltered final run with every check passing. `fullAcceptance` deliberately remains false: fresh integrated mutation reports and the merged-main code gates must also be reviewed in the plan's final as-built. A filtered rerun supplements the retained full report; it never erases its failed observations.
+
+For an affected-route supplement, retain the finished full report unchanged and use a new output directory with explicit `ONLY_GROUP=walk` and exact `ONLY_ROUTE` names. The filtered report remains incomplete by itself. Final acceptance additionally checks the authorized replacement ID set, unchanged baseline, repeated original assertions, serialized post-close logs, and effective 500-case /450-CLS /760-month coverage. The final run's independent validators and their hashed results are attributed in the plan; they are not a blanket allowance for earlier failures.
 
 ## Mutation evidence and fresh runs
 
