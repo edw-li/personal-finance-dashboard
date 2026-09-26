@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.models import (
+    CategoryBudget,
+    MonthlyCashflow,
+    MonthlySpending,
+    RewardCategory,
+    SpendingCategory,
+)
 from app.schemas.ordering import OrderIn
 from app.schemas.projection import DerivedWindowOut
 from app.schemas.spending import (
@@ -106,6 +112,7 @@ async def reorder_categories(
 @router.post("/categories", response_model=CategoryOut, status_code=201)
 async def create_category(
     body: CategoryCreate,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> SpendingCategory:
@@ -142,7 +149,7 @@ async def create_category(
     await db.flush()
     batch.record_insert(category)
     batch.label = f"Created category {category.name}"
-    await batch.commit()
+    response.headers.update(batch_header(await batch.commit()))
     return category
 
 
@@ -157,6 +164,7 @@ async def _get_category(db: AsyncSession, category_id: int) -> SpendingCategory:
 async def update_category(
     category_id: int,
     body: CategoryUpdate,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> SpendingCategory:
@@ -194,7 +202,7 @@ async def update_category(
         setattr(category, field, value)
     batch.record_update(category, before)
     batch.label = f"Updated category {category.name}"
-    await batch.commit()
+    response.headers.update(batch_header(await batch.commit()))
     return category
 
 
@@ -204,6 +212,11 @@ async def delete_category(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Response:
+    """Refused while monthly rows exist (deactivate instead). Otherwise what points at the
+    category goes first — reward categories' links nulled, the budget history deleted — each
+    imaged through the ORM rather than left to the FKs' ON DELETE, then the category LAST, so
+    an Undo (which replays in reverse) brings the category back first and then everything
+    that hung off it, ids included (2026-09-25 polish spec §6.1)."""
     category = await _get_category(db, category_id)
     row_count = (
         await db.execute(
@@ -217,11 +230,28 @@ async def delete_category(
             status_code=409,
             detail=f"category has {row_count} monthly rows — deactivate it instead",
         )
+    links = (
+        await db.execute(
+            select(RewardCategory)
+            .where(RewardCategory.spending_category_id == category_id)
+            .order_by(RewardCategory.id)
+        )
+    ).scalars()
+    for link in links:
+        before = row_image(link)
+        link.spending_category_id = None
+        batch.record_update(link, before)
+    for budget in await _budget_history(db, category_id):
+        batch.record_delete(budget, month=budget.effective_month)
+        await db.delete(budget)
+    # Out before the category's own DELETE: no relationship() orders these mappers, and the
+    # unit of work would otherwise be free to delete the category first.
+    await db.flush()
     batch.record_delete(category)
     batch.label = f"Deleted category {category.name}"
     await db.delete(category)
-    await batch.commit()
-    return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 # --- category budgets ---
@@ -262,6 +292,7 @@ async def _get_budget_row(
 async def put_category_budget(
     category_id: int,
     body: BudgetPut,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> list[CategoryBudget]:
@@ -291,7 +322,7 @@ async def put_category_budget(
         existing.amount = amount
         batch.record_update(existing, before, month=body.effective_month)
     batch.label = f"Set {category.name} budget from {body.effective_month:%b %Y}"
-    await batch.commit()
+    response.headers.update(batch_header(await batch.commit()))
     return await _budget_history(db, category_id)
 
 

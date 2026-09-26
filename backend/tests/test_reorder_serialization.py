@@ -123,10 +123,16 @@ async def test_two_transaction_reorders_serialize_and_the_later_replay_order_win
     t1, t2, t3, t4 = (row.id for row in rows)
 
     async def swap_the_first_two(session):  # writes two rows
-        return await reorder_transactions(OrderIn(ids=[t2, t1, t3, t4]), None, session)
+        batch = ChangeBatch(session, actor="tab 1")
+        return await reorder_transactions(
+            OrderIn(ids=[t2, t1, t3, t4]), Response(), None, session, batch
+        )
 
     async def last_to_the_top(session):  # writes every row
-        return await reorder_transactions(OrderIn(ids=[t4, t1, t2, t3]), None, session)
+        batch = ChangeBatch(session, actor="tab 2")
+        return await reorder_transactions(
+            OrderIn(ids=[t4, t1, t2, t3]), Response(), None, session, batch
+        )
 
     _, answer = await race(engine, swap_the_first_two, last_to_the_top)
     # The replay order IS the cost basis: it must be exactly one request's, never a blend.

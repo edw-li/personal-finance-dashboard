@@ -231,7 +231,7 @@ async def apply_positions(
     # rows touches a handful of platforms. New labels land owned by the primary person;
     # a label the user re-tagged in Settings keeps its owner (resolve_portfolio_account).
     accounts = {
-        label: await resolve_portfolio_account(db, label)
+        label: (await resolve_portfolio_account(db, label))[0]
         for label in sorted({txn.account for txn in parsed.transactions})
     }
     incoming: list[tuple[ParsedTransaction, dict, _Trade]] = []

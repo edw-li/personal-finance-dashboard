@@ -11,6 +11,7 @@ GET-never-rejects: every degradable source degrades inside the loaders or compos
 nothing stored can 500 this."""
 
 import hashlib
+import logging
 import secrets
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -69,13 +70,17 @@ from app.services.calendar.generators.taxes import TaxFacts
 from app.services.calendar.ics import render
 from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
+from app.services.changelog import ChangeBatch, batch_header, change_batch, pk_of, row_image
 from app.services.coverage import load_coverage
+from app.services.day_labels import long_day
 from app.services.espp_calc import OfferingInfo, StoredPeriod
 from app.services.living_estimate import living_estimates
 from app.services.money import MONEY_MAX_ABS_12_2, quantize_money
 from app.services.paycheck_calc import breakdown, half_up2
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/calendar", tags=["calendar"], dependencies=[Depends(get_current_user)])
 
@@ -414,10 +419,14 @@ async def _custom_rows(db: AsyncSession, window: Window, names: dict[int, str]) 
 
 
 async def _load_sources(
-    db: AsyncSession, window: Window, today: date
+    db: AsyncSession, window: Window, today: date, *, priced: bool = True
 ) -> tuple[Sources, list[SourceHealthOut], datetime | None]:
     """Every generator input as plain values, plus the health footer and the quote stamp.
-    Health rows come out in SOURCE_FAMILIES order — `card` between tax and ritual."""
+    Health rows come out in SOURCE_FAMILIES order — `card` between tax and ritual.
+
+    `priced=False` skips the withholding tracker, the costliest loader: it prices the tax
+    deadlines and never names one ("Tax deadline — {which}" is fixed words), so the override
+    labels (`_event_name`) load without it — and without its health row."""
     health: list[SourceHealthOut] = []
     # ONE roster read for these loaders: the payday owners and the custom-event person
     # stamps are the same people, and two reads are two chances to disagree. (`_tax_facts`
@@ -508,8 +517,10 @@ async def _load_sources(
     payday_sources, payroll_health = await _payday_sources(db, today, people)
     health.append(payroll_health)
 
-    tax_facts, tax_health = await _tax_facts(db, window, today)
-    health.append(tax_health)
+    tax_facts: dict[int, TaxFacts] = {}
+    if priced:
+        tax_facts, tax_health = await _tax_facts(db, window, today)
+        health.append(tax_health)
     cards, card_health = await _card_facts(db)
     health.append(card_health)
 
@@ -555,11 +566,12 @@ async def _overrides(db: AsyncSession) -> dict[str, Override]:
 
 
 async def _compose_for(
-    db: AsyncSession, start: date, end: date, today: date
+    db: AsyncSession, start: date, end: date, today: date, *, priced: bool = True
 ) -> tuple[list[Event], list[SourceHealthOut], datetime | None]:
-    """Shared by GET /calendar and Lane B's ICS routes: load, compose, overlay."""
+    """Shared by GET /calendar and Lane B's ICS routes: load, compose, overlay. `priced=False`
+    is the override labels' path (`_load_sources` says what it skips)."""
     window = Window(start, end)
-    sources, health, quoted_at = await _load_sources(db, window, today)
+    sources, health, quoted_at = await _load_sources(db, window, today, priced=priced)
     events = compose(window, today=today, sources=sources, overrides=await _overrides(db))
     return events, health, quoted_at
 
@@ -675,7 +687,10 @@ def _validated_amount(value: Decimal | None) -> Decimal | None:
 
 @router.post("/events", response_model=CustomEventOut, status_code=201)
 async def create_custom_event(
-    body: CustomEventIn, db: AsyncSession = Depends(get_db)
+    body: CustomEventIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CustomEventOut:
     row = CustomEvent(
         event_date=body.date,
@@ -688,34 +703,55 @@ async def create_custom_event(
         until=body.until,
     )
     db.add(row)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(row)
+    batch.label = f"Added calendar event {row.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return _custom_out(row)
 
 
 @router.patch("/events/{event_id}", response_model=CustomEventOut)
 async def update_custom_event(
-    event_id: int, body: CustomEventIn, db: AsyncSession = Depends(get_db)
+    event_id: int,
+    body: CustomEventIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CustomEventOut:
     """Full replace — the form always submits every field. Whole-series edits only: a
     recurring row is one row, so this moves every occurrence at once (spec §2)."""
     row = await _get_custom_event(db, event_id)
-    row.person_id = await _validated_person_id(db, body.person_id)
+    person_id = await _validated_person_id(db, body.person_id)
+    amount = _validated_amount(body.amount)
+    before = row_image(row)
+    row.person_id = person_id
     row.event_date = body.date
     row.label = body.label
     row.detail = body.detail
-    row.amount = _validated_amount(body.amount)
+    row.amount = amount
     row.direction = body.direction
     row.recurrence = body.recurrence
     row.until = body.until
-    await db.commit()
+    batch.record_update(row, before)
+    batch.label = f"Edited calendar event {row.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return _custom_out(row)
 
 
 @router.delete("/events/{event_id}", status_code=204)
-async def delete_custom_event(event_id: int, db: AsyncSession = Depends(get_db)) -> Response:
-    await db.delete(await _get_custom_event(db, event_id))
-    await db.commit()
-    return Response(status_code=204)
+async def delete_custom_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Imaged, so an Undo brings the row back under its id — and any override keyed
+    `custom:<id>:<date>`, which this leaves standing, matches it again."""
+    row = await _get_custom_event(db, event_id)
+    batch.record_delete(row)
+    batch.label = f"Deleted calendar event {row.label}"
+    await db.delete(row)
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 # --- 4. overrides: the user's edits on generated events (spec §13) ----------------------
@@ -736,15 +772,81 @@ def _override_out(row: CalendarEventOverride) -> OverrideOut:
     )
 
 
+async def _event_name(db: AsyncSession, key: str) -> str:
+    """How an Activity label names the event an override sits on: the calendar's own label and
+    the day in its key — "Payday of Sep 15, 2026". Composed for that day as GET /calendar would,
+    minus the tax pricing, which names nothing (`priced=False`); the overdue monthly reminder
+    sits on today while its key keeps the nominal day, so a ritual key's window runs on to today.
+    A key no event carries (or a day no calendar has — KEY_RE admits 2026-02-30) is named by the
+    key itself. The label is the only reason an override route composes anything, so callers ask
+    only once the write has recorded a row.
+
+    A label is a nicety and must never cost the write it describes. The compose runs inside a
+    SAVEPOINT, so a loader's database error cannot abort the write's transaction; and any
+    failure at all — a loader that raises, a year the generators cannot step past (KEY_RE
+    admits 0001 and 9999) — names the event by its key, with a warning in the log."""
+    by_key = f"calendar event {key}"
+    source, _ref, day_text = key.split(":")
+    try:
+        day = date.fromisoformat(day_text)
+    except ValueError:
+        return by_key
+    today = clock.product_today()
+    end = max(day, today) if source == "ritual" else day
+    if (end - day).days > MAX_SPAN_DAYS:
+        return by_key
+    try:
+        async with db.begin_nested():
+            events, _health, _quoted_at = await _compose_for(db, day, end, today, priced=False)
+    except Exception:
+        logger.warning(
+            "could not name calendar event %s; labelling it by its key", key, exc_info=True
+        )
+        return by_key
+    for event in events:
+        if event.key == key:
+            return f"{event.label} of {long_day(day)}"
+    return by_key
+
+
+# The overlay a first PUT is judged against: what "no override row" means.
+_NO_OVERRIDE: dict[str, object] = {"done_at": None, "hidden": False, "note": None, "amount": None}
+
+
+def _override_label(before: dict[str, object] | None, after: dict[str, object], name: str) -> str:
+    """The Activity sentence for one override write, read off its images: the drawer sends one
+    verb at a time (Mark done, Hide, "Your figure" — which carries its note — and "Use the
+    estimate"), so one change names its verb; several at once read as an edit."""
+    was = before or _NO_OVERRIDE
+    verbs: list[str] = []
+    if (was["done_at"] is None) != (after["done_at"] is None):
+        verbs.append(f"Marked {name} done" if after["done_at"] is not None else f"Reopened {name}")
+    if was["hidden"] != after["hidden"]:
+        verbs.append(f"Hid {name}" if after["hidden"] else f"Unhid {name}")
+    if was["amount"] != after["amount"]:
+        verbs.append(
+            f"Set your figure for {name}"
+            if after["amount"] is not None
+            else f"Cleared your figure for {name}"
+        )
+    if not verbs and was["note"] != after["note"]:
+        verbs.append(f"Edited the note on {name}")
+    return verbs[0] if len(verbs) == 1 else f"Edited {name}"
+
+
 @router.put("/overrides/{key}", response_model=OverrideOut)
 async def put_override(
     body: OverrideIn,
+    response: Response,
     key: str = Path(pattern=KEY_PATTERN, max_length=120),
     db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> OverrideOut:
-    """Upsert, full replace (the house law): a PUT without an amount clears the figure."""
+    """Upsert, full replace (the house law): a PUT without an amount clears the figure.
+    Logged as the one row's insert or update, so its Undo puts the overlay back as it was."""
     amount = _validated_amount(body.amount)
     row = await _find_override(db, key)
+    before = None if row is None else row_image(row)
     if row is None:
         row = CalendarEventOverride(event_key=key)
         db.add(row)
@@ -757,20 +859,37 @@ async def put_override(
     row.hidden = body.hidden
     row.note = body.note
     row.amount = amount
-    await db.commit()
+    await db.flush()
+    # updated_at is the server's (a default on insert, onupdate on update): the flush leaves
+    # it expired and an async lazy load would raise, so read the row back before imaging it.
+    await db.refresh(row)
+    after = row_image(row)
+    if before is None:
+        batch.record_insert(row)
+    else:
+        batch.record_update(row, before)
+    if batch.rows:  # a PUT that changed nothing records nothing, and composes nothing to name it
+        batch.label = _override_label(before, after, await _event_name(db, key))
+    response.headers.update(batch_header(await batch.commit()))
     return _override_out(row)
 
 
 @router.delete("/overrides/{key}", status_code=204)
 async def delete_override(
-    key: str = Path(pattern=KEY_PATTERN, max_length=120), db: AsyncSession = Depends(get_db)
+    key: str = Path(pattern=KEY_PATTERN, max_length=120),
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> Response:
+    """No client calls this today (the drawer PUTs a cleared overlay instead); logged all the
+    same, so every write in the router answers to an Undo."""
     row = await _find_override(db, key)
     if row is None:
         raise HTTPException(status_code=404, detail="override not found")
+    batch.label = f"Cleared your edits on {await _event_name(db, key)}"
+    batch.record_delete(row)
     await db.delete(row)
-    await db.commit()
-    return Response(status_code=204)
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 # --- 5. ICS: the download, the token feed, the tokens (spec §11) — Lane B --------------
@@ -882,14 +1001,25 @@ async def list_feed_tokens(
 
 @router.post("/feed-tokens", response_model=FeedTokenCreated, status_code=201)
 async def create_feed_token(
-    body: FeedTokenIn, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    body: FeedTokenIn,
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> FeedTokenCreated:
-    """Mint, store the hash, hand back the plaintext ONCE."""
+    """Mint, store the hash, hand back the plaintext ONCE. Logged, so an Undo can take a new
+    link back — deleting the row is always safe. The image leaves the hash out: an Undo of that
+    Undo then has no credential to put back and refuses, so no chain of Undos can revive a link
+    (the reason revoke_feed_token is exempt)."""
     plaintext = secrets.token_urlsafe(32)
     row = CalendarFeedToken(user_id=user.id, token_hash=_hash_token(plaintext), label=body.label)
     db.add(row)
-    await db.commit()
+    await db.flush()
     await db.refresh(row)  # created_at is a server default
+    image = {column: value for column, value in row_image(row).items() if column != "token_hash"}
+    batch.record(row.__tablename__, pk_of(row), None, image)
+    batch.label = f"Created calendar feed link {row.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return FeedTokenCreated(
         id=row.id, label=row.label, created_at=row.created_at, last_used_at=None, token=plaintext
     )
