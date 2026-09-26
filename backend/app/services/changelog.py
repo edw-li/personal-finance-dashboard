@@ -275,10 +275,13 @@ async def undo_links(db: AsyncSession) -> dict[UUID, UUID]:
 
 def stands(batch_id: UUID, links: dict[UUID, UUID]) -> bool:
     """Whether the batch's effect is in the data: an even number of Undos above it in its chain
-    — none, or an Undo that was itself undone (a redo), and so on. `links` is undo_links."""
+    — none, or an Undo that was itself undone (a redo), and so on. `links` is undo_links. A loop
+    in the links — only corrupted report JSON can close one — ends the walk at the first batch
+    it meets again, so no request can hang on it."""
+    seen = {batch_id}
     undos = 0
-    while batch_id in links:
-        batch_id = links[batch_id]
+    while (batch_id := links.get(batch_id)) is not None and batch_id not in seen:
+        seen.add(batch_id)
         undos += 1
     return undos % 2 == 0
 

@@ -4,8 +4,13 @@ undoable again. Undos chain (an Undo of an Undo is a redo) and count by parity; 
 target is OLDER than the batch being undone is an ordinary later change. The Activity listing's
 `undoable` flag and the Undo's own refusal read the same predicate (changelog.superseded)."""
 
-from app.models import SpendingCategory
-from app.services.changelog import OVERLAP_REFUSAL
+import threading
+from datetime import date
+from uuid import uuid4
+
+from app.models import ChangeLog, LifecycleRun, SpendingCategory
+from app.services.changelog import OVERLAP_REFUSAL, stands
+from app.services.month_status import load_spending_evidence
 from tests.exact_undo import batch_id_of, images, undo
 from tests.ordering_helpers import recorded_sql
 
@@ -135,3 +140,53 @@ async def test_the_undo_runs_are_read_once_per_request(auth_client, db):
     with recorded_sql(db) as statements:
         await undone(auth_client, edit)
     assert sum(UNDO_LINKS_READ in sql for sql, _ in statements) == 1
+
+
+def test_a_loop_in_the_undo_links_ends_the_walk():
+    """Only corrupted report JSON can close a loop in the chains — a run claiming its own batch,
+    or two runs claiming each other's — but a walk that followed one would never end. On a
+    thread, so a walk that does not end fails the test instead of hanging the run."""
+    a, b = uuid4(), uuid4()
+    walked: list[bool] = []
+
+    def walk() -> None:
+        walked.append(stands(a, {a: a}))
+        walked.append(stands(a, {a: b, b: a}))
+
+    walker = threading.Thread(target=walk, daemon=True)
+    walker.start()
+    walker.join(timeout=5)
+    assert len(walked) == 2, "the walk never ended"
+
+
+async def test_looping_undo_reports_cannot_hang_a_request(auth_client, db):
+    """Both readers of the chains walk them through changelog.stands — the Activity listing
+    (superseded) and the month-status evidence — so both still answer over a loop."""
+    older, later, loop = uuid4(), uuid4(), uuid4()
+    for batch_id, amount in ((older, "100.00"), (later, "150.00")):
+        db.add(
+            ChangeLog(
+                batch_id=batch_id,
+                source="ui",
+                actor="me@example.com",
+                label=f"Saved Sep 2026 spending — {amount}",
+                table_name="monthly_spending",
+                pk={"id": 1},
+                op="update",
+                before={"amount": "50.00"},
+                after={"amount": amount},
+                month=date(2026, 9, 1),
+            )
+        )
+        await db.flush()  # the later batch's entry after the older one's
+    db.add_all(
+        [
+            LifecycleRun(kind="undo", ok=True, batch_id=loop, report={"undid": str(later)}),
+            LifecycleRun(kind="undo", ok=True, batch_id=later, report={"undid": str(loop)}),
+        ]
+    )
+    await db.commit()
+    listed = await auth_client.get(ACTIVITY)
+    assert listed.status_code == 200, listed.text
+    evidence = await load_spending_evidence(db, [date(2026, 9, 1)])
+    assert evidence.written == frozenset({date(2026, 9, 1)})
