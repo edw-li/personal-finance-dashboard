@@ -193,10 +193,14 @@ async function layoutGroup(options) {
     assertTaxColumns(tax, 'dock closed')
     await page.getByRole('tab', { name: 'Summary', exact: true }).click(); await settle(page, 250)
     const dockOpened = await openDock(page)
-    check(id, 'Tax table dock/narrow case exercised', dockOpened, { dockOpened })
-    if (dockOpened) {
+    check(id, 'Tax details use the supported dock or narrow-screen overlay mode', dockOpened && dockOpened.mode === dockOpened.expectedMode, dockOpened)
+    if (dockOpened?.mode === 'dock') {
       await page.getByRole('tab', { name: 'Tax tables', exact: true }).click(); await settle(page, 250)
       assertTaxColumns(await measure.taxColumns(page), 'dock open')
+    } else if (dockOpened) {
+      // At1280 the documented 720px main +210px sidebar +360px dock cannot fit.
+      // The modal overlay must be closed before interacting with the underlying tabs.
+      await page.getByRole('button', { name: 'Close details', exact: true }).click()
     }
     await visit(page, '/portfolio?section=allocation')
     const allocation = []
@@ -289,7 +293,7 @@ async function walkGroup(options) {
     if (name.startsWith('tax-whatif')) check(id, 'Computed What-if result tiles are present', await page.locator('.whatif-result .kpi-row .stat-tile').count() >= (name === 'tax-whatif-sale' ? 4 : 3), { requested: url, tiles: await page.locator('.whatif-result .kpi-row .stat-tile').count() })
     if (rows.some(row => row.tiles.length === 5)) {
       const opened = await openDock(page)
-      check(id, 'Five-tile row dock interaction is exercised', opened, { opened })
+      check(id, 'Five-tile row uses its supported dock or narrow-screen overlay mode', opened && opened.mode === opened.expectedMode, opened)
       if (opened) assertTiles(id + '-dock', await tileRows(page))
     }
     if (options.width === 1440 || options.width === 1280 || report.checks.slice(-10).some(check => !check.ok)) await snap(page, id)

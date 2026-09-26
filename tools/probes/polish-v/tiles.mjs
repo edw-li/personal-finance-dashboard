@@ -116,13 +116,22 @@ export function judge(row) {
   })
 }
 
-/** Opens the detail dock from the first tile's metric button, if the row has one. */
+/** Open a real detail panel and request its supported dock mode. At <1290px the
+ * shell deliberately uses an overlay; ESPP's hint-only tiles use the Assistant panel. */
 export async function openDock(page) {
-  const btn = page.locator('.kpi-row .metric-info-button').first()
-  if ((await btn.count()) === 0) return false
+  const metric = page.locator('.kpi-row .metric-info-button').first()
+  const trigger = await metric.count() > 0 ? 'metric' : 'assistant'
+  const btn = trigger === 'metric' ? metric : page.getByRole('button', { name: 'Open assistant', exact: true })
+  if (await btn.count() === 0) return false
   await btn.click()
+  const panel = page.locator('.detail-panel:not(.is-leaving)')
+  await panel.waitFor({ state: 'visible' })
+  const dock = panel.getByRole('button', { name: 'Beside the page', exact: true })
+  const canDock = await dock.isEnabled()
+  if (canDock && await dock.getAttribute('aria-pressed') !== 'true') await dock.click()
   await sleep(700)
-  return true
+  const mode = await panel.evaluate(node => node.classList.contains('detail-panel-dock') ? 'dock' : node.classList.contains('detail-panel-overlay') ? 'overlay' : 'expanded')
+  return { opened: true, trigger, canDock, mode, expectedMode: page.viewportSize().width >= 1290 ? 'dock' : 'overlay' }
 }
 
 /** Holds every /api/ answer for `ms` so the skeleton shows (a later route runs first; fallback
