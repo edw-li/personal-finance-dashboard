@@ -36,7 +36,22 @@ function Editor({ margin }: { margin?: string }) {
 }
 
 describe('revealEditor', () => {
-  it('scrolls the form to its nearest edge, smoothly, then focuses and selects its first field', () => {
+  it('focuses a native date field before requesting its scroll, so focus cannot cancel the reveal', () => {
+    render(<form data-testid="date-form"><input type="date" aria-label="Effective date" defaultValue="2026-09-25" /></form>)
+    const form = screen.getByTestId('date-form')
+    const date = screen.getByLabelText('Effective date') as HTMLInputElement
+    const focus = vi.spyOn(date, 'focus')
+    const select = vi.spyOn(date, 'select')
+    const scroll = vi.fn()
+    form.scrollIntoView = scroll
+    revealEditor(form)
+    expect(document.activeElement).toBe(date)
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+    expect(focus.mock.invocationCallOrder[0]).toBeLessThan(scroll.mock.invocationCallOrder[0])
+    expect(select.mock.invocationCallOrder[0]).toBeLessThan(scroll.mock.invocationCallOrder[0])
+  })
+
+  it('focuses and selects the first field, then scrolls its form smoothly to the nearest edge', () => {
     render(<Editor />)
     const form = screen.getByTestId('form')
     const scroll = vi.fn()

@@ -27,14 +27,21 @@ const ROW_MARGIN_PX = 4
 const unset = (margin: string | undefined) => margin === undefined || margin === '' || margin === '0px'
 
 /**
- * Bring an editor to the user: scroll `form` into view by the least travel (`block: 'nearest'`;
- * smooth, or instant under reduced motion), then focus its first field — or the `focusSelector`
- * match — with `preventScroll`, so the focus never fights the scroll, and select its text. A form that
+ * Bring an editor to the user: focus its first field or `focusSelector` match with `preventScroll`,
+ * select its text, then scroll `form` by the least travel (`block: 'nearest'`; smooth, or instant
+ * under reduced motion). A form that
  * states no scroll margin borrows the sticky-row band for the one call, so its top never lands under
  * the scope row.
  */
 export function revealEditor(form: HTMLElement | null, focusSelector?: string): void {
   if (form === null) return
+  const field = form.querySelector<HTMLElement>(focusSelector ?? FIELDS)
+  if (field !== null) {
+    // Edge's native date focus can cancel an already requested smooth scroll, even with
+    // preventScroll. Request the reveal last so the field clears the sticky scope row.
+    field.focus({ preventScroll: true })
+    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) field.select()
+  }
   const computed = getComputedStyle(form)
   const own = { top: form.style.scrollMarginTop, bottom: form.style.scrollMarginBottom }
   if (unset(computed.scrollMarginTop)) form.style.scrollMarginTop = FALLBACK_MARGIN_TOP
@@ -44,10 +51,6 @@ export function revealEditor(form: HTMLElement | null, focusSelector?: string): 
   form.scrollIntoView?.({ block: 'nearest', behavior: prefersReducedMotion() ? 'instant' : 'smooth' })
   form.style.scrollMarginTop = own.top
   form.style.scrollMarginBottom = own.bottom
-  const field = form.querySelector<HTMLElement>(focusSelector ?? FIELDS)
-  if (field === null) return
-  field.focus({ preventScroll: true })
-  if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) field.select()
 }
 
 /**
