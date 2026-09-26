@@ -2343,7 +2343,7 @@ describe('OverviewPage independent groups and preferences', () => {
     for (const key of [' ', 'ArrowDown', ' ']) fireEvent.keyDown(grip, { key })
     fireEvent.click(screen.getByRole('checkbox', { name: 'Living spending' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
-    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent?.trim()).toBe('Portfolio')
     expect(within(document.querySelector('.kpi-row') as HTMLElement).queryByText('Living spending')).toBeNull()
     expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
     const saved = getLocal('overview_layout')!
@@ -2351,7 +2351,7 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(saved.cards).not.toContain('money_flow')
     cleanup()
     renderPage()
-    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent?.trim()).toBe('Portfolio')
     expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
     fireEvent.click(screen.getByText('Customize'))
     // The popover lists the STORED order, and the hidden tile waits under its divider.
@@ -2368,7 +2368,7 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(document.querySelector('.kpi-row > :last-child')?.textContent).toContain('Living spending')
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
     expect(getLocal('overview_layout')).toEqual(DEFAULT_OVERVIEW_LAYOUT)
-    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe(HERO)
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent?.trim()).toBe(HERO)
     expect(await screen.findByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeTruthy()
   })
 
@@ -2427,7 +2427,7 @@ describe('OverviewPage independent groups and preferences', () => {
     grip.focus()
     for (const key of [' ', 'ArrowUp', 'Escape']) fireEvent.keyDown(grip, { key })
     expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
-    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe(HERO)
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent?.trim()).toBe(HERO)
     expect(getLocal('overview_layout')).toBeUndefined()
     fireEvent.keyDown(grip, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
@@ -2462,7 +2462,7 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(live()).toBe('Cancelled — the list changed.')
     expect(within(tiles).getByRole('button', { name: 'Reorder Net worth' }).getAttribute('aria-pressed')).toBeNull()
     expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
-    expect([...document.querySelectorAll('.kpi-row .stat-label')].map((label) => label.textContent)).toEqual([
+    expect([...document.querySelectorAll('.kpi-row .stat-label')].map((label) => label.textContent?.trim())).toEqual([
       `Estimated tax — ${CURRENT_YEAR} (est.)`,
       HERO,
       'Portfolio',

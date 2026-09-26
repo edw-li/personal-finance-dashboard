@@ -192,13 +192,11 @@
 
 /* Keep the info button beside the title text, including when a badge makes the words wrap. */
 .stat-label-text {
-  display: inline-flex;
-  align-items: baseline;
-  max-width: 100%;
   white-space: nowrap;
 }
 
-.stat-label-text > :is(button, .info-hint-wrap) { flex: none; }
+/* Keep the joining space and button together so the icon cannot wrap on its own. */
+.stat-label-info { white-space: nowrap; }
 
 /* A long title can use two lines beside a badge; the badge never drops beneath it. */
 .stat-header:has(.stat-badge) .stat-label {
@@ -206,14 +204,8 @@
 }
 
 .stat-header:has(.stat-badge) .stat-label-text {
-  display: block;
   white-space: normal;
   text-wrap: balance;
-}
-
-/* Let the title's next line use the full width instead of reserving an icon column. */
-.stat-header:has(.stat-badge) .stat-label-text > :is(button, .info-hint-wrap) {
-  float: right;
 }
 
 /* The evidence (i) never grows its label line: its 24px target is pulled back to its 13px glyph, as the
@@ -240,13 +232,14 @@
 
 /* Narrow headers keep long status wording within the top-right corner. Steady rows (and
    their ghosts) fit two title lines so changing the month cannot move the values. */
-@container stat-header (max-width: 260px) {
+@container stat-header (max-width: 20rem) {
   .stat-badge {
     max-width: 4.5rem;
     white-space: normal;
     text-align: center;
   }
   .kpi-row-steady .stat-label { min-height: 2rem; }
+  .kpi-row-steady .stat-label-text { white-space: normal; }
 }
 
 /* Line 2. The size container its figure scales against — the tile cannot be one (see .stat-tile), and

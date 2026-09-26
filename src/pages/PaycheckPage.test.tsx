@@ -1963,12 +1963,12 @@ describe('PaycheckPage — the Summary tile row (2026-09-25 polish spec §4.5)',
     await screen.findByText('Household take-home')
     const row = document.querySelector('.kpi-row.paycheck-tiles') as HTMLElement
     await waitFor(() =>
-      expect([...row.querySelectorAll('.stat-label-text')].map((label) => label.textContent)).toEqual([
+      expect([...row.querySelectorAll('.stat-label-text')].map((label) => label.textContent?.trim())).toEqual([
         'Household take-home', 'Monthly net', 'Net pay per check', 'Employer match per check',
       ]),
     )
     // The page's headline is the biggest figure (TPC-01): the household, not one person's net.
-    expect(row.querySelector('.stat-tile-hero .stat-label-text')?.textContent).toBe('Household take-home')
+    expect(row.querySelector('.stat-tile-hero .stat-label-text')?.textContent?.trim()).toBe('Household take-home')
     const monthly = screen.getByText('Monthly net').closest('.stat-tile') as HTMLElement
     expect(monthly.querySelector('.stat-delta')?.textContent).toBe('Me · 24 checks a year')
     expect(screen.getByText('Net pay per check').closest('.stat-tile')?.querySelector('.stat-delta')?.textContent).toBe('of $7,872 gross')
@@ -1981,7 +1981,7 @@ describe('PaycheckPage — the Summary tile row (2026-09-25 polish spec §4.5)',
     await netPayLanded()
     const row = document.querySelector('.kpi-row.paycheck-tiles') as HTMLElement
     expect(row.querySelectorAll('.stat-tile')).toHaveLength(3)
-    expect(row.querySelector('.stat-tile-hero .stat-label-text')?.textContent).toBe('Monthly net')
+    expect(row.querySelector('.stat-tile-hero .stat-label-text')?.textContent?.trim()).toBe('Monthly net')
     expect(screen.getByText('Monthly net').closest('.stat-tile')?.querySelector('.stat-delta')?.textContent).toBe('24 checks a year')
   })
 

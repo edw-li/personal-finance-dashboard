@@ -323,8 +323,15 @@ The user's live-preview amendments keep the complete email beside the 28px contr
 width, give Log out the red token, and place tile badges beside titles. The final footer passed 20 browser combinations
 and 43 focused tests. Tiles and their ghosts share three tracks; narrow steady headers accommodate two title lines,
 with no reserved badge row. The affected 50 tile/skeleton/CSS tests and app type check passed, as did targeted lint.
-The refined browser preparation passed 410 checks, including all 38 Net worth and 38 Spending months at both 1280 and
-1440. Per the user's explicit request to avoid heavyweight reruns for these cosmetic changes, validation uses focused
+An earlier browser preparation passed 410 checks, including all 38 Net worth and 38 Spending months at both 1280 and
+1440. Additional 1366/1536 checks caught an info icon wrapping alone and a header breakpoint ending too early.
+The final refinement keeps each joining space and info button together and extends the narrow-header rule to 20rem.
+All 60 old/current/provisional-month observations across five sizes and both themes then passed, with stable heights,
+top-right badges, icons beside their last title word, unchanged source and clean post-close logs. Both fallback hints
+also remained visible above the value and kept the header stable when evidence arrived. The final 50 component/CSS
+tests, 23 focused page-label compatibility tests, app type check and targeted lint passed; the type check and 23 page
+tests preceded only the additional inline wrapper. Independent static review found no remaining blocker.
+Per the user's explicit request to avoid heavyweight reruns for these cosmetic changes, validation uses focused
 checks plus the continuing full browser matrix; no new full-suite pass is claimed for the amended product.
 
 Gate logs and interrupted/failed attempts are preserved in ignored `scratchpad/codex-takeover-*` files. Lane V's

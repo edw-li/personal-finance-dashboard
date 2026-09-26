@@ -125,8 +125,13 @@ export default function StatTile({
         <div className="stat-label">
           <span className="stat-label-text">
             {label}
-            {hint !== undefined && evidence === undefined && <InfoHint text={hint} />}
-            {evidence !== undefined && <MetricInfoButton evidence={evidence} />}
+            {(hint !== undefined || evidence !== undefined) && (
+              <span className="stat-label-info">
+                {'\u00a0'}
+                {hint !== undefined && evidence === undefined && <InfoHint text={hint} />}
+                {evidence !== undefined && <MetricInfoButton evidence={evidence} />}
+              </span>
+            )}
           </span>
         </div>
         {badge !== undefined && <span className="stat-badge">{badge}</span>}

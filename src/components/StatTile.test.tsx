@@ -177,9 +177,8 @@ describe('StatTile hint', () => {
     const button = document.querySelector('.stat-label button.info-hint')
     expect(button).toBeTruthy()
     expect(button?.getAttribute('aria-label')).toBe(hintLabel(HINT))
-    // The label's own words survive untouched — the hint adds no text node, so every page
-    // test that queries the label by text keeps matching.
-    expect(document.querySelector('.stat-label')?.textContent).toBe('Net worth')
+    // The label's words stay in one text node; its nonbreaking space keeps the icon attached.
+    expect(document.querySelector('.stat-label')?.textContent?.trim()).toBe('Net worth')
     expect(screen.getByText('Net worth')).toBeTruthy()
   })
 
@@ -257,12 +256,12 @@ describe('StatTile badge and label unit', () => {
     expect(badge?.textContent).toBe('Not yet reviewed')
     // Keep the label's identity separate from its status, while sharing one header track.
     expect(document.querySelector('.stat-label .stat-badge')).toBeNull()
-    expect(document.querySelector('.stat-label')?.textContent).toBe('Living spending')
+    expect(document.querySelector('.stat-label')?.textContent?.trim()).toBe('Living spending')
     // Every page test that finds a tile by its label keeps working: the text is one node.
     expect(screen.getByText('Living spending')).toBeTruthy()
     // Text and its info affordance remain together in the label unit.
     const unit = document.querySelector('.stat-label-text') as HTMLElement
-    expect(unit.textContent).toBe('Living spending')
+    expect(unit.textContent?.trim()).toBe('Living spending')
     expect(unit.querySelector('button.info-hint')).toBeTruthy()
   })
 
@@ -277,7 +276,7 @@ describe('StatTile badge and label unit', () => {
     const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\s+/g, ' ')
-    expect(css).toMatch(/\.stat-label-text \{[^}]*display: inline-flex;[^}]*white-space: nowrap;/)
+    expect(css).toContain('.stat-label-text { white-space: nowrap; }')
     expect(css).toMatch(/\.stat-badge \{[^}]*background: var\(--fill\);[^}]*text-transform: none;/)
   })
 })

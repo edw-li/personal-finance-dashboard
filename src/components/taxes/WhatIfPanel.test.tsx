@@ -486,7 +486,7 @@ describe('WhatIfPanel', () => {
   // The kpi row's labels in order — the tile() helper finds one tile, this reads the row.
   const kpiLabels = () =>
     Array.from(document.querySelectorAll('.whatif-result .kpi-row .stat-label-text')).map(
-      (node) => node.textContent,
+      (node) => node.textContent?.trim(),
     )
 
   // The Feb 29 2024 lot's shape (2026-09-23 spec §W7): a $59.5K qualified sale read "Δ take-home

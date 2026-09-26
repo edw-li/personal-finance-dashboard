@@ -1070,7 +1070,7 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     expect(band.querySelectorAll('.stat-tile')).toHaveLength(5)
     // 2026-09-23 spec §R7: the "Reach FI within" tile went — its figure lives in the FI date
     // receipt and the compare table.
-    expect([...band.querySelectorAll('.stat-label-text')].map((label) => label.textContent)).toEqual([
+    expect([...band.querySelectorAll('.stat-label-text')].map((label) => label.textContent?.trim())).toEqual([
       'FI target', 'FI ratio', 'Investable balance', 'FI date', 'Money lasts',
     ])
   })
