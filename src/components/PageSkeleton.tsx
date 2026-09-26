@@ -8,12 +8,11 @@ import './panels.css'
 // resolving inside the delay window shows nothing at all.
 
 /** The modifier of the real row a ghost row stands in for (2026-09-25 polish spec §4.6). */
-export type TileRowVariant = 'five' | 'dense' | 'lone'
+export type TileRowVariant = 'five' | 'dense'
 
 const ROW_CLASS: Record<TileRowVariant, string> = {
   five: 'kpi-row-5',
   dense: 'kpi-row-dense',
-  lone: 'kpi-row-lone',
 }
 
 /** A ghost tile row described like the real one, so the two share every rule that lays them out —
@@ -22,7 +21,7 @@ export interface GhostRowSpec {
   count: number
   /** false: the delta-less tile, for rows whose real tiles carry no delta line (Credit cards). */
   delta?: boolean
-  /** The real row's five-tile or lone modifier. */
+  /** The real row's five-tile modifier (the calendar's, ESPP's, the Projection's; Portfolio's dense one). */
   row?: TileRowVariant
   /** The real row reserves its badge and delta lines (.kpi-row-steady). */
   steady?: boolean

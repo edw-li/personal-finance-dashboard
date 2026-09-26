@@ -86,7 +86,7 @@ describe('ghost parity (motion spec §7; 2026-09-25 polish spec §4.6)', () => {
     expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row kpi-row-steady')
   })
 
-  it('reserves a five-tile or lone KPI row on its own, with the SAME tile the page skeleton draws', () => {
+  it('reserves a five-tile or dense KPI row on its own, with the SAME tile the page skeleton draws', () => {
     // ESPP's strip ghosts its own row (no page-level skeleton above it): the row must be the strip's
     // five-tile row, or it wraps 4 + 1 and the strip lands 147px shorter (PE-09).
     render(<SkeletonTileRow tiles={5} row="five" label="Loading the ESPP headline…" />)
@@ -98,8 +98,8 @@ describe('ghost parity (motion spec §7; 2026-09-25 polish spec §4.6)', () => {
     // …and it rides the same delay every other ghost does, so a fast answer shows nothing.
     expect(document.querySelector('.loading-fallback')).not.toBeNull()
     cleanup()
-    render(<SkeletonTileRow row="lone" />)
-    expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row kpi-row-lone')
+    render(<SkeletonTileRow row="dense" />)
+    expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row kpi-row-dense')
     cleanup()
     render(<SkeletonTileRow tiles={3} />)
     expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row')

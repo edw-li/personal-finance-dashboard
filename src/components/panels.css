@@ -114,13 +114,6 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* A LONE tile in the auto-fit grid would stretch the full content column — single-tile
-   rows wear this modifier instead of each page keeping a private 320px copy
-   (2026-08-31 review round; retires .paycheck-page .kpi-row and .espp-limit-row). */
-.kpi-row-lone {
-  max-width: 320px;
-}
-
 /* Balanced rows (2026-09-13 polish §12; 2026-09-25 polish spec §4.2). Container queries on the page, not
    media queries: the dock is the thing that changes the width. A default row — four tiles or fewer —
    auto-fits, then goes two columns under 980px, where four read as 3 + 1. A FIVE-tile row (.kpi-row-5:

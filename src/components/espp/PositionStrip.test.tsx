@@ -43,7 +43,7 @@ describe('PositionStrip', () => {
     render(<PositionStrip lots={null} lotsBusy modeler={null} modelerBusy modelerDirty={false} />)
     expect(screen.getByRole('status').textContent).toBe(STRIP_LABEL)
     expect(ghosts().length).toBe(5)
-    expect(document.querySelector('.kpi-row-lone')).toBeNull()
+    expect(document.querySelector('.kpi-row')?.classList.contains('kpi-row-5')).toBe(true)
   })
 
   it('paints the four lot tiles and ghosts the $25k slot until the modeler lands', () => {
