@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import os from 'node:os'
+import { routeDrain } from './route-drain.mjs'
 
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 export function loopback(value, name) {
@@ -70,6 +71,7 @@ export async function open(browser, config, { theme, width, height, density = 'c
   const log = { consoleErrors: [], pageErrors: [], badResponses: [], requestFailures: [], dialogs: [], writesBlocked: [], writesAllowed: [], prefsWrites: [], retries: [] }
   const prefs = { theme: { value: theme }, density: { value: density } }
   const deleted = new Set()
+  const routes = routeDrain()
   await ctx.addInitScript(({ token, theme, density }) => {
     localStorage.setItem('finance_token', token)
     localStorage.setItem('finance.theme', theme)
@@ -98,7 +100,7 @@ export async function open(browser, config, { theme, width, height, density = 'c
     })
     observer.observe(document, { childList: true, subtree: true })
   })
-  await ctx.route(url => url.pathname.startsWith('/api/'), async route => {
+  const forward = async route => {
     const req = route.request(), url = new URL(req.url()), method = req.method()
     const target = config.apiBase + url.pathname + url.search
     const isPrefs = url.pathname === '/api/v1/prefs' || url.pathname.startsWith('/api/v1/prefs/')
@@ -111,12 +113,12 @@ export async function open(browser, config, { theme, width, height, density = 'c
         const response = await ctx.request.get(config.apiBase + '/api/v1/prefs', { headers: { authorization: `Bearer ${config.token}` } })
         const real = await response.json()
         for (const key of deleted) delete real.prefs[key]
-        return route.fulfill({ status: method === 'DELETE' ? 204 : 200, contentType: 'application/json', body: method === 'DELETE' ? '' : JSON.stringify({ ...real, prefs: { ...real.prefs, ...prefs } }) })
+        return await route.fulfill({ status: method === 'DELETE' ? 204 : 200, contentType: 'application/json', body: method === 'DELETE' ? '' : JSON.stringify({ ...real, prefs: { ...real.prefs, ...prefs } }) })
       }
       const allowed = ['GET', 'HEAD', 'OPTIONS'].includes(method) || (method === 'POST' && readPosts.some(re => re.test(url.pathname)))
       if (!allowed && !config.writable) {
         log.writesBlocked.push({ method, path: url.pathname })
-        return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Verification write fence: this is the read-only stack' }) })
+        return await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Verification write fence: this is the read-only stack' }) })
       }
       if (!allowed) log.writesAllowed.push({ method, path: url.pathname })
       let response
@@ -128,20 +130,30 @@ export async function open(browser, config, { theme, width, height, density = 'c
       if (isPrefs && method === 'GET') {
         const body = await response.json()
         for (const key of deleted) delete body.prefs[key]
-        return route.fulfill({ response, json: { ...body, prefs: { ...body.prefs, ...prefs } } })
+        return await route.fulfill({ response, json: { ...body, prefs: { ...body.prefs, ...prefs } } })
       }
-      return route.fulfill({ response })
+      return await route.fulfill({ response })
     } catch (error) {
       log.requestFailures.push({ method, path: url.pathname, message: String(error.message).split('\n')[0] })
       await route.abort().catch(() => {})
     }
-  })
+  }
+  await ctx.route(url => url.pathname.startsWith('/api/'), route => routes.run(`${route.request().method()} ${new URL(route.request().url()).pathname}`, () => forward(route)))
   const page = await ctx.newPage()
   page.on('console', message => { if (message.type() === 'error') log.consoleErrors.push(message.text().slice(0, 600)) })
   page.on('pageerror', error => log.pageErrors.push({ message: error.message, stack: error.stack }))
   page.on('dialog', dialog => { log.dialogs.push({ type: dialog.type(), message: dialog.message() }); void dialog.dismiss() })
   page.on('response', response => { if (response.status() >= 400) log.badResponses.push({ status: response.status(), path: new URL(response.url()).pathname }) })
-  return { ctx, page, log, close: () => ctx.close() }
+  return { ctx, page, log, close: async () => {
+    let failure
+    try { await routes.settle() } catch (error) { failure = error }
+    try { await ctx.close() } catch (error) { failure ??= error }
+    // Closing may cancel a callback on a timeout path. Its catch/log/abort must finish
+    // before the caller computes its verdict; do not suppress those errors.
+    try { await routes.settle({ quietMs: 50 }) } catch (error) { failure ??= error }
+    if (failure) throw failure
+    return structuredClone(log)
+  } }
 }
 
 export async function settle(page, extra = 500) {

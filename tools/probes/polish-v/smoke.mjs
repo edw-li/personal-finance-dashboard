@@ -76,8 +76,12 @@ async function runCase(group, options, action) {
       report.driverErrors.push({ caseId: id, message: `Final settlement: ${error.message}`, stack: error.stack })
       check(id, 'All browser requests settled before context teardown', false, error.message)
     }
-    await context.close()
-    const log = context.log
+    let log
+    try { log = await context.close() } catch (error) {
+      report.driverErrors.push({ caseId: id, message: `Context teardown: ${error.message}`, stack: error.stack })
+      check(id, 'Forwarded routes completed before the final log snapshot', false, error.message)
+      log = structuredClone(context.log)
+    }
     check(id, 'No console/page/network/native-dialog/fenced-write errors',
       ['consoleErrors', 'pageErrors', 'badResponses', 'requestFailures', 'dialogs', 'writesBlocked'].every(key => log[key].length === 0), log)
     report.cases.push({ id, ...options, checks: report.checks.length - startChecks, log })
