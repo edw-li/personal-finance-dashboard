@@ -18,6 +18,7 @@ import SelectionDetail from './details/SelectionDetail'
 import { usePageFrame } from './shell/PageFrame'
 import { inputSince } from './shell/holdPosition'
 import { useLocalSectionVisible } from './shell/localSectionContext'
+import { prefersReducedMotion } from './useReducedMotion'
 import './panels.css'
 
 // The one chart mount (chart spec §6): header · hint · controls · export row · states · chart ·
@@ -162,6 +163,22 @@ export default function ChartCard({
   }, [])
   const showTable = tableOpen && csv !== undefined && option !== null
   const table = showTable && csv ? csv() : null
+  // The Table twin opens where the reader is looking (2026-09-25 polish spec §5.5, MOTION-11): under a
+  // tall chart it opened below the fold and the click looked like it did nothing. Only the click that
+  // OPENS it scrolls — `nearest`, so a twin already on screen stays put — smoothly unless the reader
+  // asked for less motion. In the Expand dialog it scrolls the dialog, the twin's own scroller.
+  const revealTableRef = useRef(false)
+  const toggleTable = () => {
+    revealTableRef.current = !tableOpen
+    setTableOpen((open) => !open)
+  }
+  useEffect(() => {
+    if (!showTable || !revealTableRef.current) return
+    revealTableRef.current = false
+    cardRef.current
+      ?.querySelector<HTMLElement>('.chart-table')
+      ?.scrollIntoView?.({ block: 'nearest', behavior: prefersReducedMotion() ? 'instant' : 'smooth' })
+  }, [showTable])
   const dismissSelection = useCallback(() => {
     setPinned({ scope: selectionScopeKey, value: null })
     onSelectionChange?.(null)
@@ -289,7 +306,7 @@ export default function ChartCard({
             config={{ name: exportName, csv, title, caption }}
             getChart={() => chartRef.current}
             tableShown={showTable}
-            onToggleTable={csv === undefined ? undefined : () => setTableOpen((open) => !open)}
+            onToggleTable={csv === undefined ? undefined : toggleTable}
           />
           </div>
         )}

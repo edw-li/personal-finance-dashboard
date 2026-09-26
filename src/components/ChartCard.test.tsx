@@ -438,3 +438,45 @@ describe('ChartCard reserveControls (spec §3.1)', () => {
     expect(document.querySelector('.chart-card-controls')).toBeNull()
   })
 })
+
+// 2026-09-25 polish spec §5.5 (MOTION-11): "Table" opened the twin below the fold — 21px of it on
+// Net worth, none on Taxes — and the click looked like it did nothing. jsdom has no scrollIntoView,
+// so the prototype is stubbed (GuideCard.test's idiom).
+describe('ChartCard Table reveal (spec §5.5)', () => {
+  const csv = () => ({ headers: ['Month', 'Net worth'], rows: [['2026-08-01', '1500.00']] })
+  const original = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
+  let scrollIntoView: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    if (original) Object.defineProperty(Element.prototype, 'scrollIntoView', original)
+    else Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  })
+
+  it('brings the opened twin into view — nearest, smoothly — and does nothing on close', () => {
+    render(<ChartCard {...base} option={OPTION} csv={csv} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', behavior: 'smooth' })
+    expect(scrollIntoView.mock.instances[0]).toBe(document.querySelector('.chart-table'))
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+  })
+
+  it('lands at once for a reader who asked for less motion', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(<ChartCard {...base} option={OPTION} csv={csv} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', behavior: 'instant' })
+  })
+
+  it('does not scroll again when the card re-renders with the twin open', () => {
+    const { rerender } = render(<ChartCard {...base} option={OPTION} csv={csv} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    rerender(<ChartCard {...base} option={{ series: [] } as EChartsOption} csv={csv} />)
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+  })
+})
