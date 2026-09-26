@@ -248,10 +248,12 @@ async def lock_children[M](db: AsyncSession, statement: Select[tuple[M]]) -> lis
     return list((await db.execute(locked)).scalars().all())
 
 
-async def _undo_links(db: AsyncSession) -> dict[UUID, UUID]:
+async def undo_links(db: AsyncSession) -> dict[UUID, UUID]:
     """Every Undo that went through, as the batch it reversed -> its own batch, read from the
-    `undo` runs' reports. In run order, the first claim of a batch kept, so every reader walks
-    the same chains."""
+    `undo` runs' reports: whether a batch was undone, and every chain `stands` walks. It reads
+    every run, so a request reads it ONCE and hands the map to each question it asks (the
+    Activity listing, undo_batch, month_status). In run order, the first claim of a batch kept,
+    so every reader walks the same chains."""
     runs = (
         await db.execute(
             select(LifecycleRun.report, LifecycleRun.batch_id)
@@ -271,9 +273,9 @@ async def _undo_links(db: AsyncSession) -> dict[UUID, UUID]:
     return links
 
 
-def _stands(batch_id: UUID, links: dict[UUID, UUID]) -> bool:
+def stands(batch_id: UUID, links: dict[UUID, UUID]) -> bool:
     """Whether the batch's effect is in the data: an even number of Undos above it in its chain
-    — none, or an Undo that was itself undone (a redo), and so on."""
+    — none, or an Undo that was itself undone (a redo), and so on. `links` is undo_links."""
     undos = 0
     while batch_id in links:
         batch_id = links[batch_id]
@@ -281,8 +283,11 @@ def _stands(batch_id: UUID, links: dict[UUID, UUID]) -> bool:
     return undos % 2 == 0
 
 
-async def superseded(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, str]:
+async def superseded(
+    db: AsyncSession, batch_ids: list[UUID], links: dict[UUID, UUID]
+) -> dict[UUID, str]:
     """batch -> the 409 sentence a LATER log entry earns it, for each batch that has one.
+    `links` is undo_links, read once by the caller.
 
     Page-wide queries, never one per row, so `GET /activity`'s `undoable` flag and
     undo_batch's own refusals are decided by this one predicate and cannot drift apart:
@@ -352,17 +357,18 @@ async def superseded(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, str]
     later_changes: dict[UUID, set[UUID]] = {}
     for batch_id, later_id in pairs:
         later_changes.setdefault(batch_id, set()).add(later_id)
-    links = await _undo_links(db) if later_changes else {}
     undid = {undo_id: target for target, undo_id in links.items()}
-    stands = {
-        later_id: _stands(later_id, links)
+    standing = {
+        later_id: stands(later_id, links)
         for later_ids in later_changes.values()
         for later_id in later_ids
     }
     out: dict[UUID, str] = {
         batch_id: OVERLAP_REFUSAL
         for batch_id, later_ids in later_changes.items()
-        if any(stands[later_id] and undid.get(later_id) not in later_ids for later_id in later_ids)
+        if any(
+            standing[later_id] and undid.get(later_id) not in later_ids for later_id in later_ids
+        )
     }
     for batch_id, post_summary in (
         await db.execute(select(ends.c.batch_id, ends.c.post_summary))
@@ -370,14 +376,6 @@ async def superseded(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, str]
         if post_summary and batch_id not in out:
             out[batch_id] = POST_SUMMARY_REFUSAL
     return out
-
-
-async def undone_by(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, UUID]:
-    """batch -> the undo batch that reversed it, read from the `undo` runs' reports."""
-    if not batch_ids:
-        return {}
-    links = await _undo_links(db)
-    return {batch_id: links[batch_id] for batch_id in batch_ids if batch_id in links}
 
 
 async def _reinsert(db: AsyncSession, table: Table, rows: list[dict[str, object]]) -> None:
@@ -426,11 +424,12 @@ async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> 
         # undo eligibility, so an atomic month save cannot hold the parents while undo
         # holds their children, and any completed concurrent save is included in the guard.
         await lock_review_inputs(db)
-    if batch_id in await undone_by(db, [batch_id]):
+    links = await undo_links(db)
+    if batch_id in links:
         raise UndoRefused(409, ALREADY_UNDONE)
     # Same predicate the Activity listing greys the button with, so a visible Undo that the
     # POST then refuses can only mean the data moved between render and click.
-    stale = (await superseded(db, [batch_id])).get(batch_id)
+    stale = (await superseded(db, [batch_id], links)).get(batch_id)
     if stale is not None:
         raise UndoRefused(409, stale)
 

@@ -53,7 +53,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import AppSetting, ChangeLog
 from app.schemas.coverage import BalancesPartOut, FlowsPartOut, TimeStatusOut
 from app.services import clock
-from app.services.changelog import undone_by
+from app.services.changelog import stands, undo_links
 from app.services.month_review import ReviewBook, before_adoption, month_shift
 from app.services.snapshot_state import SnapshotState, current_and_previous, state_out
 
@@ -257,20 +257,14 @@ def _midnight(day: date) -> datetime:
 
 async def _undone(db: AsyncSession, batch_ids: Iterable[UUID]) -> set[UUID]:
     """The batches among `batch_ids` whose effect is undone now: an Undo reversed them and no
-    later Undo reversed that one. Follows changelog.undone_by link by link until it is stable
-    (review minor 2) — an even number of undos (none, or an Undo that was itself undone) leaves a
-    batch in force. One query per link; one in all when nothing was ever undone."""
-    tips = {batch_id: batch_id for batch_id in batch_ids}
-    undos = dict.fromkeys(tips, 0)
-    frontier = set(tips)
-    while frontier:
-        links = await undone_by(db, list(frontier))
-        for origin, tip in tips.items():
-            if tip in links:
-                tips[origin] = links[tip]
-                undos[origin] += 1
-        frontier = set(links.values())
-    return {origin for origin, count in undos.items() if count % 2}
+    later Undo reversed that one (review minor 2) — an even number of undos (none, or an Undo
+    that was itself undone) leaves a batch in force: changelog.stands, the Activity card's own
+    walk. One read of the undo runs (changelog.undo_links); none when there is nothing to ask."""
+    wanted = set(batch_ids)
+    if not wanted:
+        return set()
+    links = await undo_links(db)
+    return {batch_id for batch_id in wanted if not stands(batch_id, links)}
 
 
 def _newest(rows, undone: set[UUID]) -> dict[date, date]:
@@ -286,7 +280,7 @@ async def load_spending_evidence(db: AsyncSession, candidates: Sequence[date]) -
     """Clauses (b)-(d) for `candidates`, in ONE indexed query (spec §K3): the candidates' own
     row-level writes (the `month` index), plus import and restore summary lines from the
     earliest candidate's next 1st on (the `at` index). Undone batches come from
-    changelog.undone_by — a second, small query, only when a `ui` row could count."""
+    changelog.undo_links — a second, small query, only when a `ui` row could count."""
     months = sorted(set(candidates))
     if not months:
         return SpendingEvidence()

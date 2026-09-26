@@ -7,6 +7,7 @@ target is OLDER than the batch being undone is an ordinary later change. The Act
 from app.models import SpendingCategory
 from app.services.changelog import OVERLAP_REFUSAL
 from tests.exact_undo import batch_id_of, images, undo
+from tests.ordering_helpers import recorded_sql
 
 SP = "/api/v1/spending"
 ORDER = f"{SP}/categories/order"
@@ -114,3 +115,23 @@ async def test_a_redo_refuses_once_an_older_changes_undo_rewrote_its_rows(auth_c
     await undone(auth_client, unedit)  # redo the edit first…
     await undone(auth_client, unmove)  # …and the reorder's redo goes through
     assert await images(db, SpendingCategory) == in_force
+
+
+# The one read of the undo runs (changelog.undo_links): the listing's page query has no WHERE.
+UNDO_LINKS_READ = "lifecycle_runs.kind ="
+
+
+async def test_the_undo_runs_are_read_once_per_request(auth_client, db):
+    """Every chain is walked over every successful undo run, so the listing and an Undo each
+    read the runs once and hand the one map to both questions they ask — whether a batch was
+    undone, and whether a later change still stands over it."""
+    food, rent, travel = await seed(db)
+    edit = await rename(auth_client, food, "Groceries")
+    move = await reorder(auth_client, [travel, food, rent])
+    await undone(auth_client, move)  # the edit now has later changes, cancelled
+    with recorded_sql(db) as statements:
+        assert await flag(auth_client, edit) is True
+    assert sum(UNDO_LINKS_READ in sql for sql, _ in statements) == 1
+    with recorded_sql(db) as statements:
+        await undone(auth_client, edit)
+    assert sum(UNDO_LINKS_READ in sql for sql, _ in statements) == 1
