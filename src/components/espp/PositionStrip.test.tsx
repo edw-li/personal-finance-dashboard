@@ -108,7 +108,7 @@ describe('PositionStrip', () => {
     for (const label of ['Market value', 'Cost basis', 'Unrealized gain', 'Shares held']) {
       const tile = screen.getByText(label).closest('.stat-tile') as HTMLElement
       expect(tile.querySelector('.stat-value')?.textContent).toBe('—')
-      expect(tile.querySelector('.stat-delta')).toBeNull()
+      expect(tile.querySelector('.stat-delta')?.textContent).toBe('')
     }
     expect(screen.getByText('$25k limit used — 2024').closest('.stat-tile')?.textContent).toContain('$18,917.13')
   })
@@ -120,7 +120,7 @@ describe('PositionStrip', () => {
     // No payload, so no year to name it by.
     const tile = screen.getByText('$25k limit used').closest('.stat-tile') as HTMLElement
     expect(tile.querySelector('.stat-value')?.textContent).toBe('—')
-    expect(tile.querySelector('.stat-delta')).toBeNull()
+    expect(tile.querySelector('.stat-delta')?.textContent).toBe('')
     expect(screen.getByText('Market value').closest('.stat-tile')?.textContent).toContain('$85,826.31')
   })
 

@@ -753,7 +753,7 @@ describe('OverviewPage tiles', () => {
 
     const hero = tileFor(HERO)
     expect(valueOf(hero)).toBe('$1,234,567.00')
-    expect(deltaOf(hero)).toBeNull()
+    expect(deltaOf(hero)?.textContent).toBe('')
     // Not the amount alone, either — the whole delta node is gone.
     expect(screen.queryByText(/\$100\.00/)).toBeNull()
   })
@@ -795,7 +795,7 @@ describe('OverviewPage tiles', () => {
 
     const portfolio = tileFor('Portfolio')
     expect(valueOf(portfolio)).toBe('$812,345.67')
-    expect(deltaOf(portfolio)).toBeNull()
+    expect(deltaOf(portfolio)?.textContent).toBe('')
     expect(screen.queryByText(/today/)).toBeNull()
   })
 
@@ -841,7 +841,7 @@ describe('OverviewPage tiles', () => {
 
     const tile = tileFor('Living spending')
     expect(valueOf(tile)).toBe('—')
-    expect(deltaOf(tile)).toBeNull()
+    expect(deltaOf(tile)?.textContent).toBe('')
     expect(screen.queryByText(/12-mo avg/)).toBeNull()
   })
 
@@ -1453,9 +1453,9 @@ describe('OverviewPage on an empty database', () => {
     await screen.findByText(/No tax inputs are stored for 2031/)
     const hero = within(document.querySelector('.kpi-row') as HTMLElement).getByText('Net worth')
     expect(valueOf(hero.closest('.stat-tile') as HTMLElement)).toBe('—')
-    expect(deltaOf(hero.closest('.stat-tile') as HTMLElement)).toBeNull()
+    expect(deltaOf(hero.closest('.stat-tile') as HTMLElement)?.textContent).toBe('')
     // Pre-first-refresh: a price has never been fetched, so there is no day change to show.
-    expect(deltaOf(tileFor('Portfolio'))).toBeNull()
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('')
     expect(valueOf(tileFor('Living spending'))).toBe('—')
     expect(valueOf(tileFor('Estimated tax'))).toBe('—')
 
@@ -2106,7 +2106,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     // repeat the sentence its neighbour already carries.
     const portfolio = tileFor('Portfolio')
     expect(valueOf(portfolio)).toBe('—')
-    expect(deltaOf(portfolio)).toBeNull()
+    expect(deltaOf(portfolio)?.textContent).toBe('')
   })
 
   it('keeps the household view whole when the book itself is empty', async () => {
