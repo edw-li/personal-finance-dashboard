@@ -26,7 +26,14 @@ from app.schemas.net_worth import (
 )
 from app.schemas.ordering import OrderIn
 from app.services import clock
-from app.services.changelog import ChangeBatch, batch_header, change_batch, lock_parent, row_image
+from app.services.changelog import (
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    lock_children,
+    lock_parent,
+    row_image,
+)
 from app.services.money import mom_pct, require_first_of_month
 from app.services.month_review import load_review_book, lock_review_inputs
 from app.services.month_writes import write_balances
@@ -338,20 +345,16 @@ async def delete_account(
             status_code=409,
             detail=f"account has {balance_count} balance rows — deactivate it instead",
         )
-    components = (
-        await db.execute(
-            select(Account).where(Account.parent_account_id == account_id).order_by(Account.id)
-        )
-    ).scalars()
+    components = await lock_children(
+        db, select(Account).where(Account.parent_account_id == account_id).order_by(Account.id)
+    )
     for component in components:
         before = row_image(component)
         component.parent_account_id = None
         batch.record_update(component, before)
-    cards = (
-        await db.execute(
-            select(CreditCard).where(CreditCard.account_id == account_id).order_by(CreditCard.id)
-        )
-    ).scalars()
+    cards = await lock_children(
+        db, select(CreditCard).where(CreditCard.account_id == account_id).order_by(CreditCard.id)
+    )
     for card in cards:
         before = row_image(card)
         card.account_id = None

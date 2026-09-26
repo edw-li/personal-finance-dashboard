@@ -45,7 +45,14 @@ from app.schemas.credit_cards import (
     RewardRatePut,
 )
 from app.schemas.ordering import OrderIn
-from app.services.changelog import ChangeBatch, batch_header, change_batch, lock_parent, row_image
+from app.services.changelog import (
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    lock_children,
+    lock_parent,
+    row_image,
+)
 from app.services.day_labels import long_day
 from app.services.money import (
     MONEY_MAX_ABS_8_2,
@@ -318,16 +325,8 @@ async def delete_reward_category(
     is read FOR UPDATE first, so no cell another tab adds meanwhile can leave with the cascade
     unimaged."""
     category = await _get_reward_category(db, category_id, lock=True)
-    cells = (
-        (
-            await db.execute(
-                select(RewardRate)
-                .where(RewardRate.category_id == category_id)
-                .order_by(RewardRate.id)
-            )
-        )
-        .scalars()
-        .all()
+    cells = await lock_children(
+        db, select(RewardRate).where(RewardRate.category_id == category_id).order_by(RewardRate.id)
     )
     for rate in cells:
         batch.record_delete(rate)
@@ -686,26 +685,19 @@ async def delete_credit_card(
     at it. The card is read FOR UPDATE first, so nothing another tab points at it meanwhile can
     leave with the cascade unimaged."""
     card = await _get_card(db, card_id, lock=True)
-    pinned = (
-        (
-            await db.execute(
-                select(RewardCategory)
-                .where(RewardCategory.pinned_card_id == card_id)
-                .order_by(RewardCategory.id)
-            )
-        )
-        .scalars()
-        .all()
+    pinned = await lock_children(
+        db,
+        select(RewardCategory)
+        .where(RewardCategory.pinned_card_id == card_id)
+        .order_by(RewardCategory.id),
     )
     for category in pinned:
         before = row_image(category)
         category.pinned_card_id = None
         batch.record_update(category, before)
     for child in (CardCredit, RewardRate, CreditLimitEvent):
-        rows = (
-            (await db.execute(select(child).where(child.card_id == card_id).order_by(child.id)))
-            .scalars()
-            .all()
+        rows = await lock_children(
+            db, select(child).where(child.card_id == card_id).order_by(child.id)
         )
         for row in rows:
             batch.record_delete(row)

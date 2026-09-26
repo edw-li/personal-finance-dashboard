@@ -22,7 +22,7 @@ from datetime import date
 from uuid import UUID, uuid4
 
 from fastapi import Depends, Request
-from sqlalchemy import Table, and_, delete, func, insert, literal, select, text, update
+from sqlalchemy import Select, Table, and_, delete, func, insert, literal, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -234,6 +234,18 @@ async def lock_parent[M](db: AsyncSession, model: type[M], pk: object) -> M | No
     lock_review_inputs BEFORE this, in undo_batch's order: a month save holds those table locks
     while it writes under the row, and a row lock taken first deadlocked with it."""
     return await db.get(model, pk, with_for_update=True, populate_existing=True)
+
+
+async def lock_children[M](db: AsyncSession, statement: Select[tuple[M]]) -> list[M]:
+    """The rows a dependent delete images, read FOR UPDATE after lock_parent. A child another
+    tab moves away from the parent, or edits in place, while the delete runs makes this read wait
+    for that tab; Postgres then re-checks the WHERE on the row as committed, so a moved child
+    drops out and an edited one is imaged as it now stands — where a plain read left the delete's
+    own UPDATE or DELETE to wait and then write over the other tab's change with a stale image.
+    Counts that only refuse the delete need no lock: the parent's already keeps new children
+    out. populate_existing, as in lock_parent."""
+    locked = statement.with_for_update().execution_options(populate_existing=True)
+    return list((await db.execute(locked)).scalars().all())
 
 
 async def _undo_links(db: AsyncSession) -> dict[UUID, UUID]:

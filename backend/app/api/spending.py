@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -40,7 +40,14 @@ from app.schemas.spending import (
 )
 from app.services import clock
 from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
-from app.services.changelog import ChangeBatch, batch_header, change_batch, lock_parent, row_image
+from app.services.changelog import (
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    lock_children,
+    lock_parent,
+    row_image,
+)
 from app.services.metrics import average_evidence, category_amounts, category_comparison
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -242,18 +249,17 @@ async def delete_category(
             status_code=409,
             detail=f"category has {row_count} monthly rows — deactivate it instead",
         )
-    links = (
-        await db.execute(
-            select(RewardCategory)
-            .where(RewardCategory.spending_category_id == category_id)
-            .order_by(RewardCategory.id)
-        )
-    ).scalars()
+    links = await lock_children(
+        db,
+        select(RewardCategory)
+        .where(RewardCategory.spending_category_id == category_id)
+        .order_by(RewardCategory.id),
+    )
     for link in links:
         before = row_image(link)
         link.spending_category_id = None
         batch.record_update(link, before)
-    for budget in await _budget_history(db, category_id):
+    for budget in await lock_children(db, _budget_rows(category_id)):
         batch.record_delete(budget, month=budget.effective_month)
         await db.delete(budget)
     # Out before the category's own DELETE: no relationship() orders these mappers, and the
@@ -269,18 +275,18 @@ async def delete_category(
 # --- category budgets ---
 
 
-async def _budget_history(db: AsyncSession, category_id: int) -> list[CategoryBudget]:
-    return list(
-        (
-            await db.execute(
-                select(CategoryBudget)
-                .where(CategoryBudget.category_id == category_id)
-                .order_by(CategoryBudget.effective_month)
-            )
-        )
-        .scalars()
-        .all()
+def _budget_rows(category_id: int) -> Select[tuple[CategoryBudget]]:
+    """A category's budget history, ascending by month — the editor's list, and what its
+    delete images."""
+    return (
+        select(CategoryBudget)
+        .where(CategoryBudget.category_id == category_id)
+        .order_by(CategoryBudget.effective_month)
     )
+
+
+async def _budget_history(db: AsyncSession, category_id: int) -> list[CategoryBudget]:
+    return list((await db.execute(_budget_rows(category_id))).scalars().all())
 
 
 async def _get_budget_row(

@@ -16,11 +16,12 @@ from decimal import Decimal
 from types import ModuleType
 
 import pytest
-from fastapi import HTTPException
-from sqlalchemy import text
+from fastapi import HTTPException, Response
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.api import credit_cards as credit_cards_api
 from app.api import month_review as month_review_api
 from app.api import net_worth as net_worth_api
 from app.api import spending as spending_api
@@ -29,6 +30,7 @@ from app.schemas.month_review import MonthSaveIn, MonthSaveOut
 from app.services import clock
 from app.services.changelog import ChangeBatch, lock_parent
 from app.services.month_review import REVIEW_INPUT_TABLES
+from tests.exact_undo import logged, shape
 from tests.ordering_helpers import (
     RACE_SECONDS,
     backend_pid,
@@ -45,12 +47,14 @@ CARD = {
     "point_value_cents": Decimal("1.0000"),
 }
 
-# model, its fields, its DELETE path, and a fragment of every read of what hangs off it
+# model, its fields, its DELETE path, and a fragment of every read of what hangs off it: the
+# counts that refuse the delete, and the rows it images — those read FOR UPDATE too
 DELETES = [
     pytest.param(
         CreditCard,
         CARD,
         "/api/v1/credit-cards/{id}",
+        (),
         (
             "FROM reward_categories",
             "FROM card_credits",
@@ -63,6 +67,7 @@ DELETES = [
         RewardCategory,
         {"name": "Groceries", "slug": "groceries"},
         "/api/v1/credit-cards/categories/{id}",
+        (),
         ("FROM reward_rates",),
         id="reward category",
     ),
@@ -70,35 +75,32 @@ DELETES = [
         Security,
         {"ticker": "VOO", "name": "Vanguard S&P 500 ETF", "holding_type": "etf"},
         "/api/v1/portfolio/securities/{id}",
-        (
-            "FROM position_transactions",
-            "FROM dividend_payments",
-            "FROM security_dividend_events",
-            "FROM price_history",
-            "FROM latest_prices",
-        ),
+        ("FROM position_transactions", "FROM dividend_payments"),
+        ("FROM security_dividend_events", "FROM price_history", "FROM latest_prices"),
         id="security",
     ),
     pytest.param(
         SpendingCategory,
         {"name": "Dining", "slug": "dining", "sort_order": 0},
         "/api/v1/spending/categories/{id}",
-        ("FROM monthly_spending", "FROM reward_categories", "FROM category_budgets"),
+        ("FROM monthly_spending",),
+        ("FROM reward_categories", "FROM category_budgets"),
         id="spending category",
     ),
     pytest.param(
         Account,
         {"name": "Checking", "slug": "checking", "group": "cash", "sort_order": 0},
         "/api/v1/net-worth/accounts/{id}",
-        ("FROM account_balances", "WHERE accounts.parent_account_id", "FROM credit_cards"),
+        ("FROM account_balances",),
+        ("WHERE accounts.parent_account_id", "FROM credit_cards"),
         id="account",
     ),
 ]
 
 
-@pytest.mark.parametrize(("model", "fields", "path", "dependents"), DELETES)
+@pytest.mark.parametrize(("model", "fields", "path", "counted", "imaged"), DELETES)
 async def test_a_delete_locks_its_row_before_it_reads_what_hangs_off_it(
-    auth_client, db, model, fields, path, dependents
+    auth_client, db, model, fields, path, counted, imaged
 ):
     row = model(**fields)
     db.add(row)
@@ -109,8 +111,11 @@ async def test_a_delete_locks_its_row_before_it_reads_what_hangs_off_it(
     assert resp.status_code == 204, resp.text
     lock = first_position(statements, "FOR UPDATE")
     assert f"FROM {table} \nWHERE {table}.id = " in statements[lock][0]
-    for fragment in dependents:
+    for fragment in counted:
         assert first_position(statements, fragment) > lock, fragment
+    for fragment in imaged:  # what the delete images is locked as it is read
+        position = first_position(statements, fragment)
+        assert position > lock and "FOR UPDATE" in statements[position][0], fragment
     if table in REVIEW_INPUT_TABLES:  # the month save's locks first, then the row
         assert first_position(statements, "LOCK TABLE") < lock
     else:
@@ -137,6 +142,70 @@ async def test_a_child_another_tab_writes_waits_for_the_locked_row(db, engine):
     async with sessions() as other_tab:  # the delete's transaction is over: the row is free
         other_tab.add(CardCredit(card_id=card_id, label="Travel", annual_value=Decimal("300")))
         await other_tab.commit()
+
+
+async def delete_card_while(engine, card_id: int, other_tab_write) -> Response:
+    """Delete the card while another tab's write (`other_tab_write`, run first and left
+    uncommitted) holds a row that hangs off it; that tab commits once the delete waits for it."""
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as other_tab, sessions() as deleting:
+        await other_tab.execute(other_tab_write)
+        pid = await backend_pid(deleting)
+        batch = ChangeBatch(deleting, actor="tab 1")
+        task = asyncio.create_task(
+            credit_cards_api.delete_credit_card(card_id, db=deleting, batch=batch)
+        )
+        try:
+            await until_blocked(engine, pid, task)
+        finally:
+            await other_tab.commit()
+            [resp] = await asyncio.gather(task, return_exceptions=True)
+    assert not isinstance(resp, BaseException) and resp.status_code == 204, resp
+    return resp
+
+
+async def test_a_category_re_pinned_away_during_a_card_delete_keeps_its_new_pin(db, engine):
+    """Another tab re-pins a category from the card being deleted to another card, not yet
+    committed. A plain read of the pins still saw it on this card, and the delete's unpin then
+    waited for that tab and wrote NULL over the new pin. Read FOR UPDATE, the delete waits for
+    the tab and Postgres re-checks the pin on the row as committed: the category is no longer
+    this card's, and the delete leaves it — and its image — alone."""
+    leaving = CreditCard(**CARD)
+    staying = CreditCard(**{**CARD, "name": "SavorOne", "slug": "savorone"})
+    db.add_all([leaving, staying])
+    await db.flush()
+    travel = RewardCategory(name="Travel", slug="travel", pinned_card_id=leaving.id)
+    db.add(travel)
+    await db.commit()
+    leaving_id, staying_id, travel_id = leaving.id, staying.id, travel.id
+    re_pin = (
+        update(RewardCategory)
+        .where(RewardCategory.id == travel_id)
+        .values(pinned_card_id=staying_id)
+    )
+    resp = await delete_card_while(engine, leaving_id, re_pin)
+    pin = select(RewardCategory.pinned_card_id).where(RewardCategory.id == travel_id)
+    assert (await db.execute(pin)).scalar_one() == staying_id
+    assert shape(await logged(db, resp.headers["x-change-batch"])) == [("delete", "credit_cards")]
+
+
+async def test_a_credit_edited_during_a_card_delete_is_imaged_as_edited(db, engine):
+    """Another tab edits a credit on the card being deleted, not yet committed. A plain read
+    imaged the credit as it was, then the delete waited for the edit and removed the row — so an
+    Undo would have brought the old value back over the edit. Read FOR UPDATE, the delete waits
+    for the edit and images the credit as it now stands."""
+    card = CreditCard(**CARD)
+    db.add(card)
+    await db.flush()
+    credit = CardCredit(card_id=card.id, label="Travel", annual_value=Decimal("300.00"))
+    db.add(credit)
+    await db.commit()
+    card_id, credit_id = card.id, credit.id
+    edit = update(CardCredit).where(CardCredit.id == credit_id).values(annual_value=Decimal("350"))
+    resp = await delete_card_while(engine, card_id, edit)
+    rows = await logged(db, resp.headers["x-change-batch"])
+    [imaged] = [row for row in rows if row.table_name == "card_credits"]
+    assert imaged.before["annual_value"] == "350.00"
 
 
 # ── a month save racing the delete of its own row ────────────────────────────────────

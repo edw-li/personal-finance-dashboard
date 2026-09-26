@@ -56,6 +56,7 @@ from app.services.changelog import (
     ChangeBatch,
     batch_header,
     change_batch,
+    lock_children,
     lock_parent,
     row_image,
 )
@@ -355,30 +356,22 @@ async def delete_security(
                 " — deactivate it instead"
             ),
         )
-    events = (
-        (
-            await db.execute(
-                select(SecurityDividendEvent)
-                .where(SecurityDividendEvent.security_id == security_id)
-                .order_by(SecurityDividendEvent.id)
-            )
-        )
-        .scalars()
-        .all()
+    events = await lock_children(
+        db,
+        select(SecurityDividendEvent)
+        .where(SecurityDividendEvent.security_id == security_id)
+        .order_by(SecurityDividendEvent.id),
     )
-    history = (
-        (
-            await db.execute(
-                select(PriceHistory)
-                .where(PriceHistory.security_id == security_id)
-                .order_by(PriceHistory.id)
-            )
-        )
-        .scalars()
-        .all()
+    history = await lock_children(
+        db,
+        select(PriceHistory)
+        .where(PriceHistory.security_id == security_id)
+        .order_by(PriceHistory.id),
     )
-    latest = await db.get(LatestPrice, security_id)
-    for row in [*events, *history, *([] if latest is None else [latest])]:
+    latest = await lock_children(
+        db, select(LatestPrice).where(LatestPrice.security_id == security_id)
+    )
+    for row in [*events, *history, *latest]:
         batch.record_delete(row)
         await db.delete(row)
     # Out before the security's own DELETE: no relationship() orders these mappers, and the
