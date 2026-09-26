@@ -139,7 +139,7 @@ try {
     assert.deepEqual(light.log.consoleErrors, [])
     assert.deepEqual(light.log.badResponses, [])
     assert.deepEqual(light.log.requestFailures, [])
-  } finally { await light.close() }
+  } finally { await settle(light.page, 0); await light.close() }
   assert.equal(report.dialogs.length, 0)
   assert.deepEqual(log.pageErrors, [])
   assert.deepEqual(log.consoleErrors, [])
@@ -152,8 +152,15 @@ try {
   process.exitCode = 1
 } finally {
   for (const batch of outstanding) { try { await api(`/activity/batches/${batch}/undo`, 'POST'); report.cleanup.push(`undo ${batch}`) } catch (error) { report.cleanup.push(String(error)); process.exitCode = 1 } }
-  report.completedAt = new Date().toISOString()
-  writeFileSync(file('supplement-report.json'), JSON.stringify(report, null, 2))
+  try { await settle(page, 0) } catch (error) { report.cleanup.push(`Final settlement: ${error}`); process.exitCode = 1 }
   await run.close()
   await browser.close()
+  const errorKeys = ['consoleErrors', 'pageErrors', 'badResponses', 'requestFailures', 'dialogs', 'writesBlocked']
+  if ([log, report.lightLog].filter(Boolean).some(value => errorKeys.some(key => value[key].length > 0))) {
+    report.error ??= 'Unexpected browser errors after final settlement and context teardown'
+    process.exitCode = 1
+  }
+  report.status = process.exitCode ? 'failed' : 'passed'
+  report.completedAt = new Date().toISOString()
+  writeFileSync(file('supplement-report.json'), JSON.stringify(report, null, 2))
 }

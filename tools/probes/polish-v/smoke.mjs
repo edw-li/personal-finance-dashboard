@@ -70,11 +70,17 @@ async function runCase(group, options, action) {
     check(id, 'Driver completed every requested assertion', false, error.message)
     await snap(context.page, id + '-driver-error').catch(() => {})
   } finally {
+    // Let background reloads finish, then inspect the completed context's log. Checking
+    // before close could compute a green flag while a late request error still appends.
+    try { await settle(context.page, 0) } catch (error) {
+      report.driverErrors.push({ caseId: id, message: `Final settlement: ${error.message}`, stack: error.stack })
+      check(id, 'All browser requests settled before context teardown', false, error.message)
+    }
+    await context.close()
     const log = context.log
     check(id, 'No console/page/network/native-dialog/fenced-write errors',
       ['consoleErrors', 'pageErrors', 'badResponses', 'requestFailures', 'dialogs', 'writesBlocked'].every(key => log[key].length === 0), log)
     report.cases.push({ id, ...options, checks: report.checks.length - startChecks, log })
-    await context.close()
     save()
     console.log('DONE', id, 'checks', report.checks.length - startChecks)
   }
