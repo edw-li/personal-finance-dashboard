@@ -87,6 +87,18 @@
   margin-inline-end: 0.4em;
 }
 
+/* A BusyButton without the house .button class (a link-styled one) still goes quiet the way a disabled
+   control does, and — later, at the same specificity — keeps its own face while busy, as above. */
+.busy-button:not(.button)[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.busy-button:not(.button)[aria-busy='true'] {
+  opacity: 1;
+  cursor: progress;
+}
+
 /* ── The confirm popover (useConfirm) ──────────────────────────────── */
 /* Portaled to <body> and fixed: .page is a containing block for fixed descendants and a stacking
    context (panels.css's .page note), so a popover inside it could neither stand where its anchor is

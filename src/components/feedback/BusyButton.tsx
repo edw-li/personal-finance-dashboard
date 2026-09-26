@@ -24,6 +24,10 @@ const SPILL_FLOOR_PX = 2
  * must never fall to <body> mid-save. It goes quiet instead — `aria-disabled="true"` while busy, inert
  * or asked to (`aria-disabled`, or a `disabled` prop, honoured the same way) — and a click or a form
  * submit is swallowed while quiet. Busy draws a spinner before the label and holds the idle width.
+ *
+ * Pass the house `.button` class: its inline-flex row is what lets the spinner spill evenly into the
+ * paddings while the idle width is held to the pixel. Without a flex row only the min-width holds, so
+ * the button may grow while busy (feedback.css still gives it the quiet and busy looks).
  */
 export default function BusyButton({
   busy = false,
@@ -62,8 +66,9 @@ export default function BusyButton({
 
   // While busy, hold the idle width: min-width always (a shorter busy label never shrinks the button),
   // and the max-width too wherever the button's own padding can take the extra content — the spinner —
-  // the row being centred (feedback.css) so it spills evenly into both sides. A busy label too long for
-  // that grows the button rather than clip. What was there before comes back when the work ends.
+  // on a flex row, centred (feedback.css), so it spills evenly into both sides; a row that is not flex
+  // could only overflow one way. A busy label too long for the padding grows the button rather than
+  // clip. What was there before comes back when the work ends.
   useLayoutEffect(() => {
     const el = own.current
     const width = idleWidth.current
@@ -74,7 +79,7 @@ export default function BusyButton({
     if (spill > 0) {
       const style = getComputedStyle(el)
       const room = Math.min(parseFloat(style.paddingLeft) || 0, parseFloat(style.paddingRight) || 0)
-      if (spill <= room - SPILL_FLOOR_PX) el.style.maxWidth = `${width}px`
+      if (style.display.endsWith('flex') && spill <= room - SPILL_FLOOR_PX) el.style.maxWidth = `${width}px`
     }
     return () => {
       el.style.minWidth = before.min

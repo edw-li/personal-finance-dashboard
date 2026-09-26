@@ -17,8 +17,8 @@ function widths(idle: number, busy: number): void {
   })
 }
 
-/** .button's 0.9rem sides, as jsdom hands inline longhands back through getComputedStyle. */
-const PADDING = { paddingLeft: '14px', paddingRight: '14px' }
+/** A `.button`'s row and its 0.9rem sides, as jsdom hands inline longhands back through getComputedStyle. */
+const PADDING = { display: 'inline-flex', paddingLeft: '14px', paddingRight: '14px' }
 
 describe('BusyButton', () => {
   it('never sets the native disabled attribute — busy, inert, aria-disabled and disabled all go quiet instead', () => {
@@ -149,6 +149,20 @@ describe('BusyButton', () => {
     expect(button.style.minWidth).toBe('59px')
     expect(button.style.maxWidth).toBe('59px')
     rerender(<BusyButton style={PADDING}>Save</BusyButton>)
+    expect(button.style.maxWidth).toBe('')
+  })
+
+  it('holds only the min-width on a button that is not a flex row — its spill could not be centred', () => {
+    widths(59, 76)
+    const plain = { paddingLeft: '14px', paddingRight: '14px' } // a bare <button>: inline-block
+    const { rerender } = render(<BusyButton style={plain}>Save</BusyButton>)
+    const button = screen.getByRole('button', { name: 'Save' })
+    rerender(
+      <BusyButton style={plain} busy>
+        Save
+      </BusyButton>,
+    )
+    expect(button.style.minWidth).toBe('59px')
     expect(button.style.maxWidth).toBe('')
   })
 

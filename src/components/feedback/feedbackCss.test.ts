@@ -65,6 +65,19 @@ describe('feedback.css', () => {
     expect(declarationsFor(feedback, '.busy-button-label')).toContain('white-space: nowrap;')
   })
 
+  it('quiets a BusyButton without the house .button class too — and keeps it busy-faced while busy', () => {
+    expect(declarationSet(declarationsFor(feedback, ".busy-button:not(.button)[aria-disabled='true']"))).toEqual(
+      declarationSet(declarationsFor(panels, '.button:disabled')),
+    )
+    const busy = declarationsFor(feedback, ".busy-button:not(.button)[aria-busy='true']")
+    expect(busy).toContain('opacity: 1;')
+    expect(busy).toContain('cursor: progress;')
+    const text = stripComments(feedback)
+    expect(text.indexOf(".busy-button:not(.button)[aria-busy='true']")).toBeGreaterThan(
+      text.indexOf(".busy-button:not(.button)[aria-disabled='true']"),
+    )
+  })
+
   it('spins the spinner only where motion is welcome, at a rate rather than a token', () => {
     const css = flat(feedback)
     const motion = inside(css, '@media (prefers-reduced-motion: no-preference) {')
