@@ -4,7 +4,7 @@
 
 **Ownership:** this plan and `tools/probes/polish-v/` only. Product defects go to the coordinator with measurements, reproduction and the responsible surface. Screenshots, dumps, tokens, generated configs, logs and JSON reports stay in ignored scratch storage. No changes to another lane's worktree or shared `node_modules`.
 
-**Later user direction (2026-09-26):** show the full footer email, make logout red, and place each tile badge at the top right beside its title without a dedicated blank badge row. The compact identity-above-actions footer supersedes the original one-row footer contract. Continue verification without another heavyweight test run for these cosmetic changes; preserve the actual earlier gate results and run the browser acceptance against the final merged appearance.
+**Later user direction (2026-09-26):** show the full footer email, make logout red, and place each tile badge at the top right beside its title without a dedicated blank badge row. The user's follow-up keeps the identity beside the actions in one centered footer row; the first proposed identity-above-actions layout was superseded before final verification. Continue verification without another heavyweight test run for these cosmetic changes; preserve the actual earlier gate results and run the browser acceptance against the final merged appearance.
 
 ## 1. Source and environment
 
@@ -37,7 +37,7 @@ Each group runs dark and light at **1280×800, 1366×768, 1440×900, 1536×864, 
 
 | Group | Acceptance and actual measurement |
 |---|---|
-| Sidebar (§2, updated user direction) | `scrollHeight - clientHeight <= 1`; full email visible above a single row of 28×28 theme/logout buttons; logout red; Search… not truncated; all navigation links present. Confirm normal rhythm is retained above 900px height. |
+| Sidebar (§2, updated user direction) | `scrollHeight - clientHeight <= 1`; full email visible beside 28×28 theme/logout buttons on the same centerline; logout red; Search… not truncated; all navigation links present. Confirm normal rhythm is retained above 900px height. |
 | Five chart pairs (§3.1) | Overview Portfolio performance/Recent spending, Spending Trends, Paycheck breakdown/flow, ESPP anatomy/price, card detail credits/limit history: bottom difference <=1px with Tables closed, each available Table open, and closed again. Trends plot tops and bottoms also <=1px. Record before/after. |
 | Overview (§3.2) | Wealth/agenda bottoms <=1px; Changes blank band <=24px with trend Table closed/open/closed. Customize hide/show leaves no isolated half-width hole or horizontal overflow. |
 | Settings (§3.3) | Walk all five tabs; each real paired row bottoms <=1px; gap above pinned actions <=96px. At 1440/1920 record natural-height spread <=15% for pairs covered by the pairing rule, with Appearance/Password's explicitly retained pairing reported separately. |
