@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { DerivedPreviewOut, TaxInputsOut } from '../../types/api'
@@ -203,6 +203,49 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
+describe('InputsForm — feedback beside Save', () => {
+  it('focuses the first invalid cell in its actual person column and reports validation in the sticky bar', () => {
+    render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+    const invalid = screen.getByLabelText<HTMLInputElement>('Annual Salary — Sam')
+    fireEvent.change(invalid, { target: { value: 'bad number' } })
+    fireEvent.click(saveButton())
+    expect(document.activeElement).toBe(invalid)
+    const bar = saveButton().closest('.tax-form-actions')!
+    expect(within(bar as HTMLElement).getByRole('alert').textContent).toContain('Annual Salary')
+    expect(putTaxInputs).not.toHaveBeenCalled()
+    fireEvent.change(invalid, { target: { value: '95000' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('keeps focus during Save, reports transient success, and clears a request error on the next edit', async () => {
+    const onSaved = vi.fn()
+    render(<InputsForm inputs={inputsFixture()} onSaved={onSaved} />)
+    const button = saveButton()
+    const salary = field('Annual Salary')
+    fireEvent.change(salary, { target: { value: '210000' } })
+    button.focus()
+    vi.mocked(putTaxInputs).mockRejectedValueOnce(new ApiError('The year changed.', 409))
+    fireEvent.click(button)
+    expect(button.disabled).toBe(false)
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    expect(document.activeElement).toBe(button)
+    await screen.findByRole('alert')
+    expect(within(button.closest('.tax-form-actions') as HTMLElement).getByRole('alert').textContent).toContain('The year changed.')
+    fireEvent.change(salary, { target: { value: '220000' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+    const echo = inputsFixture()
+    echo.sections[0].items[0].value = '220000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValueOnce(echo)
+    vi.useFakeTimers()
+    await act(async () => { fireEvent.click(button) })
+    expect(within(button.closest('.tax-form-actions') as HTMLElement).getByRole('status').textContent).toBe('Saved just now')
+    expect(document.activeElement).toBe(button)
+    expect(button.getAttribute('aria-disabled')).toBe('true')
+    await settle(2500)
+    expect(screen.queryByText('Saved just now')).toBeNull()
+  })
+})
+
 describe('InputsForm — unsaved work survives (2026-09-23 spec §W9)', () => {
   const KEY = 'finance-tax-inputs-draft:2024'
   // The fixture's editable boxes as the server loads them (the computed line is not one).
@@ -234,7 +277,7 @@ describe('InputsForm — unsaved work survives (2026-09-23 spec §W9)', () => {
     expect(screen.getByText(RESTORED)).toBeTruthy()
     // Restored work IS unsaved work: the page's guards see it, and Save sends it.
     expect(onDirtyChange).toHaveBeenLastCalledWith(true)
-    expect(saveButton().disabled).toBe(false)
+    expect(saveButton().getAttribute('aria-disabled') === 'true').toBe(false)
   })
 
   it('survives a 401 on save: a fresh mount after the login redirect puts the typing back', async () => {
@@ -371,7 +414,7 @@ describe('InputsForm — unsaved work survives (2026-09-23 spec §W9)', () => {
     expect(field('Annual Salary').value).toBe('$200,000.00')
     expect(sessionStorage.getItem(KEY)).toBeNull()
     expect(screen.queryByText(RESTORED)).toBeNull()
-    expect(saveButton().disabled).toBe(true)
+    expect(saveButton().getAttribute('aria-disabled') === 'true').toBe(true)
   })
 })
 
@@ -396,7 +439,7 @@ describe('InputsForm', () => {
     // A null stored value is a BLANK input, never "null"/"0" — blank is what unsets it.
     expect(field('Qualified Dividends').value).toBe('')
     // Nothing edited yet: the diff is empty, so there is nothing to PUT.
-    expect(saveButton().disabled).toBe(true)
+    expect(saveButton().getAttribute('aria-disabled') === 'true').toBe(true)
   })
 
   it('PUTs only the changed keys and re-syncs from the echo', async () => {
@@ -489,7 +532,7 @@ describe('InputsForm', () => {
     act(() => percent.blur())
     // A focus and a blur of an untouched row must not dirty the form: the conversion is
     // exact in both directions (string math), so the diff is still empty.
-    expect(saveButton().disabled).toBe(true)
+    expect(saveButton().getAttribute('aria-disabled') === 'true').toBe(true)
   })
 
   it('saves a count verbatim and a percent as the fraction the engine multiplies', async () => {
@@ -881,7 +924,7 @@ describe('InputsForm', () => {
     expect(alert.textContent).toContain('values.annual_salary must be at most 10000000000')
     // The edit survives the rejection: re-enabled, still holding the applied value.
     expect(field('Annual Salary').value).toBe('$210,000.00')
-    await waitFor(() => expect(saveButton().disabled).toBe(false))
+    await waitFor(() => expect(saveButton().getAttribute('aria-disabled') === 'true').toBe(false))
   })
 
   it('reports unsaved work to the page, and stops after the echo', async () => {
@@ -944,7 +987,7 @@ describe('InputsForm', () => {
     expect(screen.getByText(/pasted 2 of 3 values/i)).toBeDefined()
     // Pasted text lands in state exactly like typed text, so it counts into the changed-key
     // diff: the save is armed with no further interaction.
-    expect(saveButton().disabled).toBe(false)
+    expect(saveButton().getAttribute('aria-disabled') === 'true').toBe(false)
   })
 
   it('column paste skips computed slots and keeps alignment', () => {
@@ -1033,7 +1076,7 @@ describe('InputsForm', () => {
     // cell, and intercepting would break pasting into the middle of a half-typed number.
     expect(notPrevented).toBe(true)
     expect(field('Annual Salary').value).toBe('$200,000.00')
-    expect(saveButton().disabled).toBe(true)
+    expect(saveButton().getAttribute('aria-disabled') === 'true').toBe(true)
     expect(screen.queryByText(/pasted/i)).toBeNull()
   })
 

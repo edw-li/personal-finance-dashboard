@@ -215,6 +215,12 @@
   margin: 0;
 }
 
+/* Clean, dirty and saved states share the same right-aligned action. */
+.tax-form-actions > .button {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 /* The save bar rides the viewport bottom while the form scrolls (2026-09-13 polish spec §12). The
    wizard's .entry-footer recipe, COPIED under this page's scope rather than imported —
    MonthlyUpdatePage.css travels with its own screen. The class NAME is the wizard's on purpose:
