@@ -69,3 +69,53 @@ describe('tile rows share one grid (spec §4.1)', () => {
     expect(CSS).toContain('.kpi-row-steady .stat-delta:empty { margin-top: 0.35rem; }')
   })
 })
+
+describe('five-tile rows (spec §4.2)', () => {
+  const FIVE = '.kpi-row:is(.kpi-row-5, .kpi-row-dense)'
+  const block = (query: string) => {
+    const at = CSS.indexOf(`@container page ${query} {`)
+    if (at < 0) throw new Error(`panels.css has no ${query} block`)
+    return CSS.slice(at, CSS.indexOf('} }', at) + 3)
+  }
+
+  it('lays five tiles five across from 1000px of page', () => {
+    expect(CSS).toContain('.kpi-row-5, .kpi-row-dense { grid-template-columns: repeat(5, minmax(0, 1fr)); }')
+  })
+
+  // Projection's local rule, generalised (batch 2 final verification D5): six tracks, each tile spans
+  // two, the fourth and fifth span three — both lines filled (PE-02: 2 + 2 + 1 with the dock).
+  it('goes a balanced 3 + 2 on six tracks from 660 to 999px', () => {
+    const body = block('(660px <= width < 1000px)')
+    expect(body).toContain(`${FIVE} { grid-template-columns: repeat(6, minmax(0, 1fr)); }`)
+    expect(body).toContain(`${FIVE} > * { grid-column: span 2; }`)
+    expect(body).toContain(`${FIVE} > :nth-child(n + 4) { grid-column: span 3; }`)
+  })
+
+  it('goes two columns under 660px, the odd last tile spanning both', () => {
+    const body = block('(width < 660px)')
+    expect(body).toContain(`${FIVE} { grid-template-columns: repeat(2, minmax(0, 1fr)); }`)
+    expect(body).toContain(`${FIVE} > :last-child:nth-child(odd) { grid-column: 1 / -1; }`)
+  })
+
+  it('keeps every other row auto-fit, then two columns under 980px', () => {
+    const body = block('(max-width: 980px)')
+    expect(body).toContain('.kpi-row:not(.kpi-row-5, .kpi-row-dense) { grid-template-columns: repeat(2, minmax(0, 1fr)); }')
+    expect(body).toContain('.kpi-row:not(.kpi-row-5, .kpi-row-dense) > :last-child:nth-child(odd) { grid-column: 1 / -1; }')
+  })
+})
+
+describe("the calendar strip's own five-across (CalendarPage.css)", () => {
+  const CAL = flat('../pages/CalendarPage.css')
+
+  // Five across from 880px (2026-09-23 spec §B2), so the shared 3 + 2 spans must stand down there or
+  // the fifth tile wraps; (0,4,0) and (0,3,0) outrank panels.css's (0,3,0)/(0,2,0) in any load order.
+  it('holds five columns from 880px with every tile on one track', () => {
+    expect(CAL).toContain(
+      '@container page (min-width: 880px) { .cal-strip.kpi-row.kpi-row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } .cal-strip.kpi-row.kpi-row-5 > :nth-child(n) { grid-column: auto; } }',
+    )
+  })
+
+  it('leaves the space under the strip to the row (no second margin)', () => {
+    expect(CAL).not.toMatch(/\.cal-strip \{[^}]*margin-bottom/)
+  })
+})

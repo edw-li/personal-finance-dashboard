@@ -121,34 +121,39 @@
   max-width: 320px;
 }
 
-/* Balanced rows (2026-09-13 polish §12). A five-tile row — ESPP's strip, Projection's outcomes —
-   is five columns wherever 1000px of container allow it and auto-fits below; every other row goes
-   2×2 once a dock has narrowed the page under 980px, where four columns read as 3+1. .kpi-row-dense
-   is Portfolio's five dense tiles (it replaces that page's private .tiles-row). Container queries,
-   not media queries: the dock is the thing that changes the width.
+/* Balanced rows (2026-09-13 polish §12; 2026-09-25 polish spec §4.2). Container queries on the page, not
+   media queries: the dock is the thing that changes the width. A default row — four tiles or fewer —
+   auto-fits, then goes two columns under 980px, where four read as 3 + 1. A FIVE-tile row (.kpi-row-5:
+   ESPP's strip, the Projection's outcomes, the calendar's cash flow; .kpi-row-dense: Portfolio's) is
+   five across from 1000px; from 660 to 999px a balanced 3 + 2 on six tracks — each tile spans two, the
+   fourth and fifth span three, so both lines fill the width (the Projection's own rule, generalised);
+   under 660px two columns. Never 4 + 1 or 2 + 2 + 1, dock open or closed (PE-02).
 
-   There is NO CSS-only fill for the auto-fit band, and the rule that claimed to be one is gone
-   (2026-09-13 review round). `.kpi-row > :last-child { grid-column-end: -1 }` does not stretch a
-   lone last tile: the start line stays auto, so the pair resolves to a ONE-track item placed in the
-   LAST column — a 4+1 wrap became a right-hand orphan with a hole beside it, worse than the
-   left-hand orphan it meant to cure. A span needs a known start line, and auto-fit's column count
-   is not known until layout; filling that band would mean JS measuring the row. The fixed 2-column
-   band below is where the arithmetic IS known, so that is where the span lives. */
-.kpi-row-5 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+   There is NO CSS-only fill for an auto-fit band: `.kpi-row > :last-child { grid-column-end: -1 }`
+   resolved to a one-track item in the LAST column (2026-09-13 review round). A span needs a known start
+   line, so the spans live only where the arithmetic IS known — the fixed six- and two-column bands. */
+.kpi-row-5,
+.kpi-row-dense {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
 
-.kpi-row-dense { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+@container page (660px <= width < 1000px) {
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) > * { grid-column: span 2; }
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) > :nth-child(n + 4) { grid-column: span 3; }
+}
 
-@container page (min-width: 1000px) {
-  .kpi-row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@container page (width < 660px) {
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 }
 
 @container page (max-width: 980px) {
-  .kpi-row:not(.kpi-row-5) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi-row:not(.kpi-row-5, .kpi-row-dense) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   /* Exactly two columns here, so "starts a new line" IS knowable: :nth-child(odd) is the last tile
-     of an odd count, and it spans the pair instead of sitting half-width beside a hole. Both the
-     start and the end line are named — the thing the deleted auto-fit rule could not do. */
-  .kpi-row:not(.kpi-row-5) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+     of an odd count, and it spans the pair instead of sitting half-width beside a hole. */
+  .kpi-row:not(.kpi-row-5, .kpi-row-dense) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 }
 
 .stat-tile {
