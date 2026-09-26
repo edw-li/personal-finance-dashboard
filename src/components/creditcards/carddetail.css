@@ -70,3 +70,10 @@
   margin-top: auto;
   padding-top: 0.6rem;
 }
+
+/* As a column the card's children no longer collapse their margins, so an empty note ("No credits
+   tracked.", "No multipliers yet") gained ~13px above and ~10px below. The note's own 1.5rem padding is
+   its air here. */
+.card-detail .card-grid > .card > .empty-note {
+  margin: 0;
+}

@@ -15,4 +15,10 @@ describe('card detail — the credits card beside the credit-line chart (carddet
     expect(CSS).toContain('.card-detail .card-grid > .card { display: flex; flex-direction: column; }')
     expect(CSS).toContain('.card-detail .card-grid > .card > .credit-add { margin-top: auto; padding-top: 0.6rem; }')
   })
+
+  // As a column its children's margins no longer collapse: "No credits tracked." and "No multipliers
+  // yet" gained ~13px above and ~10px below (review). The note keeps its own 1.5rem padding for air.
+  it('drops the empty notes’ margins inside the column, where they would no longer collapse', () => {
+    expect(CSS).toContain('.card-detail .card-grid > .card > .empty-note { margin: 0; }')
+  })
 })
