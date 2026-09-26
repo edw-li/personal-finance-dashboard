@@ -59,8 +59,10 @@ import './SpendingPage.css'
 
 const MAX_TREND = 3
 // The Trends pair's one plot height (2026-09-25 polish spec §3.1, NWSP-08): 260 and 220 put the two
-// month axes 14px apart and ended the cards 36–84px apart. Both cards fill their row as well; this
-// is the floor.
+// plots 14px apart and ended the cards 36–84px apart. Held, not a floor: the pair's footers differ (a
+// two-line hint vs the chip row), and a filling Savings plot soaked that difference up, putting the
+// linked month axes 62–110px apart. So neither card fills; the shorter one pins its caption to its foot
+// (chartInteractions.css) and the two still end together.
 const TREND_HEIGHT = 260
 const MOVERS_TOP = 5
 const SECTIONS = [{ id: 'overview', label: 'Overview' }, { id: 'trends', label: 'Trends' }, { id: 'budgets', label: 'Budgets' }, { id: 'history', label: 'History' }] as const
@@ -754,8 +756,9 @@ export default function SpendingPage() {
             csv={matrix === null ? undefined : () => savingsRateCsv(matrix)}
             height={TREND_HEIGHT}
             // Its partner's header carries the Compare / All categories toggle; the empty row keeps
-            // the two plots — and their month axes — starting on one line.
+            // the two plots starting on one line, and holding the height (above) ends them on one.
             reserveControls={trendView === 'compare'}
+            fill={false}
             zoomable
             group="spending"
             onDataZoom={onZoomWindow}
@@ -800,6 +803,8 @@ export default function SpendingPage() {
                   : () => categoryTrendCsv(matrix, trend, nameById)
             }
             height={trendView === 'all' ? smallMultiplesHeight(heatmapOrder.length) : TREND_HEIGHT}
+            // The pair's month axes share a line only while both plots hold their height (above).
+            fill={false}
             // Small multiples carry no dataZoom and no shared axis: the window controls and
             // the sibling group belong to the single-axis reading only.
             zoomable={trendView === 'compare'}

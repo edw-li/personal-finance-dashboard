@@ -13,6 +13,10 @@
    the same box while the data is out. The chart's own floor is a guard for a box nothing resolves. */
 .chart-card-slot .chart-card-fill > :is(.loading-dim, .chart-card-skeleton) { flex: 1 0 auto; min-height: var(--chart-h); contain: size; }
 .chart-card-slot .chart-card-fill > .loading-dim > [role='img'] { min-height: var(--chart-h); }
+/* A card that holds its plot (`fill={false}` — Spending › Trends, whose linked month axes must share a
+   line) is still stretched by its row: its caption rides the card's foot, so the pair ends together and
+   the space opens above the caption instead of under it. */
+.chart-card-slot .chart-card:not(.chart-card-fill) > .chart-card-row-caption { margin-top: auto; }
 .chart-expanded-dialog { position: fixed; inset: 24px; width: calc(100vw - 48px); max-width: none; height: calc(100vh - 48px); max-height: none; margin: 0; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; overflow: auto; }
 /* --scrim is F2's light-theme token (spec §6); the fallback is today's value. */
 .chart-expanded-dialog::backdrop { background: var(--scrim, #0009); }

@@ -425,7 +425,9 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
   })
 
   // 2026-09-25 polish spec §3.1 (NWSP-08): one configured height for the pair, and the card without
-  // controls reserves the controls row, so the two month axes start on one line; both fill the row.
+  // controls reserves the controls row, so the two plots start on one line. Neither fills: the two
+  // footers differ (a two-line hint vs the chip row), and a filling Savings plot soaked that up, putting
+  // the linked month axes 62–110px apart — so both hold 260px and the captions pin to the cards' feet.
   it('pairs the two Trends charts at one height, the card without controls reserving that row', async () => {
     renderPage()
     await openView('Trends')
@@ -435,7 +437,7 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
     const trends = card(/Category trends/)
     for (const section of [savings, trends]) {
       expect(section.classList.contains('span-6')).toBe(true)
-      expect(section.classList.contains('chart-card-fill')).toBe(true)
+      expect(section.classList.contains('chart-card-fill')).toBe(false)
       expect(section.style.getPropertyValue('--chart-h')).toBe('260px')
     }
     expect(savings.querySelector('.chart-card-header .chart-card-controls')?.childElementCount).toBe(0)

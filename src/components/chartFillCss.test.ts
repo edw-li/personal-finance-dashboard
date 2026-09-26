@@ -41,3 +41,12 @@ describe('a plot beside an aside (chartInteractions.css)', () => {
     expect(CHART).toMatch(/\.chart-card-with-aside \{[^}]*align-items: start;/)
   })
 })
+
+describe('a card that does not fill, in a stretched row (chartInteractions.css)', () => {
+  // Spending › Trends: both plots hold their configured height so the linked month axes share a line;
+  // the card the row stretches pins its caption to its foot, so the two cards still end together and
+  // the space opens above the caption instead of under it.
+  it("pins a non-filling card's caption row to the card's foot", () => {
+    expect(CHART).toContain('.chart-card-slot .chart-card:not(.chart-card-fill) > .chart-card-row-caption { margin-top: auto; }')
+  })
+})
