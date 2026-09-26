@@ -3,6 +3,7 @@ import {
   escapeHtml,
   formatCurrency,
   formatCurrencyCompact,
+  formatCurrencyWhole,
   formatBytes,
   formatDate,
   formatDateTime,
@@ -159,5 +160,28 @@ describe('localDateKey / formatInstantDate', () => {
     expect(localDateKey('not a date')).toBeNull()
     expect(formatInstantDate(null)).toBe('—')
     expect(formatInstantDate('not a date')).toBe('—')
+  })
+})
+
+// A stat tile's delta amount (2026-09-25 polish spec §4.3): whole dollars, while the tile's value
+// keeps its cents.
+describe('formatCurrencyWhole', () => {
+  it('rounds a server decimal string to whole dollars, signed the way formatCurrency signs', () => {
+    expect(formatCurrencyWhole('126583.02')).toBe('$126,583')
+    expect(formatCurrencyWhole('-2911.11')).toBe('-$2,911')
+    expect(formatCurrencyWhole(1234.5)).toBe('$1,235')
+    expect(formatCurrencyWhole('-0.5')).toBe('-$1')
+  })
+
+  it('prints a figure that rounds to nothing as "$0", never "-$0"', () => {
+    expect(formatCurrencyWhole('-0.49')).toBe('$0')
+    expect(formatCurrencyWhole('0.49')).toBe('$0')
+    expect(formatCurrencyWhole(0)).toBe('$0')
+  })
+
+  it('dashes a missing figure, like formatCurrency', () => {
+    expect(formatCurrencyWhole(null)).toBe('—')
+    expect(formatCurrencyWhole(undefined)).toBe('—')
+    expect(formatCurrencyWhole('')).toBe('—')
   })
 })

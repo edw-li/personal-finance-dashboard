@@ -11,6 +11,21 @@ export function formatCurrency(value: string | number | null | undefined): strin
   return currency.format(Number(value))
 }
 
+const wholeCurrency = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+})
+
+/** "$126,583" — the amount in a stat tile's delta (2026-09-25 polish spec §4.3): whole dollars, while
+ *  the tile's value keeps its cents. A figure that rounds to nothing prints "$0", never "-$0". */
+export function formatCurrencyWhole(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—'
+  const n = Number(value)
+  return wholeCurrency.format(Math.abs(n) < 0.5 ? 0 : n)
+}
+
 export function formatCurrencyCompact(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return '—'
   const n = Number(value)
