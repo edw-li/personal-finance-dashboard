@@ -2357,3 +2357,119 @@ git commit -m "feat(paycheck): one Summary tile row, no tile nested in the break
 - **Type consistency:** `GhostRowSpec`/`TileRowVariant` (Task 5) are what Tasks 6–12 pass; `formatCurrencyWhole`
   (Task 1) is the one formatter every later task imports; `.kpi-row-steady`, `.stat-tile-slot`, `.stat-value-figure`,
   `.stat-delta-clause`, `.stat-badge-row` are named identically in the TSX and the CSS.
+
+---
+
+## As built (2026-09-25)
+
+Branch `feat/polish-tiles`, 20 commits on `657e3d62`: the plan (`465c04e7`), Tasks 1–15 (`f4c92055` … `e5495786`), the
+three browser-found fixes (`61ea0079` glyph, `035b1a48` tax deadline, `799d70de` label line + pinned band), then this
+section. 51 files. Nothing pushed, nothing merged.
+
+### Measured before → after
+
+Headless Edge 153, the production copy on :8077, dark unless noted; light is identical in geometry (checked on every
+row at 1440). Scripts and JSON in `scratchpad/work-L2/` (`measure.mjs`, `ghost.mjs`, `layouts.mjs`, `results-*.json`,
+`ghost-*.json`); row screenshots in `scratchpad/shots/L2/`.
+
+| Acceptance line | Before | After |
+|---|---|---|
+| Value baselines within a tile line — every row, every page, 1280 / 1440 / 1920 | Overview 23.4 px, Net worth 23.4, Spending 17.4, Portfolio 3.5 (9.5 @1920) apart | 0.0 px on every line of every row |
+| Deltas on one line @1440, both themes — Overview, Net worth, Spending | hero 2 lines, Living spending 2–3, Spending's cash triple 2 | 1 line on every tile, both themes |
+| Net worth row height across its 38 ribbon months @1440 | 88.2 / 110.8 / 127.8 / 145.2 px | 149 px in all 38 |
+| Spending row height across its 38 ribbon months @1440 (a picked month opens the dock → 2 × 2) | 199.6 / 216.8 px | 282.3 px in all 38 |
+| Bare tiles in mixed rows | Spending 2, Projection 1, Calendar 2, ESPP 2, Portfolio 2, Will I owe 1, What-if 3 + 1, Review 1 | 0, except Portfolio's Realized gains (out of scope, left bare) |
+| Calendar strip bottom edge | 22.6 px ragged | 0 |
+| Five-tile rows at 1280 / 1440 / 1920, dock open and closed | ESPP 4 + 1 @1280; Portfolio 2 + 2 + 1 docked @1440 | five across or 3 + 2 everywhere (Portfolio docked 3 + 2, ESPP @1280 3 + 2, Projection / Calendar docked 3 + 2) |
+| Ghost → landed, first card's top @1440 | Portfolio −143, Projection −113, Calendar −146, ESPP −147 (row), Paycheck +119, Overview +70, Net worth +30, Spending +22, Credit cards −14 | 0, 0, +1, +0.6 (row), −3, +1, 0, 0, +1 |
+| Same @1280 | −23, −10, −149, −29 (row), +118, +64, +67, +21, −15 | +1, +1, +1, +1.3 (row), −6, +18, +60 (+42 of it above the tile row, as before), +1, +1 |
+| Cold-load CLS @1440 (API held 1.5 s) | Paycheck 0.054, Overview 0.085, Net worth 0.0095, others ≤ 0.0014 | Paycheck 0.001, Overview 0.033 (the Up next / Data status column — OU-01's second jump, not tiles), Net worth 0.0095, others ≤ 0.0014 |
+| Projection's pinned band @1440 | 133.1 px | 131.6 px |
+
+### Deviations from the plan and the spec, and why
+
+1. **First baseline, not "last baseline"** (spec §4.1): `last baseline` lifted Money lasts' figure 16 px off the row
+   (its unit line hangs below it). Measured before planning.
+2. **Clauses are `inline-block`, not `white-space: nowrap`** (§4.3): the same break rule, but a clause wider than its
+   whole tile wraps inside itself instead of running out of the tile.
+3. **`.kpi-row-steady`** (Overview, Net worth, Spending) reserves the badge line and one delta line; §4.1's "row 2 is
+   0 px when no tile has a badge" holds for every other row. Without it the Net worth row could not keep one height
+   across months (its badge comes and goes with the month), nor could its ghosts match.
+4. **The row's row gap is 0; lines are spaced by tile margins** (`--kpi-row-after`): a parent row gap leaks into every
+   subgrid track (an empty badge line measured 16 px). The Projection's pinned band keeps its height with an 8 px tile
+   margin at ≥ 1000 px; the Monthly Review sets `--kpi-row-after: 1.25rem`; the calendar strip's own 1rem margin went.
+5. **The tile is no longer a size container; `.stat-value` is** (a container turns subgrid off — measured).
+6. **Net worth's month story in a tile reads "· Sep 1 → Oct 1"** (no month name, no years; the label names the
+   year): "September: Sep 1, 2023 → Oct 1, 2023" is 324 px against a 239 px tile. Charts keep changePhrase.
+7. **Spending's Living spending line is "tax $X · transfers $Y"**: with the cash total (= living + tax) it was 281 px.
+8. **Whole dollars in every tile delta that prints an amount**, app-wide (§4.3's rule); per-share prices keep cents
+   (the spec's own "NVDA $224.58", "avg $54.14 / sh").
+9. **FI ratio reads "$802,141 to go"** (whole dollars) rather than "$802K": no compact dialect was added (MOTION-17 is
+   out of scope).
+10. **Browser-found: the spec's own hero example was 0.58 px too wide at 1440** (239.14 px in a 238.56 px delta box),
+    so "· 21 days" wrapped. The ▲/▼'s own space closes by 0.1em (`.stat-delta-glyph`); the words and textContent are
+    unchanged (`61ea0079`).
+11. **Browser-found: the evidence (i) grew its label line** from 15 to 17.1 px, so every ghost stood 2 px short:
+    `.stat-label .metric-info-button` takes InfoHint's −5.5 px block margins (the target is still 24 px) (`799d70de`).
+12. **Browser-found: the pinned Projection band's deltas run two lines**, so it reserves two (`min-height: 2lh`,
+    ≥ 1000 px); its ghost stood 19 px short (`799d70de`).
+13. **Browser-found: "1 tax payment" under "$0.00"** (September's estimated payment is $0, the safe harbor is met):
+    the leg names a "tax deadline", the calendar's own noun (`035b1a48`).
+14. **Scheduled in/out name up to two kinds, then "N more"** ("2 card fees · 1 tax deadline · 1 more"), generalising
+    the table's "2 paydays" / "1 card fee"; "Nothing scheduled" / "Nothing due" when empty.
+15. **Paycheck:** Household take-home is the hero when it shows, else Monthly net; the breakdown card's "Employer match
+    +$X per check" line went with the nested tile (the fourth tile says it). Monthly net's line names the person only
+    when there are two or more to tell apart.
+16. **Ghost numbers:** `--m-stat-tile` / `--m-stat-tile-bare` and the fixed ghost min-heights are gone (ghosts stand
+    in the real lines); `STAT_TILE` is the measured 101 px, used only by card ghosts standing in for a tile row
+    (`compVesting` 71 → 57); `paycheckBreakdown` 581 → 450 (no tile inside the card any more).
+17. **The skeleton API takes more than the spec's variants:** besides `five | dense | lone`, `GhostRowSpec` takes
+    `steady`, `hero` and `className` (the calendar's `cal-strip` keeps its five-across from 880 px; the Projection's
+    band is sticky and padded). Without them the ghost and the landed row differ at 1280.
+18. **The What-if, Monthly Review and Credit cards rows** were found mixed (or five-tile) by the audit and given the
+    same treatment (lines from the payload; `kpi-row-5` for the advantage case).
+
+### The `.kpi-row` audit (spec §4.4, "every .kpi-row")
+
+21 JSX rows — the spec's "26" counts CSS mentions too. Overview, Net worth, Spending (steady, every tile a line);
+Projection (FI ratio line); CashflowStrip (slots; Scheduled in / out lines); PositionStrip (quote, average cost);
+ESPP limit row (all bare — kept bare); Portfolio (Cost basis line; Realized gains out of scope); Will I owe? combined
+(Projected tax line) and split (all lines already); Taxes Summary (all bare — kept bare); What-if sale row (Proceeds,
+Tax due, Net cash lines) and Δ row (Effective rate line); Dividends (all bare — kept bare); Comp vesting (all lines);
+Credit cards (all bare — kept bare; a five-tile row when the household advantage shows); Monthly Review (Living
+spending line); Paycheck (one row); and the three skeleton rows. Card detail's verdict tile stands outside any row
+(unchanged).
+
+### Outside-scope touches (minimal, each for a named reason)
+
+- `src/utils/format.ts` — `formatCurrencyWhole` (the task said "check before adding one"; none existed).
+- `src/components/monthly/story.ts` — the Review tile's delta producer (whole dollars).
+- `src/pages/TaxesPage.tsx` — one prop (`effectiveRate`) on the `<WithholdingPanel>` call.
+- `src/pages/CalendarPage.tsx` (the skeleton prop) and `src/pages/CalendarPage.css` (the `.cal-strip` rules only; L1
+  owns `.cal-grid`).
+- `src/pages/MonthlyUpdatePage.css` (`.review-kpis` only) and `src/pages/PaycheckPage.css` (tile comments and the
+  retired `.paycheck-household` rule).
+- Tests following the changed files: `surfaceGrammar.test.ts` and `calendarCss.test.ts` (their KPI pins),
+  `EsppPage.test.tsx` (one $25k assertion), `CompPage.test.tsx`, `CreditCardsPage.test.tsx`,
+  `MonthlyUpdatePage.test.tsx`, `story.test.ts`.
+
+### Known remainders
+
+- At 1280 the Overview / Net worth hero's two clauses wrap (between clauses, as §4.3 wants), so those steady rows are
+  one delta line taller than their ghost there (+18 px) and can differ by a line between months; the one-line
+  acceptance is at 1440, where it holds.
+- Paycheck on a truly cold load (no household snapshot) ghosts 3 slots; a two-person household lands 4 tiles, whose
+  narrower hero figure is 3 px (1440) / 6 px (1280) shorter.
+- A month's story note ("· spending not entered yet") adds a delta line in the months it applies (none on the copy).
+- The Projection band still grows by a badge line when a what-if verdict appears (steady there would add ~22 px to the
+  default band); Credit cards' five-tile row keeps the advantage tile's verdict line beside four bare tiles (not in
+  the production data).
+- Paycheck's breakdown ghost is still one full-width card, and a Profiles deep link still ghosts it (TPC-04's other
+  half — the Profiles region is L6's).
+
+### Gates (run from the worktree on the final tree)
+
+- `npx tsc -p tsconfig.app.json --noEmit` — clean; `npx tsc -p tsconfig.node.json --noEmit` — clean.
+- `npx eslint .` — 0 errors, 26 warnings (the baseline).
+- `npx vitest run --maxWorkers=4` — 301 files, 4,519 tests passed.
+- My vite on 5272 stopped; no headless Edge left running; the shared :8077 backend untouched.
