@@ -377,3 +377,48 @@ describe('ChartCard persistent interactions', () => {
     expect(changed).toHaveBeenCalledWith(null)
   })
 })
+
+// Contract C5 (2026-09-25 polish spec §3.1): a half-width card always has a partner in its row, so it
+// grows its PLOT to the row's height — the configured height is the floor. jsdom lays nothing out;
+// what the card declares is what can be pinned here, and chartFillCss.test.ts pins the CSS.
+describe('ChartCard fill (spec §3.1, contract C5)', () => {
+  const chart = () => screen.getByTestId('echart')
+  const card = () => document.querySelector('section.chart-card') as HTMLElement
+
+  it('fills by default at span 6: the chart takes the plot box and the configured height is its floor', () => {
+    render(<ChartCard {...base} option={OPTION} span={6} height={260} />)
+    expect(chart().getAttribute('data-height')).toBe('fill')
+    expect(card().classList.contains('chart-card-fill')).toBe(true)
+    expect(card().style.getPropertyValue('--chart-h')).toBe('260px')
+  })
+
+  it('keeps a fixed plot at span 12 unless asked, and takes `fill` when it is', () => {
+    render(<ChartCard {...base} option={OPTION} height={220} />)
+    expect(chart().getAttribute('data-height')).toBe('220')
+    expect(card().classList.contains('chart-card-fill')).toBe(false)
+    // The configured height is on every card: the Allocation aside caps itself at it (§3.6).
+    expect(card().style.getPropertyValue('--chart-h')).toBe('220px')
+    cleanup()
+    render(<ChartCard {...base} option={OPTION} height={220} fill />)
+    expect(chart().getAttribute('data-height')).toBe('fill')
+    expect(card().classList.contains('chart-card-fill')).toBe(true)
+  })
+
+  it('lets a half-width card opt out', () => {
+    render(<ChartCard {...base} option={OPTION} span={6} height={300} fill={false} />)
+    expect(chart().getAttribute('data-height')).toBe('300')
+    expect(card().classList.contains('chart-card-fill')).toBe(false)
+  })
+
+  it('never fills a card with an aside — its plot sits inside the aside wrapper, which does not grow', () => {
+    render(<ChartCard {...base} option={OPTION} span={6} height={240} aside={<p>Legend</p>} />)
+    expect(chart().getAttribute('data-height')).toBe('240')
+    expect(card().classList.contains('chart-card-fill')).toBe(false)
+  })
+
+  it('keeps the skeleton at the configured height while the data is out — the CSS grows it with the row', () => {
+    render(<ChartCard {...base} option={null} busy span={6} height={300} />)
+    expect((document.querySelector('.chart-card-skeleton') as HTMLElement).style.height).toBe('300px')
+    expect(card().classList.contains('chart-card-fill')).toBe(true)
+  })
+})

@@ -1,4 +1,18 @@
-.chart-card-slot { min-width: 0; }
+/* The slot chain (2026-09-25 polish spec §3.1): ChartSurface portals the card into a class-less host
+   div inside .chart-card-slot, and the grid stretched only the slot — the host and the card kept their
+   content height, so paired cards ended 17–95px apart. slot → host → card is now a column flexbox
+   chain, the Expand dialog's own (below), so a card always fills its slot. A slot nothing stretches is
+   as tall as its card, exactly as before. */
+.chart-card-slot { min-width: 0; display: flex; flex-direction: column; }
+.chart-card-slot > div { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.chart-card-slot .chart-card { flex: 1; display: flex; flex-direction: column; }
+/* A filling card (ChartCard `fill`) hands its extra height to the PLOT: the configured height
+   (--chart-h, set on the card) is the floor and the plot grows with the row, so the footer ends on the
+   card's bottom edge. contain: size keeps the canvas out of the row's measurement — a card that grew
+   never ratchets the row, and when the neighbour's Table closes both shrink back. The skeleton holds
+   the same box while the data is out. The chart's own floor is a guard for a box nothing resolves. */
+.chart-card-slot .chart-card-fill > :is(.loading-dim, .chart-card-skeleton) { flex: 1 0 auto; min-height: var(--chart-h); contain: size; }
+.chart-card-slot .chart-card-fill > .loading-dim > [role='img'] { min-height: var(--chart-h); }
 .chart-expanded-dialog { position: fixed; inset: 24px; width: calc(100vw - 48px); max-width: none; height: calc(100vh - 48px); max-height: none; margin: 0; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; overflow: auto; }
 /* --scrim is F2's light-theme token (spec §6); the fallback is today's value. */
 .chart-expanded-dialog::backdrop { background: var(--scrim, #0009); }
