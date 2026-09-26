@@ -438,7 +438,9 @@ async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> 
     undo.month = rows[0].month
     # A delete's inverse is a re-insert. Consecutive ones into the same table (with the same
     # columns) wait in `run` and go out together (_reinsert); any other step sends the run
-    # first, so every statement still executes in reverse-log order.
+    # first, so every statement still executes in reverse-log order. The same columns, because
+    # one multi-row INSERT takes its columns from its first row: a column only a later image
+    # carries (one logged after a migration) would be dropped without a word.
     run_table: Table | None = None
     run: list[dict[str, object]] = []
     for row in reversed(row_level):
