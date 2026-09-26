@@ -28,6 +28,17 @@ LOGGED: dict[str, set[str]] = {
         "update_grant",
         "delete_grant",
     },
+    "espp.py": {
+        "create_lot",
+        "update_lot",
+        "delete_lot",
+        "create_period",
+        "update_period",
+        "delete_period",
+        "create_offering",
+        "update_offering",
+        "delete_offering",
+    },
     "net_worth.py": {
         "create_account",
         "update_account",
