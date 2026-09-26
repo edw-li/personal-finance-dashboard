@@ -415,10 +415,12 @@ export default function WhatIfPanel({
   // rate's move — display-only ratios and differences of the server's own figures.
   const salesCount = saleDetails.length + esppSaleDetails.length
   const ratio = (part: string, whole: string) => Math.abs(Number(part)) / Math.abs(Number(whole))
-  const rateMove =
-    result === null || previewUnusable
-      ? null
-      : (Number(result.scenario.totals.effective_rate) - Number(result.baseline.totals.effective_rate)) * 100
+  // The move between the two DISPLAYED rates (formatPct's own rounding), so the line agrees with the
+  // "a% → b%" beside it; nothing to say when either rate is unknown (the engine refused).
+  const shownPct = (rate: string) => Number((Number(rate) * 100).toFixed(1))
+  const baselineRate = result === null || previewUnusable ? null : result.baseline.totals.effective_rate
+  const scenarioRate = result === null || previewUnusable ? null : result.scenario.totals.effective_rate
+  const rateMove = baselineRate == null || scenarioRate == null ? null : shownPct(scenarioRate) - shownPct(baselineRate)
   const overrideCount = overrideKeys.length
   const applyHintId = useId()
   // Apply is enabled only for COMPLETE rows (spec §B7): a row still outside the scenario would
@@ -559,9 +561,11 @@ export default function WhatIfPanel({
                     signed: false,
                   })} → ${formatPct(result.scenario.totals.effective_rate, { signed: false })}`}
                   delta={
-                    rateMove === null || Math.abs(rateMove) < 0.05
-                      ? 'no change'
-                      : `${Math.abs(rateMove).toFixed(1)} pts ${rateMove > 0 ? 'higher' : 'lower'}`
+                    rateMove === null
+                      ? undefined
+                      : Math.abs(rateMove) < 0.05
+                        ? 'no change'
+                        : `${Math.abs(rateMove).toFixed(1)} pts ${rateMove > 0 ? 'higher' : 'lower'}`
                   }
                   tone="neutral"
                   hint="Overall effective rate, baseline → scenario."

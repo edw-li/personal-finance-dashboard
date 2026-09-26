@@ -485,6 +485,36 @@ describe('WhatIfPanel', () => {
     ).toBeTruthy()
   })
 
+  // The rate's line agrees with the "a% → b%" beside it (2026-09-25 polish review): it is the move
+  // between the two DISPLAYED rates, so 24.74% → 24.86% (shown 24.7% → 24.9%) reads 0.2 points, and
+  // two rates that display alike read "no change".
+  it('words the effective rate’s move from the rates it displays', async () => {
+    vi.mocked(runWhatIf).mockResolvedValue(
+      resultFixture({ baseline: summaryFixture(2024, '376543.22', '0.2474'), scenario: summaryFixture(2024, '372222.22', '0.2486') }),
+    )
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    await screen.findByText('Δ total tax')
+    expect(tile('Effective rate').querySelector('.stat-value')?.textContent).toBe('24.7% → 24.9%')
+    expect(tile('Effective rate').querySelector('.stat-delta')?.textContent).toBe('0.2 pts higher')
+    cleanup()
+    vi.mocked(runWhatIf).mockResolvedValue(
+      resultFixture({ baseline: summaryFixture(2024, '376543.22', '0.2474'), scenario: summaryFixture(2024, '372222.22', '0.2466') }),
+    )
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    await screen.findByText('Δ total tax')
+    expect(tile('Effective rate').querySelector('.stat-value')?.textContent).toBe('24.7% → 24.7%')
+    expect(tile('Effective rate').querySelector('.stat-delta')?.textContent).toBe('no change')
+    cleanup()
+    // A rate the engine could not give ("—") has no move to word — not "no change".
+    vi.mocked(runWhatIf).mockResolvedValue(
+      resultFixture({ baseline: summaryFixture(2024, '376543.22', null), scenario: summaryFixture(2024, '372222.22', '0.2466') }),
+    )
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    await screen.findByText('Δ total tax')
+    expect(tile('Effective rate').querySelector('.stat-value')?.textContent).toBe('— → 24.7%')
+    expect(tile('Effective rate').querySelector('.stat-delta')?.textContent ?? '').toBe('')
+  })
+
   it('keeps the three Δ tiles for a scenario with nothing sold', async () => {
     vi.mocked(runWhatIf).mockResolvedValue(resultFixture({ sale_details: [], sale_summary: null }))
     mount('/taxes?whatif=annual_salary%3A210000', { definitions: DEFS, inputs: INPUTS })

@@ -138,4 +138,18 @@ describe('CashflowStrip', () => {
     expect(delta('Scheduled out')).toBe('2 card fees · 1 tax deadline · 1 more')
     expect(delta('Scheduled in')).toBe('1 dividend')
   })
+
+  // The line counts what the leg sums (2026-09-25 polish review): an event with no knowable amount is
+  // left out of the sum (the notes count it as unknown), so it is left out of the count too.
+  it('does not count an event whose amount the sum leaves out', () => {
+    const unknowable = [
+      calendarEvent({ date: '2026-09-15', type: 'payday', label: 'Payday', amount: '6812.44', direction: 'in' }),
+      calendarEvent({ date: '2026-09-30', type: 'payday', label: 'Payday', amount: null, direction: 'in' }),
+      calendarEvent({ date: '2026-09-20', type: 'card_fee', label: 'Fee', amount: null, direction: 'out' }),
+    ]
+    render(<CashflowStrip events={unknowable} month="2026-09-01" quoteAsOf={null} living={[]} />)
+    const delta = (name: string) => screen.getByRole('group', { name }).querySelector('.stat-delta')?.textContent
+    expect(delta('Scheduled in')).toBe('1 payday')
+    expect(delta('Scheduled out')).toBe('Nothing due')
+  })
 })

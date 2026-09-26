@@ -32,11 +32,11 @@ function livingDefinition(estimate: CalendarLiving | null): string {
   return `Mean living spending of ${months} eligible months among the twelve calendar months before this month (before the current month, for a month still ahead) — the Spending page's Previous 12 months figure. ${why}`
 }
 
-/** What a scheduled leg counts, in the reader's nouns (singular, plural). */
+/** What a scheduled leg counts, in the reader's nouns (singular, plural) — the kinds that can be cash
+ *  in or out (a card credit is `neutral`, value to use, so it never lands in a leg). */
 const LEG_NOUNS: Partial<Record<CalendarEventType, [string, string]>> = {
   payday: ['payday', 'paydays'],
   ex_dividend: ['dividend', 'dividends'],
-  card_credit: ['card credit', 'card credits'],
   card_fee: ['card fee', 'card fees'],
   tax_deadline: ['tax deadline', 'tax deadlines'],
   custom: ['custom event', 'custom events'],
@@ -44,12 +44,13 @@ const LEG_NOUNS: Partial<Record<CalendarEventType, [string, string]>> = {
 
 /** A scheduled leg's second line (2026-09-25 polish spec §4.4): the events it sums, by kind — "2
  *  paydays", "2 card fees · 1 tax deadline · 1 more" (the two most frequent kinds, then the rest) — or
- *  that there is nothing. Hidden events and vests are left out, as the leg's own sum leaves them. */
+ *  that there is nothing. Exactly what the leg's own sum takes (cashflow.ts summarize): no hidden event,
+ *  no vest, and no event whose amount is unknowable (the notes count those). */
 function legWords(events: CalendarEvent[], month: string, direction: 'in' | 'out'): string {
   const prefix = month.slice(0, 7)
   const counts = new Map<CalendarEventType, number>()
   for (const event of events) {
-    if (event.hidden || event.source === 'rsu' || event.direction !== direction || event.date.slice(0, 7) !== prefix) continue
+    if (event.hidden || event.amount === null || event.source === 'rsu' || event.direction !== direction || event.date.slice(0, 7) !== prefix) continue
     counts.set(event.type, (counts.get(event.type) ?? 0) + 1)
   }
   if (counts.size === 0) return direction === 'in' ? 'Nothing scheduled' : 'Nothing due'
