@@ -22,7 +22,7 @@ from datetime import date
 from uuid import UUID, uuid4
 
 from fastapi import Depends, Request
-from sqlalchemy import Table, and_, delete, func, insert, literal, select, update
+from sqlalchemy import Table, and_, delete, func, insert, literal, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -56,6 +56,15 @@ REPLAY_REFUSAL = "Undo no longer fits the current data — a row it depends on h
 
 # asyncpg binds at most 32,767 parameters per statement; a grouped re-insert splits below it.
 REINSERT_PARAMETERS = 32_000
+
+# Every Undo holds this from its FIRST statement to its commit, so Undos run one at a time. Each
+# reads the undo runs and the later changes (ALREADY_UNDONE, superseded) and then writes a run of
+# its own; two in flight both pass on what the other has not committed yet — one batch undone
+# twice, or an older batch's Undo writing over a redo in flight (the L3c review's probes). One
+# global key, not one per table: the chains an Undo reads cross tables, and an Undo is a rare,
+# human-paced action, so nothing queues behind it for long. Only undo_batch takes it, and always
+# before any other lock, so it can close no cycle with the order or review-table locks.
+UNDO_LOCK = text("SELECT pg_advisory_xact_lock(hashtext(:key))").bindparams(key="undo")
 
 
 def pk_of(obj: object) -> dict[str, object]:
@@ -270,8 +279,10 @@ async def superseded(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, str]
       so the batch's `before` images are no longer what those rows hold. A later change is a
       batch with a row-level entry on one of this batch's (table, pk) after this batch's own
       last entry. Undos form chains — X; the Undo U1 that reversed X; the Undo U2 that
-      reversed U1, a redo; … — each batch undone at most once, and a batch STANDS when an
-      even number of Undos sit above it in its chain. A later change L counts only when
+      reversed U1, a redo; … — each batch undone at most once (undo_batch holds UNDO_LOCK from
+      its first statement to its commit, so a second Undo of a batch waits for the first, then
+      reads its run and refuses ALREADY_UNDONE), and a batch STANDS when an even number of
+      Undos sit above it in its chain. A later change L counts only when
         1. L stands (its effect is in the data), and
         2. L is not the Undo of a batch that is itself later than this one.
       So a later change and its standing Undo cancel out — the change no longer stands, the
@@ -375,7 +386,8 @@ async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> 
     import/restore superseded (`superseded`), and — per replayed DELETE, because only the
     current data can answer it — a row that others still depend on. Records the replay as a
     new source='undo' batch plus an `undo` run. Expunges the session afterwards: Core
-    statements bypass the identity map."""
+    statements bypass the identity map. One at a time: UNDO_LOCK is its first statement."""
+    await db.execute(UNDO_LOCK)
     rows = list(
         (
             await db.execute(

@@ -96,6 +96,32 @@ WAITING_FOR_A_LOCK = text(
     "AND pg_database.datname = current_database()"
 )
 
+# Whether one server process waits for a lock — a row's, a table's or an advisory one alike.
+# pg_locks is read live on every call, unlike pg_stat_activity, whose rows a transaction reads
+# once and then keeps.
+BLOCKED = text("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = :pid AND NOT granted)")
+
+
+async def backend_pid(session: AsyncSession) -> int:
+    """The server process behind `session`. Asking starts the session's transaction, so the
+    request that runs on it next runs on this process."""
+    return (await session.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+
+
+async def until_blocked(engine: AsyncEngine, pid: int, task: asyncio.Task) -> None:
+    """Return once server process `pid` — the one `task` runs on — waits for a lock another
+    session holds. Fails with the task's own error when it finishes first, and after
+    RACE_SECONDS when it never gets that far: no sleep decides anything."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + RACE_SECONDS
+    async with engine.connect() as watcher:
+        while not (await watcher.execute(BLOCKED, {"pid": pid})).scalar_one():
+            if task.done():
+                task.result()  # it failed before it could wait: say how
+                raise AssertionError("the request finished without waiting for a lock")
+            assert loop.time() < deadline, "the request neither finished nor waited for a lock"
+            await asyncio.sleep(0.02)
+
 
 async def race[A, B](
     engine: AsyncEngine,
