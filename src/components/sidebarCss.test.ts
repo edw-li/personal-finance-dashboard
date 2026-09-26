@@ -62,8 +62,13 @@ describe('the one-row account footer (shell.css)', () => {
 
   it('draws the theme toggle and Log out as 28px icon buttons that never shrink', () => {
     expect(SHELL).toMatch(/\.sidebar-footer-icon \{[^}]*flex: none;[^}]*width: 28px;[^}]*height: 28px;[^}]*padding: 0;/)
-    // With no email yet the buttons keep the row's end.
-    expect(SHELL).toContain('.sidebar-footer-icon:first-of-type { margin-left: auto; }')
+  })
+
+  // With no email yet the buttons still keep the row's end — by the row's own alignment, not by
+  // which button happens to come first in the markup.
+  it("keeps the buttons at the row's end whatever the source order", () => {
+    expect(SHELL).toMatch(/\.sidebar-footer \{[^}]*justify-content: flex-end;/)
+    expect(SHELL).not.toContain(':first-of-type')
   })
 
   it('keeps the house hover and focus ring on the icon buttons', () => {

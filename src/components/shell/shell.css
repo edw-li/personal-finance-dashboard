@@ -227,6 +227,9 @@
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
+  /* The buttons keep the row's end with or without an email (the session still loading); beside an
+     email, which takes the slack, this changes nothing. */
+  justify-content: flex-end;
   gap: 0.15rem;
   font-size: 0.72rem;
   color: var(--muted);
@@ -253,12 +256,6 @@
   background: none;
   color: var(--muted);
   cursor: pointer;
-}
-
-/* With no email yet (the session still loading) the buttons keep the row's end; beside an email,
-   which already takes the slack, this changes nothing. */
-.sidebar-footer-icon:first-of-type {
-  margin-left: auto;
 }
 
 .sidebar-footer-icon:hover {

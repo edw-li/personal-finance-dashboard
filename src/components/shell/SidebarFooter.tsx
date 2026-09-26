@@ -12,7 +12,7 @@ import './shell.css'
 // learned twice, for two different lifetimes:
 //
 //   SYSTEM_SNAPSHOT — the page-snapshot cache, which api() wipes after ANY non-GET and
-//   logout wipes entirely. Right for seeding the pill on a remount inside one session.
+//   logout wipes entirely. Right for seeding the email's tooltip on a remount inside one session.
 //
 //   `last` — module state, wiped by nothing but a reload. Right for the error boundary's
 //   Copy details: a snapshot read would go blank the first time the user saved anything,
@@ -35,7 +35,7 @@ export default function SidebarFooter({ buildHash }: { buildHash: string }) {
   const { theme, resolved, setTheme } = useTheme()
   const toast = useToast()
   // Seeded from the cache so a remount WITHIN a session (a StrictMode double-mount, a shell
-  // re-render) shows the pill immediately instead of blinking it back in. Not after a
+  // re-render) names the environment at once instead of dropping it for a beat. Not after a
   // logout/login — logout clears the snapshots by design, since they are session data — and
   // the fetch below revalidates either way.
   const [status, setStatus] = useState<SystemStatus | null>(
@@ -52,9 +52,9 @@ export default function SidebarFooter({ buildHash }: { buildHash: string }) {
         setSnapshot(SYSTEM_SNAPSHOT, data)
         if (live) setStatus(data)
       })
-      // A status the server would not answer leaves the pill hidden — an unlabeled footer
-      // is honest, a stale or guessed environment label is not. Nothing to do, but the
-      // handler must exist: an unhandled rejection in the shell is noise in every console.
+      // A status the server would not answer leaves the environment out of the tooltip — an
+      // unlabeled footer is honest, a stale or guessed environment label is not. Nothing to do,
+      // but the handler must exist: an unhandled rejection in the shell is noise in every console.
       .catch(() => {})
     return () => {
       live = false
