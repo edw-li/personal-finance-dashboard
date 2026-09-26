@@ -1702,16 +1702,47 @@ them back for its answer. A production Undo (analyzed statistics) should come in
   redo cancels the whole chain, and an Undo of an *older* batch is an ordinary later change (the redo it would allow
   would re-apply what its images carry — `test_a_redo_refuses_once_an_older_changes_undo_rewrote_its_rows`). The
   listing's `undoable` reads the same function.
-- **Accepted, documented in `lock_parent`:** a month save that already holds the review-table locks and then needs the
-  row being deleted (saving a balance for the very account another tab is deleting) can deadlock with the delete;
-  Postgres aborts one request and nothing is half-written. Before this lane the same race silently cascaded the new
-  balance away. Taking `lock_review_inputs` first in `delete_account` / `delete_category` would serialize the two
-  instead — table-level locking the brief did not ask for; a candidate follow-up.
-- **Not covered by the parent lock** (out of the brief's scope, the cascade): a child re-pointed *away* from the row, or
-  edited in place, by another tab during the delete.
-- **Labels:** an account's or category's one-click Retire/Restore now reads "Edited account …" / "Edited category …";
-  toggle verbs like the cards' "Archived/Unarchived" were not asked for.
-- **Left alone:** `services/month_status._undone` still walks `undone_by` one query per link (it could read
-  `_undo_links` once); the `superseded` self-join has no `(table_name, pk)` index — fine with statistics, worth a look if
-  the log grows large; the Activity card's ⓘ copy is frontend (lane L5). L3b's plan still shows the old matrix label in
-  its contract table; this record supersedes it.
+- ~~**Accepted, documented in `lock_parent`:** a month save racing the delete of its own account could deadlock with
+  it.~~ **Fixed in review (fix 2):** the two deletes take `lock_review_inputs` first.
+- ~~**Not covered by the parent lock:** a child re-pointed away, or edited in place, during the delete.~~ **Fixed in
+  review (fix 3):** `lock_children`.
+- ~~**Labels:** Retire/Restore read "Edited …".~~ **Fixed in review (fix 7):** "Retired / Restored …".
+- ~~**Left alone:** `month_status._undone` walking `undone_by` one query per link.~~ **Fixed in review (fix 4).** Still
+  left: the `superseded` self-join has no `(table_name, pk)` index (see the review record's follow-ups); the Activity
+  card's ⓘ copy is frontend (lane L5). L3b's plan still shows the old matrix label in its contract table; this record
+  supersedes it.
+
+### Review fixes (2026-09-25, verdict "ready with fixes")
+
+The independent review model-checked the chain rule clean (a randomized serial check of renames, reorders, creates,
+deletes and Undos of Undos) and found the eight items below. Each was test-first: the new or changed test seen red for
+the reviewed reason, then green; the pins that could not be red first (fix 5) were shown to bite by a mutation, then
+reverted.
+
+| # | Fix | Commit | Proof |
+|---|---|---|---|
+| 1 | **Critical — Undos run one at a time.** On any table no order or review lock covers, two concurrent Undos both passed ALREADY_UNDONE and `superseded` before either committed: two runs claimed one batch (after which an older edit's Undo could overwrite a standing redo — base refused that), or a redo and an older batch's Undo both committed and left the row at the older value. `UNDO_LOCK` (`pg_advisory_xact_lock(hashtext('undo'))`) is now `undo_batch`'s FIRST statement, held to its commit; only `undo_batch` takes it, always first, so it closes no cycle. `superseded`'s docstring says why "each batch undone at most once" now holds. | `5ce9d6b9` | `test_undo_serialization.py` (3), adapted from the reviewer's probes — a third session holds the credit's row so both Undos get as far as they can: the second Undo of one batch waits and gets ALREADY_UNDONE, one run claims it, the row holds "B"; an older batch's Undo waits for a redo in flight and gets OVERLAP, the row keeps "C"; the lock precedes the batch read, the order lock and LOCK TABLE. Red before: both concurrent Undos returned batch ids; no undo lock. The reviewer's own probe files, run against the fix: probe 1 → `[UUID, UndoRefused('This change was already undone')]`; probe 2 → the redo's UUID and `UndoRefused('Later changes touched these rows — undo those first')`, row "C", the Undo of T seen waiting on the advisory lock |
+| 2 | **Important — the month save no longer deadlocks against its own row's delete.** `delete_account` / `delete_category` took the row lock before the table locks their writes need; a `save_month` holding `lock_review_inputs` and writing under that row deadlocked with them, and with the delete first Postgres aborted the save. Both deletes now `await lock_review_inputs(db)` first — undo_batch's order: review locks, then rows. `lock_parent`'s "accepted deadlock" paragraph is gone. | `5c91e521` | 4 races through the real routes (`save_month`, `delete_account`, `delete_category`), each ordering paused at a patched lock step: delete first → the save waits, then refuses 409/422; save first → the delete waits, then refuses "account has 1 balance rows — deactivate it instead" / "category has 1 monthly rows — deactivate it instead". Red before: `DeadlockDetectedError` on the save (delete first) and on the delete (save first). The statement-order test pins LOCK TABLE before the row lock for the two review-input parents, and none for the other three |
+| 3 | **Minor — the dependent deletes read what they image FOR UPDATE.** `changelog.lock_children` (`with_for_update()` + `populate_existing`) for every imaging read in the five deletes; the counts that only refuse the delete stay plain. A child moved away in another tab drops out (Postgres re-checks the WHERE on the committed row); one edited in place is imaged as it stands. spending gains `_budget_rows`, shared by the editor's history and the delete. | `aa65015b` | The statement-order test requires FOR UPDATE on every imaging read; two races through the real card delete: a category re-pinned away keeps its new pin and nothing of it is logged (red: `None` — the delete wrote NULL over the pin); a credit edited in place is imaged at 350.00 (red: 300.00). The reviewer's moved-away probe, run against the fix: the component's parent stays Y, the delete images nothing of it |
+| 4 | **Minor — the undo runs are read once per request.** `undo_links` (public) is read once by the listing and by `undo_batch` and passed to `superseded(db, batch_ids, links)`; `undone_by` is gone (the map answers it); `month_status._undone` reads it once and asks `stands` (public) of each batch, instead of one query per link. Not bounded by date: `change_log.at` is the product-day stamp, `lifecycle_runs.at` the wall clock, and the dev override can put them apart. | `0b4cab56` | A listing and an Undo each send exactly one read of the runs (red: 2 each) |
+| 5 | **Minor — the re-insert run's two splits are pinned.** | `31f29672` | `test_undo_replay.py` (2). Column set: a hand-made delete batch of two calendar overrides, one imaged without `updated_at` (a server-default-only column) → two statements, the whole image back exactly, the ragged one given the server's default. The mutation showed the split is load-bearing: one INSERT took its columns from the ragged FIRST row and dropped the whole image's `updated_at` without a word — the loop's comment now says so. Chunking: `REINSERT_PARAMETERS` monkeypatched to 10 → five closes as 8 + 8 + 4 parameters, every row back (mutation: one statement of 20) |
+| 6 | **Minor — a loop in the undo links ends the walk.** `stands` stops at the first batch it meets again; `month_status._undone` walks through `stands` since fix 4, so both readers share the guard. | `25067a9c` | `stands` over a self-loop and a two-batch loop ends — run on a daemon thread with a timeout so the red run fails instead of hanging (red: "the walk never ended"); the Activity listing and the month-status evidence both answer over looping reports |
+| 7 | **Minor — Retire / Restore read in the buttons' verbs.** The card router's `_edit_label` is `changelog.edit_label`; `update_account` / `update_category` use it: "Retired account X" / "Restored account X" (and category), like "Archived/Unarchived card" and "Hid/Showed reward category". | `4d70d900` | Retire, restore and a two-column PATCH (still "Edited") for an account and a category; the completions test's retire expects "Retired account Brokerage" (both red first) |
+| 8 | **Follow-up, not done (needs a migration):** a `(table_name, pk)` index on `change_log` for `superseded`'s self-join. With statistics the planner hash-joins in well under a millisecond (As built's timing note); without them — a freshly written, never-analyzed log — it nested-loops (172 ms for an 802-row batch). | — | recorded here |
+
+**Housekeeping:** the reviewer's scratch databases `finance_test_rev3c` and `finance_test_rev3c_gw0`…`gw3` on
+127.0.0.1:5433 were dropped (`dropdb --if-exists`; none left). The reviewer's probe files were run from temporary
+copies in `tests/` and deleted; none is committed.
+
+**Gates after the review fixes (head `4d70d900` + this record):**
+
+| Gate | Result |
+|---|---|
+| `pytest -n 4` (full backend suite, `FINANCE_TEST_DB=finance_test_l3c`) | **2,845 passed, 4 skipped** in 69.5 s (2,830 before the fixes + 15: fix 1 ×3, fix 2 ×4, fix 3 ×2, fix 4 ×1, fix 5 ×2, fix 6 ×2, fix 7 ×1) |
+| `ruff check app tests` | All checks passed |
+| `ruff format --check app tests` | 316 files already formatted |
+
+**Shared test helpers added:** `tests/ordering_helpers.py` gains `backend_pid(session)` and
+`until_blocked(engine, pid, task)` — a race waits on the exact server process being blocked (`pg_locks`, read live on
+every call; `pg_stat_activity` is read once per transaction and would go stale), and fails with the request's own error
+if it finishes first.
