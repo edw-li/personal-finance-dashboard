@@ -106,6 +106,7 @@ async def reorder_categories(
 @router.post("/categories", response_model=CategoryOut, status_code=201)
 async def create_category(
     body: CategoryCreate,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> SpendingCategory:
@@ -142,7 +143,7 @@ async def create_category(
     await db.flush()
     batch.record_insert(category)
     batch.label = f"Created category {category.name}"
-    await batch.commit()
+    response.headers.update(batch_header(await batch.commit()))
     return category
 
 
@@ -157,6 +158,7 @@ async def _get_category(db: AsyncSession, category_id: int) -> SpendingCategory:
 async def update_category(
     category_id: int,
     body: CategoryUpdate,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> SpendingCategory:
@@ -194,7 +196,7 @@ async def update_category(
         setattr(category, field, value)
     batch.record_update(category, before)
     batch.label = f"Updated category {category.name}"
-    await batch.commit()
+    response.headers.update(batch_header(await batch.commit()))
     return category
 
 
@@ -262,6 +264,7 @@ async def _get_budget_row(
 async def put_category_budget(
     category_id: int,
     body: BudgetPut,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> list[CategoryBudget]:
@@ -291,7 +294,7 @@ async def put_category_budget(
         existing.amount = amount
         batch.record_update(existing, before, month=body.effective_month)
     batch.label = f"Set {category.name} budget from {body.effective_month:%b %Y}"
-    await batch.commit()
+    response.headers.update(batch_header(await batch.commit()))
     return await _budget_history(db, category_id)
 
 

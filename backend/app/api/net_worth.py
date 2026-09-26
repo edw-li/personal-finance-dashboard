@@ -181,6 +181,7 @@ async def reorder_accounts(
 @router.post("/accounts", response_model=AccountOut, status_code=201)
 async def create_account(
     body: AccountCreate,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Account:
@@ -226,7 +227,7 @@ async def create_account(
     await db.flush()
     batch.record_insert(account)
     batch.label = f"Created account {account.name}"
-    await batch.commit()
+    response.headers.update(batch_header(await batch.commit()))
     return account
 
 
@@ -241,6 +242,7 @@ async def _get_account(db: AsyncSession, account_id: int) -> Account:
 async def update_account(
     account_id: int,
     body: AccountUpdate,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Account:
@@ -300,7 +302,7 @@ async def update_account(
         setattr(account, field, value)
     batch.record_update(account, before)
     batch.label = f"Updated account {account.name}"
-    await batch.commit()
+    response.headers.update(batch_header(await batch.commit()))
     return account
 
 
