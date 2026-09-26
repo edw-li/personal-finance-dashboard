@@ -1,14 +1,20 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { ApiError, errorDetail } from '../../api/client'
 import {
-  createCardCredit,
   createCreditCard,
-  createLimitEvent,
   deleteCreditCard,
   reorderCreditCards,
   updateCreditCard,
+  updateCreditCardLogged,
 } from '../../api/creditCards'
+import { undoBatch } from '../../api/lifecycle'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { flashElement, revealEditor, revealRow, useEscapeCancel } from '../feedback/reveal'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
@@ -61,15 +67,9 @@ const EMPTY_CARD: CardFormState = {
   point_value_cents: '', authorized_users: '', opened_on: '', account_id: '', notes: '',
 }
 
-function message(err: unknown, fallback: string): string {
-  // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
-  return err instanceof ApiError ? err.message : fallback
-}
-
 /**
  * Card roster: add/edit form + table. Archive = full-object PATCH flipping is_active
- * (history kept, optimizer ignores it). Delete = instant + Undo; Undo re-POSTs the
- * card AND its credits and limit events (they cascade away server-side).
+ * (history kept, optimizer ignores it). Batch Undo restores the card and every dependent row.
  */
 export default function CardsPanel({
   cards,
@@ -81,11 +81,43 @@ export default function CardsPanel({
   accounts: AccountOut[]
   /** Primary first, then by id — the page's ordering, so the select reads like the chips. */
   people: PersonOut[]
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<CardFormState>(EMPTY_CARD)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [baseline, setBaseline] = useState(EMPTY_CARD)
+  const saveState = useSaveState({ dirty: JSON.stringify(form) !== JSON.stringify(baseline) })
+  const formRef = useRef<HTMLFormElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
+  const editingRef = useLatest(editingId)
+  const deleteWithUndo = useDeleteWithUndo()
+  const [rowBusy, setRowBusy] = useState<Set<number>>(new Set())
+  const [activeOverrides, setActiveOverrides] = useState<Map<number, boolean>>(new Map())
+  const rowFor = (id: number) => document.getElementById(`card-row-${id}`)
+  const focusRow = (id: number, flash = false) => {
+    const row = rowFor(id)
+    if (!row) { formRef.current?.querySelector<HTMLInputElement>('input')?.focus(); return }
+    revealRow(row)
+    if (flash) flashElement(row)
+    row.querySelector<HTMLElement>('[data-row-edit]')?.focus({ preventScroll: true })
+  }
+  const resetForm = () => {
+    // Blur an AmountInput before resetting: its blur commit belongs to the old draft.
+    formRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+    setEditingId(null)
+    setForm(EMPTY_CARD)
+    setBaseline(EMPTY_CARD)
+    setError(null)
+    saveState.clearError()
+  }
+  const cancelEdit = () => {
+    const id = editingRef.current
+    resetForm()
+    if (id !== null) focusRow(id)
+  }
+  useEscapeCancel(formRef, cancelEdit, editingId !== null)
+
   // Requests in flight across the panel — counted, never flagged (lane R3 review): a toast's
   // Undo clicked while a later drop's PUT is out settles on its own, and whichever answers
   // first must not wake the grips while the other is still out. Every request runs through
@@ -114,7 +146,10 @@ export default function CardsPanel({
     setLastCards(cards)
     setSavedOrder(null)
   }
-  const ordered = pendingOrder ?? savedOrder ?? cards
+  const ordered = (pendingOrder ?? savedOrder ?? cards).map((row) =>
+    activeOverrides.has(row.id) ? { ...row, is_active: activeOverrides.get(row.id)! } : row,
+  )
+  const orderedRef = useLatest(ordered)
   const cardById = new Map(ordered.map((card) => [card.id, card]))
 
   // A card is paid from a LIABILITY account and nothing else — offering the cash and
@@ -134,24 +169,28 @@ export default function CardsPanel({
         : String(defaultOwner.id)
       : form.person_id
 
-  const set = (field: keyof CardFormState) => (value: string) =>
+  const set = (field: keyof CardFormState) => (value: string) => {
+    setError(null)
+    saveState.clearError()
     setForm((f) => ({ ...f, [field]: value }))
+  }
 
   const startEdit = (card: CreditCardOut) => {
-    setEditingId(card.id)
-    // The server's own quantized strings, verbatim: nothing is reformatted on the way into
-    // a box whose contents are about to be sent straight back.
-    setForm({
-      name: card.name,
-      annual_fee: card.annual_fee,
-      rewards_currency: card.rewards_currency,
+    const next = {
+      name: card.name, annual_fee: card.annual_fee, rewards_currency: card.rewards_currency,
       person_id: card.person_id === null ? '' : String(card.person_id),
-      point_value_cents: card.point_value_cents,
-      authorized_users: card.authorized_users ?? '',
-      opened_on: card.opened_on ?? '',
-      account_id: card.account_id === null ? '' : String(card.account_id),
+      point_value_cents: card.point_value_cents, authorized_users: card.authorized_users ?? '',
+      opened_on: card.opened_on ?? '', account_id: card.account_id === null ? '' : String(card.account_id),
       notes: card.notes ?? '',
+    }
+    flushSync(() => {
+      setEditingId(card.id)
+      setForm(next)
+      setBaseline(next)
+      setError(null)
+      saveState.clearError()
     })
+    revealEditor(formRef.current, '#card-name')
   }
 
   /** The full-replace body, preserving fields the form doesn't show from the stored row when
@@ -214,6 +253,7 @@ export default function CardsPanel({
   }
 
   const submit = () => {
+    if (busy || saveState.status === 'clean' || saveState.status === 'saved' || saveState.status === 'saving') return
     // The row as the SERVER has it, as rendered: after a reorder the PUT's answer — its
     // renumbered sort_order included — stands here before the page's reload lands.
     const stored = ordered.find((card) => card.id === editingId)
@@ -223,122 +263,72 @@ export default function CardsPanel({
     // The FULL row on both verbs: the router validates the MERGED card, so a delta PATCH
     // would 422 on a stored field this form never touched. The nullable columns travel as
     // explicit nulls — which on PATCH is what CLEARS them.
-    const request =
-      editingId !== null ? updateCreditCard(editingId, body) : createCreditCard(body)
-    void track(() =>
-      request
-        .then(() => {
-          // The next entry starts here — the sheet's row-to-row rhythm.
-          // BEFORE the reset, and that order is load-bearing: the caret can still be sitting
-          // in an AmountInput when this lands, and moving focus BLURS that box synchronously.
-          // The blur's commit closes over the box's PRE-reset text, so focusing first aims
-          // that write at the state the reset below then replaces; the other order lets it
-          // land on the emptied form and resurrect the fee of the card just saved.
-          document.getElementById('card-name')?.focus()
-          setForm(EMPTY_CARD)
-          setEditingId(null)
-          reload()
-        })
-        .catch((err: unknown) => setError(message(err, 'Save failed'))),
-    )
+    void saveState.run(() => track(async () => {
+      const saved = await (editingId !== null ? updateCreditCard(editingId, body) : createCreditCard(body))
+      resetForm()
+      await reload()
+      requestAnimationFrame(() => focusRow(saved.id, true))
+    }))
   }
 
+  const lockRow = (id: number, locked: boolean) => setRowBusy((current) => {
+    const next = new Set(current)
+    if (locked) next.add(id)
+    else next.delete(id)
+    return next
+  })
+  const clearOverride = (id: number) => setActiveOverrides((current) => {
+    const next = new Map(current)
+    next.delete(id)
+    return next
+  })
+
   const toggleArchive = (card: CreditCardOut) => {
-    setError(null)
-    // The stored row with ONE bit flipped — not the form's, which may be mid-edit on some
-    // other card. Archiving keeps every credit and limit event; it only takes the card out
-    // of the matrix and the optimizer's math.
-    void track(() =>
-      updateCreditCard(card.id, {
-        name: card.name,
-        annual_fee: card.annual_fee,
-        rewards_currency: card.rewards_currency,
-        point_value_cents: card.point_value_cents,
-        // VERBATIM REBUILD 1 of 2. Every nullable column must be listed: this is a
-        // full-replace PATCH, so a column omitted here is CLEARED, and a cleared person_id
-        // silently turns the card joint (2026-08-26 audit §3.6).
-        person_id: card.person_id,
-        primary_holder: card.primary_holder,
-        authorized_users: card.authorized_users,
-        opened_on: card.opened_on,
-        is_active: !card.is_active,
-        account_id: card.account_id,
-        notes: card.notes,
-        sort_order: card.sort_order,
+    if (rowBusy.has(card.id)) return
+    lockRow(card.id, true)
+    setActiveOverrides((current) => new Map(current).set(card.id, !card.is_active))
+    void updateCreditCardLogged(card.id, {
+        name: card.name, annual_fee: card.annual_fee, rewards_currency: card.rewards_currency,
+        point_value_cents: card.point_value_cents, person_id: card.person_id,
+        primary_holder: card.primary_holder, authorized_users: card.authorized_users,
+        opened_on: card.opened_on, is_active: !card.is_active, account_id: card.account_id,
+        notes: card.notes, sort_order: card.sort_order,
+      }).then(async ({ batchId }) => {
+      await reload()
+      toast.success(`${card.is_active ? 'Archived' : 'Unarchived'} ${card.name}`, batchId === null ? undefined : {
+        action: { label: 'Undo', onAction: () => {
+          lockRow(card.id, true)
+          void undoBatch(batchId).then(async () => {
+            await reload()
+            requestAnimationFrame(() => focusRow(card.id, true))
+            toast.success(`Restored ${card.name}`)
+          }).catch((err: unknown) => { toast.error(errorDetail(err)); focusRow(card.id) })
+            .finally(() => lockRow(card.id, false))
+        } },
       })
-        .then(() => reload())
-        .catch((err: unknown) => setError(message(err, 'Archive failed'))),
-    )
+    }).catch((err: unknown) => toast.error(errorDetail(err))).finally(() => {
+      clearOverride(card.id)
+      lockRow(card.id, false)
+    })
   }
 
   const remove = (card: CreditCardOut) => {
-    // Cleared on entry like submit's: a delete that succeeds must not leave the previous
-    // save's 409 sitting over the panel as if it still described the table.
-    setError(null)
-    // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone.
-    void track(() =>
-      deleteCreditCard(card.id)
-        .then(() => {
-          // The edited row is gone — a stale editingId would PATCH a 404 on the next save.
-          // Reset on SUCCESS only.
-          if (card.id === editingId) {
-            setEditingId(null)
-            setForm(EMPTY_CARD)
-          }
-          reload()
-          toast.success(`Deleted ${card.name}`, {
-            action: {
-              label: 'Undo',
-              onAction: () => {
-                // Re-create the card, then its cascaded children. Matrix cells are NOT
-                // restored (they reference the old card id) — the toast says so. Counted like
-                // any request of the roster, so no drop races the card coming back. (One
-                // catch stays: a credit or limit event that fails to come back is a failed
-                // restore, and says so.)
-                void track(() =>
-                  createCreditCard({
-                    name: card.name,
-                    annual_fee: card.annual_fee,
-                    rewards_currency: card.rewards_currency,
-                    point_value_cents: card.point_value_cents,
-                    // VERBATIM REBUILD 2 of 2 — same hazard as toggleArchive's.
-                    person_id: card.person_id,
-                    primary_holder: card.primary_holder,
-                    authorized_users: card.authorized_users,
-                    opened_on: card.opened_on,
-                    is_active: card.is_active,
-                    account_id: card.account_id,
-                    notes: card.notes,
-                    sort_order: card.sort_order,
-                  })
-                    .then(async (restored) => {
-                      // Sequential, not Promise.all: the limits endpoint returns the card's
-                      // whole history and the server orders by effective date, so a burst of
-                      // parallel POSTs would race for the "latest" that becomes current_limit.
-                      for (const credit of card.credits)
-                        await createCardCredit(restored.id, {
-                          label: credit.label,
-                          annual_value: credit.annual_value,
-                          counts: credit.counts,
-                          reset_cadence: credit.reset_cadence,
-                        })
-                      for (const event of card.limit_events)
-                        await createLimitEvent(restored.id, {
-                          effective_date: event.effective_date,
-                          limit_amount: event.limit_amount,
-                          note: event.note,
-                        })
-                      reload()
-                      toast.info(`Restored ${card.name} — matrix multipliers were not restored`)
-                    })
-                    .catch(() => toast.error(`Could not restore ${card.name}`)),
-                )
-              },
-            },
-          })
-        })
-        .catch((err: unknown) => setError(message(err, 'Delete failed'))),
-    )
+    const rows = orderedRef.current
+    const at = rows.findIndex((row) => row.id === card.id)
+    const neighbour = rows[at + 1] ?? rows[at - 1]
+    void track(() => deleteWithUndo({
+      name: card.name,
+      row: rowFor(card.id),
+      request: () => deleteCreditCard(card.id),
+      onDeleted: async () => {
+        if (editingRef.current === card.id) resetForm()
+        await reload()
+      },
+      focusAfter: () => (neighbour ? rowFor(neighbour.id)?.querySelector<HTMLElement>('[data-row-edit]') : null)
+        ?? formRef.current?.querySelector<HTMLElement>('input') ?? null,
+      onRestored: () => track(async () => { await reload() }),
+      restoredRow: () => rowFor(card.id),
+    }))
   }
 
   // A failed save puts the rows back (spec §7, as §4.1). Moving them can blur the grip a
@@ -430,7 +420,7 @@ export default function CardsPanel({
     labelOf: (id) => cardById.get(id)?.name ?? 'this card',
     // Any request of the roster in flight — a save, an archive, a delete, a reorder — leaves
     // the grips focusable but inert (lane R0 consumer rule 4), so a drop never races a save.
-    disabled: busy,
+    disabled: busy || rowBusy.size > 0,
     onCommit: saveOrder,
   })
 
@@ -440,13 +430,13 @@ export default function CardsPanel({
   const undated = cards.filter((card) => card.is_active && card.opened_on === null)
 
   return (
-    <section className="card span-12">
+    <section className="card span-12" ref={panelRef}>
       <h2 className="eyebrow">
         Card roster
         <InfoHint text="One row per real card account. Archived cards keep their history but leave the matrix and the math. Dashboard-only: workbook imports never touch cards." />
       </h2>
-      <FeedBanner error={error} />
       <form
+        ref={formRef}
         className="roster-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -480,7 +470,7 @@ export default function CardsPanel({
             className="field-input"
             value={form.rewards_currency}
             onChange={(e) =>
-              setForm((f) => ({ ...f, rewards_currency: e.target.value as RewardsCurrency }))
+              { setError(null); saveState.clearError(); setForm((f) => ({ ...f, rewards_currency: e.target.value as RewardsCurrency })) }
             }
           >
             {CURRENCIES.map((currency) => (
@@ -557,18 +547,17 @@ export default function CardsPanel({
           />
         </label>
         <div className="roster-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
+          <FeedBanner error={error} />
+          <SaveButton type="submit" className="button button-primary" state={saveState} aria-disabled={busy || undefined}>
             {editingId !== null ? 'Save card' : 'Add card'}
-          </button>
+          </SaveButton>
+          {error === null && <SaveStatus state={saveState} />}
           {editingId !== null && (
             <button
               type="button"
               className="button"
               aria-label="Cancel the card edit"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY_CARD)
-              }}
+              onClick={cancelEdit}
             >
               Cancel
             </button>
@@ -602,6 +591,8 @@ export default function CardsPanel({
               {ordered.map((card) => (
                 <tr
                   key={card.id}
+                  id={`card-row-${card.id}`}
+                  aria-current={card.id === editingId ? true : undefined}
                   {...reorder.itemProps(card.id)}
                   className={card.id === editingId ? 'is-editing' : undefined}
                 >
@@ -636,37 +627,39 @@ export default function CardsPanel({
                     <span className="badge">{card.is_active ? 'Active' : 'Archived'}</span>
                   </td>
                   <td className="row-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
+                      data-row-edit
                       aria-label={`Edit ${card.name}`}
                       // Shut mid-flight like every other button here: this fills the form from
                       // the row, and a save landing a moment later resets it out from under
                       // the click. Shut while a row is lifted too (lane R0 consumer rule 5): a
                       // click mid-drag would act on a row that is about to move.
-                      disabled={busy || reorder.active}
+                      inert={busy || rowBusy.has(card.id) || reorder.active}
                       onClick={() => startEdit(card)}
                     >
                       Edit
-                    </button>
-                    <button
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={card.is_active ? `Archive ${card.name}` : `Unarchive ${card.name}`}
-                      disabled={busy || reorder.active}
+                      busy={rowBusy.has(card.id)}
+                      inert={busy || reorder.active}
                       onClick={() => toggleArchive(card)}
                     >
                       {card.is_active ? 'Archive' : 'Unarchive'}
-                    </button>
-                    <button
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Delete ${card.name}`}
-                      disabled={busy || reorder.active}
+                      inert={busy || rowBusy.has(card.id) || reorder.active}
                       onClick={() => remove(card)}
                     >
                       Delete
-                    </button>
+                    </BusyButton>
                   </td>
                 </tr>
               ))}

@@ -134,7 +134,7 @@ export default function CreditCardsPage() {
   const loadSeq = useRef(0)
   const load = useCallback(() => {
     const seq = ++loadSeq.current
-    Promise.all([
+    return Promise.all([
       fetchCreditCards(),
       fetchRewardCategories(),
       fetchRewardRates(),

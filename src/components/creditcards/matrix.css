@@ -71,25 +71,40 @@
   border-color: var(--accent);
 }
 
-.mx-inspector {
+.mx-editor-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  background: var(--surface);
   display: flex;
   align-items: flex-end;
   gap: 0.8rem;
   flex-wrap: wrap;
   margin-top: 0.6rem;
   padding: 0.6rem;
-  border: 1px dashed var(--border);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
-.mx-inspector label {
+.mx-editor-bar label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.78rem;
   color: var(--muted);
 }
-.mx-inspector-label {
+.mx-editor-label {
   color: var(--muted);
   font-size: 0.82rem;
   align-self: center;
 }
+
+.mx-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  font-size: 0.8rem;
+}
+.mx-editor-label { flex-basis: 100%; }
+.mx-editor-bar .error-banner { margin: 0; }

@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError } from '../../api/client'
+import { errorDetail } from '../../api/client'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { flashElement, revealRow } from '../feedback/reveal'
+import { useLatest } from '../reorder/useLatest'
 import {
   createCardCredit,
   createLimitEvent,
@@ -31,11 +38,6 @@ import { closingSentence, tieReason, verdictReason } from './verdictCopy'
 import { FeedBanner } from '../shell/Feed'
 import './carddetail.css'
 import './verdicts.css'
-
-function message(err: unknown, fallback: string): string {
-  // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
-  return err instanceof ApiError ? err.message : fallback
-}
 
 /**
  * Everything about ONE card: meta chips, worth-keeping stat, credits editor, its
@@ -71,12 +73,23 @@ export default function CardDetail({
    *  construction, and the tile must read as "unweighted", never as a verdict. */
   weighted?: boolean
   onClose: () => void
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
-  const [error, setError] = useState<string | null>(null)
+  const [creditError, setCreditError] = useState<string | null>(null)
+  const [limitError, setLimitError] = useState<string | null>(null)
   const [localBusy, setLocalBusy] = useState(false)
   const [creditForm, setCreditForm] = useState({ label: '', annual_value: '' })
   const [limitForm, setLimitForm] = useState({ effective_date: '', limit_amount: '', note: '' })
+  const creditSave = useSaveState({ dirty: creditForm.label !== '' || creditForm.annual_value !== '' })
+  const limitSave = useSaveState({ dirty: limitForm.effective_date !== '' || limitForm.limit_amount !== '' || limitForm.note !== '' })
+  const creditFormRef = useRef<HTMLFormElement>(null)
+  const limitFormRef = useRef<HTMLFormElement>(null)
+  const changedRef = useLatest(onChanged)
+  const reload = () => changedRef.current()
+  const deleteWithUndo = useDeleteWithUndo()
+  const firstCreditField = () => creditFormRef.current?.querySelector<HTMLInputElement>('input') ?? null
+  const firstLimitField = () => limitFormRef.current?.querySelector<HTMLInputElement>('input') ?? null
+
   // The CURRENT net-worth snapshot's balances, every account — this card's own utilization line
   // and the household utilization closing it would change (2026-09-23 spec §B6) both read it,
   // and both name it by its date and standing (§T9). null = nothing linked, not loaded, or the
@@ -84,7 +97,7 @@ export default function CardDetail({
   const [balances, setBalances] = useState<BalanceSnapshot | null>(null)
   const toast = useToast()
   const headingRef = useRef<HTMLHeadingElement>(null)
-  const anyBusy = busy || localBusy
+  const anyBusy = busy || localBusy || creditSave.status === 'saving' || limitSave.status === 'saving'
 
   // Hand focus to the heading on open — the drill-in replaced the page the trigger
   // button lived on (the house focus-management posture).
@@ -134,39 +147,41 @@ export default function CardDetail({
   const wonIds = new Set(value?.wonCategoryIds ?? [])
 
   const addCredit = () => {
+    if (anyBusy || creditSave.status === 'clean' || creditSave.status === 'saved') return
     const label = creditForm.label.trim()
     const amount = creditForm.annual_value.trim()
     if (!label || !amount) {
-      setError('Credit label and annual value are required')
+      setCreditError('Credit label and annual value are required')
+      creditFormRef.current?.querySelector<HTMLInputElement>(!label ? '[aria-label="Credit label"]' : '[aria-label="Credit annual value"]')?.focus()
       return
     }
     if (!isAmount(amount, { expressions: false }) || Number(canonicalAmount(amount, { expressions: false })) < 0) {
-      setError('annual_value must be non-negative')
+      setCreditError('annual_value must be non-negative')
+      creditFormRef.current?.querySelector<HTMLInputElement>('[aria-label="Credit annual value"]')?.focus()
       return
     }
-    setLocalBusy(true)
-    setError(null)
-    createCardCredit(card.id, {
-      label,
-      annual_value: canonicalAmount(amount, { expressions: false }),
-      counts: true,
-      // A new credit resets with the calendar year — the common case, and the only one
-      // that lands on the calendar without an opened date on the card.
-      reset_cadence: 'calendar',
-    })
-      .then(() => {
-        setCreditForm({ label: '', annual_value: '' })
-        onChanged()
+    setCreditError(null)
+    void creditSave.run(async () => {
+      const saved = await createCardCredit(card.id, {
+        label, annual_value: canonicalAmount(amount, { expressions: false }), counts: true,
+        reset_cadence: 'calendar',
       })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setLocalBusy(false))
+      firstCreditField()?.focus()
+      setCreditForm({ label: '', annual_value: '' })
+      await reload()
+      requestAnimationFrame(() => {
+        const row = document.getElementById(`credit-row-${saved.id}`)
+        revealRow(row)
+        flashElement(row)
+        firstCreditField()?.focus({ preventScroll: true })
+      })
+    })
   }
 
   const toggleCredit = (creditId: number) => {
     const credit = card.credits.find((c) => c.id === creditId)
     if (!credit) return
     setLocalBusy(true)
-    setError(null)
     // Full-object PATCH (the router validates the whole credit), house style: the two
     // fields that are NOT changing travel back verbatim, so a flip never rewrites them.
     updateCardCredit(creditId, {
@@ -175,8 +190,8 @@ export default function CardDetail({
       counts: !credit.counts,
       reset_cadence: credit.reset_cadence,
     })
-      .then(() => onChanged())
-      .catch((err: unknown) => setError(message(err, 'Update failed')))
+      .then(() => reload())
+      .catch((err: unknown) => toast.error(errorDetail(err)))
       .finally(() => setLocalBusy(false))
   }
 
@@ -184,7 +199,6 @@ export default function CardDetail({
     const credit = card.credits.find((c) => c.id === creditId)
     if (!credit) return
     setLocalBusy(true)
-    setError(null)
     // Full-object PATCH (house style): only the cadence changes, everything else travels
     // back verbatim.
     updateCardCredit(creditId, {
@@ -193,73 +207,72 @@ export default function CardDetail({
       counts: credit.counts,
       reset_cadence: credit.reset_cadence === 'calendar' ? 'anniversary' : 'calendar',
     })
-      .then(() => onChanged())
-      .catch((err: unknown) => setError(message(err, 'Update failed')))
+      .then(() => reload())
+      .catch((err: unknown) => toast.error(errorDetail(err)))
       .finally(() => setLocalBusy(false))
   }
 
   const removeCredit = (creditId: number) => {
-    const credit = card.credits.find((c) => c.id === creditId)
+    const credit = card.credits.find((row) => row.id === creditId)
     if (!credit) return
     setLocalBusy(true)
-    setError(null)
-    deleteCardCredit(creditId)
-      .then(() => {
-        onChanged()
-        // Confirm-free delete + Undo (the house recovery affordance); the re-POST takes a
-        // new id, which nothing here holds onto.
-        toast.success(`Deleted the ${credit.label} credit`, {
-          action: {
-            label: 'Undo',
-            onAction: () => {
-              createCardCredit(card.id, {
-                label: credit.label,
-                annual_value: credit.annual_value,
-                counts: credit.counts,
-                reset_cadence: credit.reset_cadence,
-              })
-                .then(() => onChanged())
-                .catch(() => toast.error(`Could not restore the ${credit.label} credit`))
-            },
-          },
-        })
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setLocalBusy(false))
+    void deleteWithUndo({
+      name: `the ${credit.label} credit`,
+      row: document.getElementById(`credit-row-${creditId}`),
+      request: () => deleteCardCredit(creditId),
+      onDeleted: reload,
+      focusAfter: firstCreditField,
+      onRestored: reload,
+      restoredRow: () => document.getElementById(`credit-row-${creditId}`),
+    }).finally(() => setLocalBusy(false))
   }
 
   const addLimit = () => {
+    if (anyBusy || limitSave.status === 'clean' || limitSave.status === 'saved') return
     const amount = limitForm.limit_amount.trim()
     if (!limitForm.effective_date || !amount) {
-      setError('Limit date and amount are required')
+      setLimitError('Limit date and amount are required')
+      limitFormRef.current?.querySelector<HTMLInputElement>(!limitForm.effective_date ? '[type="date"]' : '[aria-label="Limit amount"]')?.focus()
       return
     }
     if (!isAmount(amount, { expressions: false }) || Number(canonicalAmount(amount, { expressions: false })) <= 0) {
-      setError('limit_amount must be positive')
+      setLimitError('limit_amount must be positive')
+      limitFormRef.current?.querySelector<HTMLInputElement>('[aria-label="Limit amount"]')?.focus()
       return
     }
-    setLocalBusy(true)
-    setError(null)
-    createLimitEvent(card.id, {
-      effective_date: limitForm.effective_date,
-      limit_amount: canonicalAmount(amount, { expressions: false }),
-      note: limitForm.note.trim() || null,
-    })
-      .then(() => {
-        setLimitForm({ effective_date: '', limit_amount: '', note: '' })
-        onChanged()
+    setLimitError(null)
+    void limitSave.run(async () => {
+      const history = await createLimitEvent(card.id, {
+        effective_date: limitForm.effective_date,
+        limit_amount: canonicalAmount(amount, { expressions: false }),
+        note: limitForm.note.trim() || null,
       })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setLocalBusy(false))
+      const saved = history.find((row) => row.effective_date === limitForm.effective_date)
+      firstLimitField()?.focus()
+      setLimitForm({ effective_date: '', limit_amount: '', note: '' })
+      await reload()
+      requestAnimationFrame(() => {
+        const row = saved ? document.getElementById(`limit-row-${saved.id}`) : null
+        revealRow(row)
+        flashElement(row)
+        firstLimitField()?.focus({ preventScroll: true })
+      })
+    })
   }
 
   const removeLimit = (eventId: number) => {
+    const event = card.limit_events.find((row) => row.id === eventId)
+    if (!event) return
     setLocalBusy(true)
-    setError(null)
-    deleteLimitEvent(card.id, eventId)
-      .then(() => onChanged())
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setLocalBusy(false))
+    void deleteWithUndo({
+      name: `the ${event.effective_date} limit event`,
+      row: document.getElementById(`limit-row-${eventId}`),
+      request: () => deleteLimitEvent(card.id, eventId),
+      onDeleted: reload,
+      focusAfter: firstLimitField,
+      onRestored: reload,
+      restoredRow: () => document.getElementById(`limit-row-${eventId}`),
+    }).finally(() => setLocalBusy(false))
   }
 
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every
@@ -304,9 +317,9 @@ export default function CardDetail({
   return (
     <div className="card-detail">
       <div className="page-header">
-        <button type="button" className="button" onClick={onClose} aria-label="Back to the matrix">
+        <BusyButton type="button" className="button" onClick={onClose} aria-label="Back to the matrix">
           ✕ Back to matrix
-        </button>
+        </BusyButton>
         {/* tabIndex -1: focus target on open, not in the tab order. */}
         <h2 ref={headingRef} tabIndex={-1} className="card-detail-title">
           {card.name}
@@ -314,7 +327,6 @@ export default function CardDetail({
         <div className="spacer" />
       </div>
 
-      <FeedBanner error={error} />
 
       <div className="chip-row">
         <span className="chip">Holder: {card.primary_holder ?? '—'}</span>
@@ -373,12 +385,12 @@ export default function CardDetail({
           <h2 className="eyebrow">Recurring credits</h2>
           {card.credits.length === 0 && <p className="empty-note">No credits tracked.</p>}
           {card.credits.map((credit) => (
-            <div key={credit.id} className="credit-row">
+            <div key={credit.id} id={`credit-row-${credit.id}`} className="credit-row">
               <span>
                 {credit.label} · {formatCurrency(credit.annual_value)}/yr
               </span>
               <span className="credit-row-actions">
-                <button
+                <BusyButton
                   type="button"
                   className="button"
                   aria-pressed={credit.reset_cadence === 'anniversary'}
@@ -392,8 +404,8 @@ export default function CardDetail({
                   onClick={() => toggleCadence(credit.id)}
                 >
                   {credit.reset_cadence === 'anniversary' ? 'Resets on anniversary' : 'Resets Jan 1'}
-                </button>
-                <button
+                </BusyButton>
+                <BusyButton
                   type="button"
                   className="button"
                   aria-pressed={credit.counts}
@@ -402,8 +414,8 @@ export default function CardDetail({
                   onClick={() => toggleCredit(credit.id)}
                 >
                   {credit.counts ? 'Counts ✓' : 'Ignored'}
-                </button>
-                <button
+                </BusyButton>
+                <BusyButton
                   type="button"
                   className="button"
                   aria-label={`Delete the ${credit.label} credit`}
@@ -411,12 +423,13 @@ export default function CardDetail({
                   onClick={() => removeCredit(credit.id)}
                 >
                   Delete
-                </button>
+                </BusyButton>
               </span>
             </div>
           ))}
           <form
             className="credit-add"
+            ref={creditFormRef}
             onSubmit={(e) => {
               e.preventDefault()
               addCredit()
@@ -427,18 +440,20 @@ export default function CardDetail({
               placeholder="Credit label"
               aria-label="Credit label"
               value={creditForm.label}
-              onChange={(e) => setCreditForm((f) => ({ ...f, label: e.target.value }))}
+              onChange={(e) => { setCreditError(null); creditSave.clearError(); setCreditForm((f) => ({ ...f, label: e.target.value })) }}
             />
             <AmountInput
               kind="money"
               value={creditForm.annual_value}
-              onValueChange={(v) => setCreditForm((f) => ({ ...f, annual_value: v }))}
+              onValueChange={(v) => { setCreditError(null); creditSave.clearError(); setCreditForm((f) => ({ ...f, annual_value: v })) }}
               placeholder="$/yr"
               aria-label="Credit annual value"
             />
-            <button type="submit" className="button button-primary" disabled={anyBusy}>
+            <SaveButton type="submit" className="button button-primary" state={creditSave} aria-disabled={busy || localBusy || limitSave.status === 'saving' || undefined}>
               Add credit
-            </button>
+            </SaveButton>
+            <FeedBanner error={creditError} />
+            {creditError === null && <SaveStatus state={creditSave} />}
           </form>
 
           <h2 className="eyebrow">Its rewards</h2>
@@ -485,12 +500,12 @@ export default function CardDetail({
             </thead>
             <tbody>
               {card.limit_events.map((event) => (
-                <tr key={event.id}>
+                <tr key={event.id} id={`limit-row-${event.id}`}>
                   <td>{formatDate(event.effective_date)}</td>
                   <td className="num">{formatCurrency(event.limit_amount)}</td>
                   <td>{event.note ?? '—'}</td>
                   <td className="row-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Delete the ${event.effective_date} limit event`}
@@ -498,7 +513,7 @@ export default function CardDetail({
                       onClick={() => removeLimit(event.id)}
                     >
                       Delete
-                    </button>
+                    </BusyButton>
                   </td>
                 </tr>
               ))}
@@ -506,6 +521,7 @@ export default function CardDetail({
           </table>
           <form
             className="limit-add"
+            ref={limitFormRef}
             onSubmit={(e) => {
               e.preventDefault()
               addLimit()
@@ -516,12 +532,12 @@ export default function CardDetail({
               type="date"
               aria-label="Limit effective date"
               value={limitForm.effective_date}
-              onChange={(e) => setLimitForm((f) => ({ ...f, effective_date: e.target.value }))}
+              onChange={(e) => { setLimitError(null); limitSave.clearError(); setLimitForm((f) => ({ ...f, effective_date: e.target.value })) }}
             />
             <AmountInput
               kind="money"
               value={limitForm.limit_amount}
-              onValueChange={(v) => setLimitForm((f) => ({ ...f, limit_amount: v }))}
+              onValueChange={(v) => { setLimitError(null); limitSave.clearError(); setLimitForm((f) => ({ ...f, limit_amount: v })) }}
               placeholder="New limit"
               aria-label="Limit amount"
             />
@@ -530,11 +546,13 @@ export default function CardDetail({
               placeholder="Note (CLI request, auto…)"
               aria-label="Limit note"
               value={limitForm.note}
-              onChange={(e) => setLimitForm((f) => ({ ...f, note: e.target.value }))}
+              onChange={(e) => { setLimitError(null); limitSave.clearError(); setLimitForm((f) => ({ ...f, note: e.target.value })) }}
             />
-            <button type="submit" className="button button-primary" disabled={anyBusy}>
+            <SaveButton type="submit" className="button button-primary" state={limitSave} aria-disabled={busy || localBusy || creditSave.status === 'saving' || undefined}>
               Add
-            </button>
+            </SaveButton>
+            <FeedBanner error={limitError} />
+            {limitError === null && <SaveStatus state={limitSave} />}
           </form>
 
           <h2 className="eyebrow">Utilization</h2>
