@@ -63,7 +63,10 @@ export default function ActivityCard() {
   // Undo removes its own button. Its original row still says what was undone.
   useLayoutEffect(() => {
     if (focusBatch.current === null) return
-    cardRef.current?.querySelector<HTMLElement>(`[data-activity-batch="${focusBatch.current}"]`)?.focus()
+    const row = cardRef.current?.querySelector<HTMLElement>(`[data-activity-batch="${focusBatch.current}"]`)
+    // A batch from Load more may be outside the first page the reload returns.
+    const target = row ?? cardRef.current
+    target?.focus()
     focusBatch.current = null
   }, [entries])
 
@@ -130,7 +133,7 @@ export default function ActivityCard() {
   }
 
   return (
-    <section ref={cardRef} className="card span-12" id="activity" role="region" aria-label="Activity">
+    <section ref={cardRef} tabIndex={-1} className="card span-12" id="activity" role="region" aria-label="Activity">
       <h2 className="eyebrow">
         Activity
         <InfoHint text="Every money-bearing change — month saves and deletes; account, category and budget edits; portfolio transactions, dividends and securities; credit cards and reward categories, multipliers, credits and limits; ESPP lots, offerings and periods; paycheck profiles; comp events and RSU grants; calendar events and overrides; reorders; imports, restores and snapshots — newest first. Undo replays one change in reverse while nothing later touched the same rows; imports and restores are summaries and are undone by restoring a snapshot instead." />

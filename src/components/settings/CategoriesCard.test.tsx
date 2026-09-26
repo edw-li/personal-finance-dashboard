@@ -361,6 +361,7 @@ it('renders a validation error inline with no Retry beside it (motion spec §9)'
 
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('Category name is required.')
+  expect(document.activeElement).toBe(screen.getByLabelText('Category name'))
   // Retry re-runs the FETCH: here it would invite a re-send of a form the client refused.
   expect(within(alert).queryByRole('button')).toBeNull()
 })

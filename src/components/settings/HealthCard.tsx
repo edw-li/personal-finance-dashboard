@@ -71,13 +71,16 @@ export default function HealthCard() {
             : {
                 action: {
                   label: 'Undo',
-                  onAction: () =>
-                    void undoBatch(batchId)
+                  onAction: () => {
+                    cardRef.current?.focus()
+                    return undoBatch(batchId)
                       .then(() => {
                         toast.success(`Undone — ${formatMonth(month)}'s rows are back`)
                         void load().then(() => cardRef.current?.focus())
                       })
-                      .catch((err: unknown) => toast.error(message(err, 'Undo failed'))),
+                      .catch((err: unknown) => toast.error(message(err, 'Undo failed')))
+                      .finally(() => cardRef.current?.focus())
+                  },
                 },
               },
         )

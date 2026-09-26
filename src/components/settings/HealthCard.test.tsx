@@ -67,6 +67,18 @@ afterEach(() => {
 })
 
 describe('HealthCard', () => {
+  it('returns a refused toast Undo to Data health after its action leaves', async () => {
+    vi.mocked(undoBatch).mockRejectedValueOnce(new ApiError('Later changes touched these rows — undo those first', 409))
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Sep 2026' }))
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete Sep 2026' }))
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    undo.focus()
+    fireEvent.click(undo)
+    await screen.findByText('Later changes touched these rows — undo those first')
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Data health' }))
+  })
+
   it('lists the non-ok checks with their severity in words and a link fix as a link', async () => {
     mount()
     expect(await screen.findByRole('region', { name: 'Data health' })).toBeTruthy()

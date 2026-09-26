@@ -198,14 +198,17 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     const name = form.name.trim()
     if (!name) {
       setFormError('Account name is required.')
+      revealEditor(formRef.current, 'input')
       return
     }
     if (form.is_component && form.parent_account_id === '') {
       setFormError(COMPONENT_NEEDS_PARENT)
+      revealEditor(formRef.current, 'select[name="parent_account_id"]')
       return
     }
     if (!form.is_component && form.parent_account_id !== '') {
       setFormError(PARENT_NEEDS_COMPONENT)
+      revealEditor(formRef.current, 'input[type="checkbox"]')
       return
     }
     // ALL FIVE keys, every time: a blank owner or parent must CLEAR the column, and PATCH
@@ -564,6 +567,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
               <select
                 className="field-input"
                 value={form.parent_account_id}
+                name="parent_account_id"
                 onChange={(e) => setText('parent_account_id')(e.target.value)}
               >
                 <option value="">— none —</option>

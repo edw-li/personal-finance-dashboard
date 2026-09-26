@@ -582,6 +582,7 @@ it('refuses a component with no parent, in the server\'s own sentence', async ()
   ).toBeTruthy()
   // Refused BEFORE the round trip, and lane B's 422 says the same words — the reader never
   // meets two spellings of one rule.
+  expect(document.activeElement).toBe(screen.getByLabelText('Parent account'))
   expect(vi.mocked(createAccount)).not.toHaveBeenCalled()
 })
 
@@ -600,6 +601,7 @@ it('refuses a parent link with no component flag, in the server\'s own sentence'
       'parent_account_id needs is_component — a linked account must be a component',
     ),
   ).toBeTruthy()
+  expect(document.activeElement).toBe(screen.getByLabelText('Component of the parent'))
   expect(vi.mocked(createAccount)).not.toHaveBeenCalled()
 })
 
@@ -635,6 +637,7 @@ it('renders a validation error inline with no Retry beside it (motion spec §9)'
 
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('Account name is required.')
+  expect(document.activeElement).toBe(screen.getByLabelText('Account name'))
   // Retry re-runs the FETCH: here it would invite a re-send of a form the client refused.
   expect(within(alert).queryByRole('button')).toBeNull()
 })

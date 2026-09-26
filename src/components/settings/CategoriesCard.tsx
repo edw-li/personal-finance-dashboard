@@ -158,6 +158,7 @@ export default function CategoriesCard() {
     const name = form.name.trim()
     if (!name) {
       setFormError('Category name is required.')
+      revealEditor(formRef.current, 'input')
       return
     }
     // The name alone: the position is the table's now — a new category lands at the end and

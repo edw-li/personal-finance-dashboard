@@ -49,6 +49,21 @@ afterEach(() => {
 })
 
 describe('ActivityCard', () => {
+  it('keeps focus in Activity when Undo of a later page reloads only the first page', async () => {
+    vi.mocked(fetchActivity)
+      .mockResolvedValueOnce(page([SUMMARY], 'older'))
+      .mockResolvedValueOnce(page([SAVE]))
+      .mockResolvedValueOnce(page([SUMMARY], 'older'))
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }))
+    const button = await screen.findByRole('button', { name: 'Undo' })
+    button.focus()
+    fireEvent.click(button)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo?' }))
+    await waitFor(() => expect(screen.queryByText(SAVE.label)).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Activity' }))
+  })
+
   it('focuses the original activity row after Undo removes its action', async () => {
     vi.mocked(fetchActivity)
       .mockResolvedValueOnce(page([SAVE]))
