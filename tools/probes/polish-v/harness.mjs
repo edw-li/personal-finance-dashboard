@@ -77,7 +77,8 @@ export async function open(browser, config, { theme, width, height, density = 'c
   }, { token: config.token, theme, density })
   await ctx.addInitScript(() => {
     window.__polishV = { cls: 0, shifts: [], skeletonLayouts: [], skeletonRows: [] }
-    const desc = e => e ? `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}.${String(e.className).split(' ').slice(0, 3).join('.')}` : null
+    // LayoutShiftAttribution.node is a Node, including text nodes, rather than always an Element.
+    const desc = e => !e ? null : e.nodeType !== Node.ELEMENT_NODE ? e.nodeName.toLowerCase() : `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}.${String(e.className).split(' ').slice(0, 3).join('.')}`
     new PerformanceObserver(list => {
       for (const entry of list.getEntries()) if (!entry.hadRecentInput) {
         window.__polishV.cls += entry.value
@@ -137,7 +138,7 @@ export async function open(browser, config, { theme, width, height, density = 'c
   })
   const page = await ctx.newPage()
   page.on('console', message => { if (message.type() === 'error') log.consoleErrors.push(message.text().slice(0, 600)) })
-  page.on('pageerror', error => log.pageErrors.push(error.message))
+  page.on('pageerror', error => log.pageErrors.push({ message: error.message, stack: error.stack }))
   page.on('dialog', dialog => { log.dialogs.push({ type: dialog.type(), message: dialog.message() }); void dialog.dismiss() })
   page.on('response', response => { if (response.status() >= 400) log.badResponses.push({ status: response.status(), path: new URL(response.url()).pathname }) })
   return { ctx, page, log, close: () => ctx.close() }
