@@ -19,8 +19,8 @@
   max-width: 78ch;
 }
 
-/* Both of this page's kpi-rows hold one tile and wear the shared .kpi-row-lone fence
-   (panels.css) — the page-scoped 320px copy retired in the 2026-08-31 review round. */
+/* The Summary's one tile row (2026-09-25 polish spec §4.5) is the shared .kpi-row: nothing
+   page-scoped — the lone household tile and the tile nested in the breakdown card are gone. */
 
 /* ── The waterfall ─────────────────────────────────────────────────── */
 
@@ -179,15 +179,6 @@
 
 .paycheck-current {
   margin-top: 0.6rem;
-}
-
-/* ── The household figure ──────────────────────────────────────────── */
-
-/* A sibling of the scope row's person chips, not part of the per-person card below it. The
-   per-person legs ride the tile's delta (2026-09-13 polish spec §10). The shared .kpi-row-lone
-   fence already stops its single tile from stretching. */
-.paycheck-household {
-  margin-bottom: 1rem;
 }
 
 /* The one non-numeric picker on this form: .field-input is right-aligned monospace for
