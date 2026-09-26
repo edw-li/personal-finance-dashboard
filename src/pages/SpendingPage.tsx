@@ -98,22 +98,35 @@ function defaultTrend(m: SpendingMatrix): { categoryId: number }[] {
 }
 
 /** A tile's second line against the month before (2026-09-25 polish spec §4.4): "▲ 2.8 pts vs Jun",
- *  "▼ -$859 vs Jun" — up is good for both, so the tone follows the direction — "same as Jun", or "No Jun
- *  to compare" when that month has no figure. `change` words the difference; `flat` is the least change
- *  that is not "same". */
+ *  "▼ $859 vs Jun" — the glyph carries the direction, so `change` words the difference unsigned; up is
+ *  good for both, so the tone follows it — "same as Jun" under `flat`, "No Jun to compare" when that month
+ *  has no comparable figure, and `missing` when this month has none of its own. */
 function versusMonthBefore(
   current: string | null,
   previous: string | null,
   previousMonth: string,
   change: (difference: number) => string,
   flat: number,
+  missing: string,
 ): { text: string; tone: 'positive' | 'negative' | 'neutral' } {
   const name = formatMonth(previousMonth).slice(0, 3)
-  if (current === null) return { text: 'no take-home entered', tone: 'neutral' }
+  if (current === null) return { text: missing, tone: 'neutral' }
   if (previous === null) return { text: `No ${name} to compare`, tone: 'neutral' }
   const difference = Number(current) - Number(previous)
   if (Math.abs(difference) < flat) return { text: `same as ${name}`, tone: 'neutral' }
-  return { text: `${change(difference)} vs ${name}`, tone: difference > 0 ? 'positive' : 'negative' }
+  return { text: `${change(Math.abs(difference))} vs ${name}`, tone: difference > 0 ? 'positive' : 'negative' }
+}
+
+/** The Living spending tile's line (2026-09-25 polish review): the month's other outflows, each only when
+ *  there was any — "tax $5,044 · transfers $1,200", "tax $5,044" — or "No tax or transfers"; nothing on a
+ *  payload without the two series. Whole dollars. */
+function otherOutflows(tax: string | undefined, transfers: string | undefined): string | undefined {
+  if (tax === undefined && transfers === undefined) return undefined
+  const parts = [
+    Number(tax ?? 0) !== 0 ? `tax ${formatCurrencyWhole(tax)}` : null,
+    Number(transfers ?? 0) !== 0 ? `transfers ${formatCurrencyWhole(transfers)}` : null,
+  ].filter((part): part is string => part !== null)
+  return parts.length > 0 ? parts.join(' · ') : 'No tax or transfers'
 }
 
 export default function SpendingPage() {
@@ -475,9 +488,12 @@ export default function SpendingPage() {
     // server sums over an empty set), so enteredness is judged on the SERIES — the same
     // rule filledMonths uses for the ribbon below.
     // The calendar month before, for the two tiles' second lines (spec §4.4) — absent from the matrix,
-    // or unentered there, it has no figure to compare with.
+    // or unentered there, it has no figure to compare with. Its savings rate counts only where the
+    // server calls it comparable (eligible_savings: a closed month with take-home — never a month still
+    // in review, nor a pay-only month's 100%); an older payload without the list compares as before.
     const previousMonth = addMonths(matrix.months[focusIndex], -1)
     const previousIndex = matrix.months.indexOf(previousMonth)
+    const previousComparable = previousIndex >= 0 && (matrix.eligible_savings?.[previousIndex] ?? true)
     return {
       month: matrix.months[focusIndex],
       total: matrix.living_total?.[focusIndex] ?? null,
@@ -485,14 +501,16 @@ export default function SpendingPage() {
       savings: matrix.savings_rate[focusIndex],
       netPay: matrix.net_pay[focusIndex],
       previousMonth,
-      previousSavings: previousIndex < 0 ? null : matrix.savings_rate[previousIndex],
+      previousSavings: previousComparable ? matrix.savings_rate[previousIndex] : null,
       previousNetPay: previousIndex < 0 ? null : matrix.net_pay[previousIndex],
     }
   }, [matrix, focusIndex])
   // The two tiles' second lines against the month before (spec §4.4): points for the rate, whole
-  // dollars for the pay.
-  const savingsLine = kpis && versusMonthBefore(kpis.savings, kpis.previousSavings, kpis.previousMonth, (d) => `${Math.abs(d * 100).toFixed(1)} pts`, 0.0005)
-  const netPayLine = kpis && versusMonthBefore(kpis.netPay, kpis.previousNetPay, kpis.previousMonth, formatCurrencyWhole, 0.5)
+  // dollars for the pay. The rate has no figure of its own on a month with no take-home — or on an
+  // ENTERED $0, which is a figure, so it is not called missing.
+  const savingsLine = kpis && versusMonthBefore(kpis.savings, kpis.previousSavings, kpis.previousMonth, (d) => `${(d * 100).toFixed(1)} pts`, 0.0005,
+    kpis.netPay === null ? 'no take-home entered' : '$0 take-home')
+  const netPayLine = kpis && versusMonthBefore(kpis.netPay, kpis.previousNetPay, kpis.previousMonth, formatCurrencyWhole, 0.005, 'no take-home entered')
   // The compared month's review state — the tile's badge when it is not closed (T3).
   const reviewState = matrix?.review_state?.[focusIndex]
 
@@ -580,10 +598,10 @@ export default function SpendingPage() {
               label={`Living spending — ${formatMonth(kpis.month)}`}
               value={formatCurrency(kpis.total)}
               // T3 (2026-09-13 audit): the month's other outflows are this tile's own second line — tax
-              // and transfers, whole dollars, one line at 1440 (2026-09-25 spec §4.3; the cash total, =
-              // living + tax, ran it to two). The review state is its badge (closed = nothing to flag).
-              // Neutral tone — a split, not a judgment.
-              delta={`tax ${formatCurrencyWhole(matrix?.tax_total?.[focusIndex])} · transfers ${formatCurrencyWhole(matrix?.transfer_total?.[focusIndex])}`}
+              // and transfers, only the ones it had, whole dollars, one line at 1440 (2026-09-25 spec §4.3;
+              // the cash total, = living + tax, ran it to two). The review state is its badge (closed =
+              // nothing to flag). Neutral tone — a split, not a judgment.
+              delta={otherOutflows(matrix?.tax_total?.[focusIndex], matrix?.transfer_total?.[focusIndex])}
               tone="neutral"
               badge={reviewState !== undefined && reviewState !== 'closed' ? REVIEW_LABELS[reviewState] : undefined}
               hint="Living categories only. Tax paid from take-home and transfers are shown separately."
