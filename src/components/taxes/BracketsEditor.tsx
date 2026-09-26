@@ -43,6 +43,10 @@ const label = jurisdictionLabel
 // Mirrors the API's own ceiling (app/api/taxes.py MAX_BRACKETS).
 const MAX_BRACKETS = 12
 
+// The 1rem between two tables in a column (taxes.css .bracket-column): the split charges each column
+// its own, so a column of many short tables is not mistaken for a short column.
+const STACK_GAP = 16
+
 interface RowState {
   rate: string // percent form — "37", never "0.3700"
   threshold: string
@@ -455,8 +459,8 @@ export default function BracketsEditor({
     ),
     ...extras.map((name) => groupWeight((payload.jurisdictions[name] ?? []).length)),
   ]
-  const [split, setSplit] = useState(() => ({ key: splitKey, at: balancedSplit(weigh()) }))
-  if (split.key !== splitKey) setSplit({ key: splitKey, at: balancedSplit(weigh()) })
+  const [split, setSplit] = useState(() => ({ key: splitKey, at: balancedSplit(weigh(), STACK_GAP) }))
+  if (split.key !== splitKey) setSplit({ key: splitKey, at: balancedSplit(weigh(), STACK_GAP) })
   // The two stacks. Keyed, so each keeps its identity across renders; a group changes stacks only
   // when the split itself moves (a tab switch, a clone).
   const columns = (groups: ReactNode[]) => [
