@@ -14,6 +14,27 @@ vi.mock('../../api/taxes', async (importOriginal) => ({
 }))
 import { cloneBrackets, fetchTaxBrackets, putTaxBrackets } from '../../api/taxes'
 
+it('enables only the changed table, keeps its Save focused, and reports success beside it', async () => {
+  const echo = bracketsFixture()
+  echo.jurisdictions.federal[0].rate = '0.1100'
+  vi.mocked(putTaxBrackets).mockResolvedValueOnce(echo)
+  render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+  const federal = save('Federal') as HTMLButtonElement
+  expect(federal.getAttribute('aria-disabled')).toBe('true')
+  fireEvent.click(federal)
+  expect(putTaxBrackets).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('Federal bracket 1 rate (%)'), { target: { value: '11' } })
+  expect(federal.getAttribute('aria-disabled')).not.toBe('true')
+  expect(save('State').getAttribute('aria-disabled')).toBe('true')
+  federal.focus()
+  fireEvent.click(federal)
+  expect(federal.disabled).toBe(false)
+  expect(federal.getAttribute('aria-busy')).toBe('true')
+  await waitFor(() => expect(within(federal.parentElement!).getByRole('status').textContent).toContain('Saved'))
+  expect(document.activeElement).toBe(federal)
+  expect(federal.getAttribute('aria-disabled')).toBe('true')
+})
+
 function bracketsFixture(): TaxBracketsOut {
   return {
     year: 2024,
@@ -86,9 +107,11 @@ const threshold = (jurisdiction: string, index: number) =>
 const save = (jurisdiction: string) =>
   screen.getByRole('button', { name: `Save ${jurisdiction} brackets` })
 
-// Installed once for the file: only the delete-all test actually reaches a confirm, and
-// leaving it at "yes" keeps jsdom's unimplemented window.confirm out of the others.
-const confirmSpy = vi.spyOn(window, 'confirm')
+// The popover itself is covered by its shared tests; these flows choose its answer.
+const confirmSpy = vi.hoisted(() => vi.fn<(question: string) => boolean>())
+vi.mock('../feedback/confirm', () => ({
+  useConfirm: () => (options: { title: string }) => Promise.resolve(confirmSpy(options.title)),
+}))
 
 beforeEach(() => {
   vi.mocked(putTaxBrackets).mockResolvedValue(bracketsFixture())
@@ -137,7 +160,10 @@ describe('BracketsEditor', () => {
     const onSaved = vi.fn()
     const echo = bracketsFixture()
     vi.mocked(putTaxBrackets).mockResolvedValue(echo)
-    render(<BracketsEditor brackets={bracketsFixture()} onSaved={onSaved} />)
+    const initial = bracketsFixture()
+    initial.jurisdictions.federal[0].rate = '0.09'
+    render(<BracketsEditor brackets={initial} onSaved={onSaved} />)
+    fireEvent.change(rate('Federal', 1), { target: { value: '10' } })
 
     fireEvent.click(save('Federal'))
 
@@ -157,7 +183,11 @@ describe('BracketsEditor', () => {
   })
 
   it('pins the percent->fraction conversion for repeating-binary rates', async () => {
-    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    const initial = bracketsFixture()
+    initial.jurisdictions.state[0].rate = '0.09'
+    initial.jurisdictions.medicare[0].rate = '0.014'
+    render(<BracketsEditor brackets={initial} onSaved={vi.fn()} />)
+    fireEvent.change(rate('State', 1), { target: { value: '9.3' } })
     fireEvent.click(save('State'))
     await waitFor(() => expect(vi.mocked(putTaxBrackets)).toHaveBeenCalled())
     // 9.3 / 100 in floats is 0.09299999999999999; string math keeps it exact.
@@ -167,7 +197,8 @@ describe('BracketsEditor', () => {
     })
 
     // Single-flight: every Save is disabled until the in-flight one settles.
-    await waitFor(() => expect((save('Medicare') as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect(save('State').getAttribute('aria-busy')).not.toBe('true'))
+    fireEvent.change(rate('Medicare', 1), { target: { value: '1.450' } })
     vi.mocked(putTaxBrackets).mockClear()
     fireEvent.click(save('Medicare'))
     await waitFor(() => expect(vi.mocked(putTaxBrackets)).toHaveBeenCalled())
@@ -189,7 +220,7 @@ describe('BracketsEditor', () => {
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
   })
 
-  it('blocks a first threshold that is not 0 and an out-of-range percent', () => {
+  it('blocks a first threshold that is not 0 and an out-of-range percent', async () => {
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
     fireEvent.change(threshold('Federal', 1), { target: { value: '5000' } })
     fireEvent.click(save('Federal'))
@@ -197,6 +228,7 @@ describe('BracketsEditor', () => {
       'federal: the first bracket threshold must be 0',
     )
 
+    await act(async () => {})
     fireEvent.change(threshold('Federal', 1), { target: { value: '0' } })
     // A rate typed as a FRACTION-sized number is the Plan 1 mis-scale bug in reverse:
     // 370% never reaches a walk.
@@ -320,6 +352,7 @@ describe('BracketsEditor', () => {
     )
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
 
+    await act(async () => {})
     // And the mirror image: 0.001 IS a legal first threshold, because it stores as 0.00.
     fireEvent.change(threshold('Federal', 1), { target: { value: '0.001' } })
     fireEvent.change(threshold('Federal', 3), { target: { value: '200000' } })
@@ -347,6 +380,7 @@ describe('BracketsEditor', () => {
     expect(screen.getByRole('alert').textContent).toContain('rate must be between 0% and 100%')
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
 
+    await act(async () => {})
     // 100.004% stores as exactly 1.0000, which is the ceiling and legal.
     fireEvent.change(rate('Federal', 1), { target: { value: '100.004' } })
     fireEvent.click(save('Federal'))
@@ -374,6 +408,7 @@ describe('BracketsEditor', () => {
     expect(confirmSpy).toHaveBeenCalledWith('Delete all Federal brackets for 2024 (Single)?')
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
 
+    await act(async () => {})
     confirmSpy.mockReturnValue(true)
     fireEvent.click(save('Federal'))
     await waitFor(() =>
@@ -421,6 +456,7 @@ describe('BracketsEditor', () => {
       new ApiError('federal: at most 12 brackets per jurisdiction', 422),
     )
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(rate('Federal', 1), { target: { value: '11' } })
     fireEvent.click(save('Federal'))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('federal: at most 12 brackets per jurisdiction')
@@ -643,11 +679,12 @@ describe('BracketsEditor — filing-status tabs', () => {
     // The single table it replaced had two rows; nothing of it is left on screen.
     expect(screen.queryByLabelText('Federal bracket 2 rate (%)')).toBeNull()
 
+    fireEvent.change(rate('Federal', 1), { target: { value: '13' } })
     fireEvent.click(save('Federal'))
     await waitFor(() =>
       expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
         filing_status: 'married_joint',
-        jurisdictions: { federal: [{ rate: '0.12', threshold: '0.00' }] },
+        jurisdictions: { federal: [{ rate: '0.13', threshold: '0.00' }] },
       }),
     )
   })
@@ -763,6 +800,7 @@ describe('BracketsEditor — filing-status tabs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clone from 2024 single tables' }))
     await waitFor(() => expect(screen.getAllByText('review thresholds')).toHaveLength(2))
 
+    fireEvent.change(rate('Federal', 1), { target: { value: '11' } })
     fireEvent.click(save('Federal'))
     // "Review these thresholds" has nothing left to ask once they have been reviewed and
     // saved; the other table's badge stands.
@@ -789,7 +827,7 @@ describe('BracketsEditor — filing-status tabs', () => {
     await waitFor(() =>
       expect(screen.getAllByText('review thresholds').length).toBeGreaterThan(0),
     )
-    await waitFor(() => expect(tab('Single').disabled).toBe(false))
+    await waitFor(() => expect(tab('Single').getAttribute('aria-disabled')).not.toBe('true'))
 
     // They describe the tables that clone just wrote into THIS status. The single tab's
     // tables were the source, not the copy, so carrying the badges across would ask the user
@@ -940,13 +978,14 @@ describe('BracketsEditor — per-person tables', () => {
 
     fireEvent.click(addFor('Disability', 'Alex'))
     fireEvent.click(save('Disability — Alex'))
-    expect(save('Disability — Alex').textContent).toBe('Saving…')
+    expect(save('Disability — Alex').textContent).toBe('Save')
+    expect(save('Disability — Alex').getAttribute('aria-busy')).toBe('true')
     // One save at a time across the WHOLE editor: the person's flight disables the default's
     // Save beside it, and every other jurisdiction's too.
-    expect((save('Disability') as HTMLButtonElement).disabled).toBe(true)
-    expect((save('Federal') as HTMLButtonElement).disabled).toBe(true)
+    expect(save('Disability').getAttribute('aria-disabled')).toBe('true')
+    expect(save('Federal').getAttribute('aria-disabled')).toBe('true')
     settle(bracketsFixture())
-    await waitFor(() => expect((save('Federal') as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect(addFor('Disability', 'Alex')).toBeTruthy())
 
     vi.mocked(putTaxBrackets).mockRejectedValue(
       new ApiError('disability: thresholds must be strictly ascending', 422),
@@ -960,7 +999,7 @@ describe('BracketsEditor — per-person tables', () => {
     expect(alert.closest('.bracket-person')).not.toBeNull()
   })
 
-  it('reports dirty work from a draft person table', () => {
+  it('reports dirty work from a draft person table and returns focus after discarding it', async () => {
     const onDirtyChange = vi.fn()
     render(
       <BracketsEditor
@@ -977,20 +1016,22 @@ describe('BracketsEditor — per-person tables', () => {
     expect(onDirtyChange).toHaveBeenLastCalledWith(true)
 
     // And the way back out of a draft nobody meant to start: client-side, no request.
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Discard draft — Disability — Alex' }),
-    )
+    const discard = screen.getByRole('button', { name: 'Discard draft — Disability — Alex' })
+    act(() => discard.focus())
+    fireEvent.click(discard)
     expect(onDirtyChange).toHaveBeenLastCalledWith(false)
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
     expect(addFor('Disability', 'Alex')).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(addFor('Disability', 'Alex')))
   })
 
-  it('discards an EMPTY draft on Save instead of deleting a table nobody stored', () => {
+  it('discards an EMPTY draft on Save instead of deleting a table nobody stored', async () => {
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
 
     // The Social Security default has no rows, so the draft seeded from it opens empty —
     // and its Save is a save of nothing.
     fireEvent.click(addFor('Social Security', 'Alex'))
+    act(() => save('Social Security — Alex').focus())
     fireEvent.click(save('Social Security — Alex'))
 
     // Empty rows are a DELETE-ALL only for a table the server actually holds. This one was
@@ -999,6 +1040,7 @@ describe('BracketsEditor — per-person tables', () => {
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
     expect(addFor('Social Security', 'Alex')).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(addFor('Social Security', 'Alex')))
   })
 
   it('closes the status tabs while a person save is in flight', () => {
@@ -1012,7 +1054,7 @@ describe('BracketsEditor — per-person tables', () => {
         onSaved={vi.fn()}
       />,
     )
-    expect(tab('Married filing jointly').disabled).toBe(false)
+    expect(tab('Married filing jointly').getAttribute('aria-disabled')).not.toBe('true')
 
     fireEvent.click(addFor('Disability', 'Alex'))
     fireEvent.click(save('Disability — Alex'))
@@ -1020,13 +1062,13 @@ describe('BracketsEditor — per-person tables', () => {
     // A tab switch replaces every table on screen; the echo of this save re-syncs the table
     // it wrote and re-seats the payload. Landing that on another status' tables would file
     // one status' rows under another's name, so the tabs wait for the flight.
-    expect(tab('Married filing jointly').disabled).toBe(true)
+    expect(tab('Married filing jointly').getAttribute('aria-disabled')).toBe('true')
     // The year's own status wears its mark (2026-09-23 spec §W8).
-    expect(tab('Single (this year’s status)').disabled).toBe(true)
+    expect(tab('Single (this year’s status)').getAttribute('aria-disabled')).toBe('true')
     expect(vi.mocked(fetchTaxBrackets)).not.toHaveBeenCalled()
   })
 
-  it('names the act on the button that started it while a removal is in flight', () => {
+  it('names the act on the button that started it while a removal is in flight', async () => {
     vi.mocked(putTaxBrackets).mockReturnValue(new Promise<TaxBracketsOut>(() => {}))
     render(
       <BracketsEditor
@@ -1039,7 +1081,8 @@ describe('BracketsEditor — per-person tables', () => {
     fireEvent.click(removeFor('Disability', 'Sam'))
     // Remove and Save send the same request, so the progress word has to say WHICH was
     // pressed: a Save reading "Saving…" under a Remove click names the wrong act.
-    expect(screen.getByRole('button', { name: /^Removing…/ })).toBeTruthy()
+    await waitFor(() => expect(removeFor('Disability', 'Sam').getAttribute('aria-busy')).toBe('true'))
+    expect(save('Disability — Sam').getAttribute('aria-busy')).not.toBe('true')
     expect(save('Disability — Sam').textContent).toBe('Save')
   })
 

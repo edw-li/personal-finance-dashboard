@@ -19,6 +19,9 @@ import {
   fetchSpendingMonth,
 } from '../api/spending'
 import AmountInput from '../components/AmountInput'
+import BusyButton from '../components/feedback/BusyButton'
+import { useConfirm } from '../components/feedback/confirm'
+import { useLatest } from '../components/reorder/useLatest'
 import StatTile from '../components/StatTile'
 import { usePopoverDismiss } from '../components/usePopoverDismiss'
 import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthReview'
@@ -360,7 +363,7 @@ function UpdateLanding() {
     }
   }, [requested, setParams])
   return (
-    <div className="page">
+    <div className="page monthly-update-page">
       <PageFrame
         title="Monthly update"
         resource={{ status: 'loading' }}
@@ -452,7 +455,9 @@ function MonthlyUpdateWizard() {
   // month's title — a save there is a no-op and the typing is filed under neither month.
   const staleSeed = seeded !== null && seeded.month !== month
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
+  const [savingAction, setSavingAction] = useState<SaveKind | null>(null)
+  const saving = savingAction !== null
+  const confirm = useConfirm()
   const [error, setError] = useState<string | null>(null)
   // Separate from `error`, which carries SAVE failures: a failed load leaves no seed, so it
   // is a lifecycle the frame owns, not a banner over a form (2026-09-05 motion spec §9).
@@ -522,30 +527,24 @@ function MonthlyUpdateWizard() {
   const [flowsBase, setFlowsBase] = useState<{ month: string; part: FlowsPart; waiting?: boolean } | null>(null)
   // A draft was restored over each part's seed this load — the banners' flags (spec §M6).
   const [restoredParts, setRestoredParts] = useState({ balances: false, flows: false })
-  // A part delete's arm-and-confirm (2026-08-31 spec §B2, per part since 2026-09-23 §M6): the
-  // typed YYYY-MM arms the red button.
-  const [deleteArm, setDeleteArm] = useState('')
   // The kebab on the Balances and Spending steps' heads (2026-09-13 polish spec §11): each part's
   // delete lives in a popover, so opening it never pushes the step's footer down the page.
   const [actionsOpen, setActionsOpen] = useState(false)
   const actionsTriggerRef = useRef<HTMLButtonElement>(null)
   const actionsSurfaceRef = useRef<HTMLDivElement>(null)
-  // Stable (useCallback): the dismissal hook re-subscribes its document listeners whenever this
-  // identity changes, and a fresh closure on every keystroke of the arm box meant re-subscribing
-  // on every keystroke. Closing also disarms — a typed "2026-07" must never wait behind a shut
-  // popover for the next open to find a live Delete (P1 review round).
+  // Stable: the dismissal hook keeps one subscription while the house menu is open.
   const closeActions = useCallback(() => {
     setActionsOpen(false)
-    setDeleteArm('')
-  }, [setActionsOpen, setDeleteArm])
+  }, [setActionsOpen])
   usePopoverDismiss(actionsOpen, closeActions, actionsTriggerRef, actionsSurfaceRef)
-  // role="dialog" contract: opening moves focus INTO the surface (its first control, the arm
-  // box); the hook hands it back to the trigger on Escape or an outside pointer.
+  // Opening focuses Delete; dismissing the menu returns focus to its trigger. The nested
+  // confirmation owns its own Escape and returns focus to Delete without closing this menu.
   useEffect(() => {
     if (!actionsOpen) return
     actionsSurfaceRef.current?.querySelector<HTMLElement>('input, button')?.focus()
   }, [actionsOpen])
   const [deleting, setDeleting] = useState(false)
+  const actionScope = useLatest({ month, step, saving, deleting, repairing, loading })
   // The sentence beside a disabled "Save and close" describes it (review M16).
   const closeReasonId = useId()
   const [loadNonce, setLoadNonce] = useState(0)
@@ -634,7 +633,7 @@ function MonthlyUpdateWizard() {
         setReviewConfirmations({})
         setFinalCurrentMonth(false)
         setReviewConflict(false)
-        setSaving(false)
+        setSavingAction(null)
         saveRequest.current = null
         // Nested order: component inputs sit right after their aggregate's input
         // (the group filter below preserves it — components share the parent's group).
@@ -971,12 +970,18 @@ function MonthlyUpdateWizard() {
   // the month-review PUT writes both parts in one — so one request reverses it. `after` (reload,
   // or return to the month) runs once the reversal landed; a refused one changed nothing.
   const undoChange = async (batchId: string, done: string, after: () => void) => {
+    const anchor = document.activeElement
     try {
       await undoBatch(batchId)
       toast.success(done)
       after()
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Undo failed')
+    } finally {
+      requestAnimationFrame(() => {
+        if (document.activeElement !== anchor && document.activeElement !== document.body) return
+        document.querySelector<HTMLElement>('.monthly-update-page .wizard-step.active')?.focus({ preventScroll: true })
+      })
     }
   }
 
@@ -1093,7 +1098,7 @@ function MonthlyUpdateWizard() {
     savingMonth.current = loaded
     // Each part as submitted — the response keeps any typing done while it was in flight.
     const submitted = { ...currentRaw.current }
-    setSaving(true)
+    setSavingAction(kind)
     setError(null)
     setLastSave(null)
     try {
@@ -1147,7 +1152,7 @@ function MonthlyUpdateWizard() {
           toast.success(`${saveMessage(receipt, closed)}${nextDue === null ? '' : ` · Next due: ${nextDue.name}`}`, {
             action: {
               label: 'Undo',
-              onAction: () => void undoChange(batchId, `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
+              onAction: () => undoChange(batchId, `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
             },
           })
         }
@@ -1197,7 +1202,7 @@ function MonthlyUpdateWizard() {
       setReviewConflict(err instanceof ApiError && err.status === 409)
     } finally {
       if (savingMonth.current === loaded) savingMonth.current = null
-      if (loadedMonth.current === loaded) setSaving(false)
+      if (loadedMonth.current === loaded) setSavingAction(null)
     }
   }
 
@@ -1205,12 +1210,17 @@ function MonthlyUpdateWizard() {
   // (DELETE /net-worth/months/{m}) or the month's spending & take-home (DELETE /spending/months/
   // {m}) — the other part stays, so the wizard stays on the month and step and re-reads it. A 404
   // means the part is already gone (another tab): the result is the same, with nothing to undo.
-  const deletePart = async (part: DraftPart) => {
-    if (saving) return
-    setDeleting(true)
-    setError(null)
+  const deletePart = async (part: DraftPart, anchor: HTMLElement) => {
+    if (saving || deleting || repairing || loading) return
+    const loaded = loadedMonth.current
     const deleted = month
     const name = part === 'balances' ? balancesPartName(month) : flowsPartName(month)
+    const other = part === 'balances' ? flowsPartName(month) : balancesPartName(month)
+    if (!await confirm({ anchor, title: `Delete ${name}?`, body: `This removes ${part === 'balances' ? "every account's figure on " + dayOf(month) : 'every category row and the household take-home'}. ${other} stay as they are. Undo will be available.`, confirmLabel: `Delete ${name}` })) return
+    const scope = actionScope.current
+    if (loadedMonth.current !== loaded || scope.month !== month || scope.step !== step || scope.saving || scope.deleting || scope.repairing || scope.loading) return
+    setDeleting(true)
+    setError(null)
     try {
       let batchId: string | null = null
       try {
@@ -1227,7 +1237,7 @@ function MonthlyUpdateWizard() {
               action: {
                 label: 'Undo',
                 onAction: () =>
-                  void undoChange(batchId, `Undone — ${name} are back.`, () => {
+                  undoChange(batchId, `Undone — ${name} are back.`, () => {
                     // Back to the part's own step on that month; the nonce covers the same month.
                     reloadMonth()
                     setParams(() => new URLSearchParams({ month: deleted, step: part === 'balances' ? 'balances' : 'spending' }))
@@ -1235,14 +1245,18 @@ function MonthlyUpdateWizard() {
               },
             },
       )
+      if (loadedMonth.current !== loaded) return
       closeActions()
+      // Deleting the last stored part removes this kebab after reloading. The step
+      // control remains mounted throughout the read and is the stable return target.
+      anchor.closest('.monthly-update-page')?.querySelector<HTMLElement>('.wizard-step.active')?.focus({ preventScroll: true })
       // The receipt and the restored banner describe rows that no longer exist.
       setLastSave(null)
       setRestoredParts((current) => ({ ...current, [part]: false }))
       // The form re-seeds from what is left; the ribbon and the strip re-read coverage.
       reloadMonth()
     } catch (err) {
-      setError(err instanceof ApiError ? `Delete failed: ${err.message} — retry` : 'Delete failed — retry')
+      if (loadedMonth.current === loaded) setError(err instanceof ApiError ? `Delete failed: ${err.message} — retry` : 'Delete failed — retry')
     } finally {
       setDeleting(false)
     }
@@ -1266,7 +1280,7 @@ function MonthlyUpdateWizard() {
           : {
               action: {
                 label: 'Undo',
-                onAction: () => void undoChange(batchId, `Undone — ${formatMonth(repaired)}'s rows are back.`, reloadMonth),
+                onAction: () => undoChange(batchId, `Undone — ${formatMonth(repaired)}'s rows are back.`, reloadMonth),
               },
             },
       )
@@ -1307,7 +1321,7 @@ function MonthlyUpdateWizard() {
     }
     // Invalidate before navigation commits, closing the gap before the load effect runs.
     loadedMonth.current = null
-    setSaving(false)
+    setSavingAction(null)
     setLoading(true)
     setError(null)
     setLastSave(null)
@@ -1316,7 +1330,6 @@ function MonthlyUpdateWizard() {
     setRestoredParts({ balances: false, flows: false })
     // Same reason the step change clears them: the note counts the OLD month's rows.
     setPasteNote(null)
-    setDeleteArm('')
     setActionsOpen(false)
     setRecordZero(false)
     setFlashIds(new Set())
@@ -1558,8 +1571,8 @@ function MonthlyUpdateWizard() {
   }
 
   // A part step's kebab (2026-09-13 polish spec §11; per part since 2026-09-23 spec §M6): the
-  // part's own delete behind the typed YYYY-MM arm, in a popover so opening it never pushes the
-  // step's footer down. One step renders at a time, so the two share one open/arm state.
+  // part's own delete opens a shared confirmation. The house menu remains mounted while
+  // that question is open, keeping its initiating control and focus destination alive.
   const partActions = (part: DraftPart) => {
     const name = part === 'balances' ? balancesPartName(month) : flowsPartName(month)
     const other = part === 'balances' ? flowsPartName(month) : balancesPartName(month)
@@ -1586,25 +1599,15 @@ function MonthlyUpdateWizard() {
               Delete {name}: {what}. {other} stay as they are. Undo is offered for six seconds
               afterwards, and the Activity card can undo it later.
             </p>
-            <div className="danger-row">
-              <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
-              <input
-                id="delete-arm"
-                type="text"
-                className="field-input"
-                value={deleteArm}
-                onChange={(e) => setDeleteArm(e.target.value)}
-                placeholder={month.slice(0, 7)}
-              />
-              <button
-                type="button"
-                className="button danger-button"
-                disabled={saving || deleting || deleteArm.trim() !== month.slice(0, 7)}
-                onClick={() => void deletePart(part)}
-              >
-                {deleting ? 'Deleting…' : `Delete ${name}`}
-              </button>
-            </div>
+            <BusyButton
+              type="button"
+              className="button danger-button"
+              busy={deleting}
+              inert={saving || loading || repairing}
+              onClick={event => void deletePart(part, event.currentTarget)}
+            >
+              Delete {name}
+            </BusyButton>
           </div>
         )}
       </div>
@@ -1612,7 +1615,7 @@ function MonthlyUpdateWizard() {
   }
 
   return (
-    <div className="page">
+    <div className="page monthly-update-page">
       <PageFrame
         title={`Monthly update — ${formatMonth(month)}`}
         subheader={
@@ -2053,14 +2056,15 @@ function MonthlyUpdateWizard() {
                 </button>
                 {/* The step's primary IS its part's save (spec §M1), so Enter-Enter from the last
                     cell, Ctrl/Cmd+Enter and Ctrl+S all save the balances — and only them. */}
-                <button
+                <BusyButton
+                  busy={savingAction === 'balances'}
                   className="button button-primary"
                   data-entry-primary=""
-                  disabled={saving || loading || review === null || accounts.length === 0 || !balancesValid || !balancesSavable}
+                  inert={saving || loading || review === null || accounts.length === 0 || !balancesValid || !balancesSavable}
                   onClick={() => void save('balances')}
                 >
-                  {saving ? 'Saving…' : balancesAction}
-                </button>
+                  {balancesAction}
+                </BusyButton>
               </div>
             </div>
           </div>
@@ -2242,27 +2246,29 @@ function MonthlyUpdateWizard() {
                   // NO part that ticks spending — the one save K3 counts as confirmed complete.
                   // Offered while the part is clean; with edits on screen, saving them after the
                   // month has ended completes it instead.
-                  <button
+                  <BusyButton
+                  busy={savingAction === 'confirm-spending'}
                     className="button"
-                    disabled={saving || loading || review === null || refreshing}
+                    inert={saving || loading || review === null || refreshing}
                     onClick={() => void save('confirm-spending')}
                   >
                     Confirm {monthNameOf(month)} spending is complete
-                  </button>
+                  </BusyButton>
                 )}
                 <button className="button" onClick={() => setStep('review')}>
                   Next: review
                 </button>
                 {/* The part's save is the primary (spec §M1): Enter-Enter, Ctrl/Cmd+Enter and
                     Ctrl+S save the month's spending & take-home — never its balances. */}
-                <button
+                <BusyButton
+                  busy={savingAction === 'spending'}
                   className="button button-primary"
                   data-entry-primary=""
-                  disabled={saving || loading || review === null || !amountsValid || !flowsDirty || notBegun}
+                  inert={saving || loading || review === null || !amountsValid || !flowsDirty || notBegun}
                   onClick={() => void save('spending')}
                 >
-                  {saving ? 'Saving…' : `Save ${monthNameOf(month)} spending`}
-                </button>
+                  Save {monthNameOf(month)} spending
+                </BusyButton>
               </div>
             </div>
           </div>
@@ -2373,19 +2379,21 @@ function MonthlyUpdateWizard() {
                 {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
                     failed load both validity flags are vacuously true, and a meta-only PUT
                     to an existing month would clear its saved note. */}
-                <button
+                <BusyButton
+                  busy={savingAction === 'review'}
                   className="button"
-                  disabled={
+                  inert={
                     saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid
                     || phase === 'beyond'
                   }
                   onClick={() => void save('review')}
                 >
-                  {saving ? 'Saving…' : 'Save progress'}
-                </button>
-                <button
+                  Save progress
+                </BusyButton>
+                <BusyButton
+                  busy={savingAction === 'close'}
                   className="button button-primary"
-                  disabled={
+                  inert={
                     saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid
                     || !canRequestClose || closeBlocker !== null
                   }
@@ -2393,7 +2401,7 @@ function MonthlyUpdateWizard() {
                   onClick={() => void save('close')}
                 >
                   Save and close {monthNameOf(month)}
-                </button>
+                </BusyButton>
               </div>
             </div>
           </div>

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ClipboardEvent } from 'react'
-import { ApiError } from '../../api/client'
 import { previewTaxInputs, putTaxInputs } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
@@ -25,6 +24,9 @@ import {
   writeTaxDraft,
 } from './taxDrafts'
 import { FeedBanner } from '../shell/Feed'
+import { SaveButton } from '../feedback/SaveButton'
+import { useSaveState } from '../feedback/useSaveState'
+import { revealEditor } from '../feedback/reveal'
 import { MOTION_MS } from '../../theme/motion'
 import './taxes.css'
 
@@ -337,7 +339,6 @@ export default function InputsForm({
       setDropped(true)
     }
   }
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
   // next paste and dropped by the save echo. The flashed ids are the cells it wrote.
@@ -364,6 +365,7 @@ export default function InputsForm({
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
+  const invalidCells: string[] = []
   // A number, but not a WHOLE one, in a count box — its own list because "Enter a number
   // for: Pay periods" would be nonsense advice to someone who just entered 20.5.
   const notWhole: string[] = []
@@ -374,10 +376,17 @@ export default function InputsForm({
     // The COLUMN is named too: on a married year two boxes wear the same item label, and
     // "Enter a number for: HSA Contributions" would not say which one.
     if (next === '') continue
-    if (!isAmount(next, { expressions: cell.unit === 'money' })) invalid.push(cellLabel(cell))
-    else if (!isWholeCount(cell.unit, next)) notWhole.push(cellLabel(cell))
+    if (!isAmount(next, { expressions: cell.unit === 'money' })) {
+      invalid.push(cellLabel(cell))
+      invalidCells.push(cell.id)
+    } else if (!isWholeCount(cell.unit, next)) {
+      notWhole.push(cellLabel(cell))
+      invalidCells.push(cell.id)
+    }
   }
   const changedCount = Object.keys(changed).length
+  const saveState = useSaveState({ dirty: changedCount > 0 })
+  const saving = saveState.status === 'saving'
 
   // The page guards a year switch (and a Retry, and a status flip) with a confirm, so it has
   // to know there is unsaved work here. Reported from an effect rather than from every
@@ -398,6 +407,8 @@ export default function InputsForm({
   // was discarded has said what it had to say (code-quality nit). The form's own writes (a save
   // echo, a discard, a re-judged payload) call setValues directly.
   const edit = (change: (current: Record<string, string>) => Record<string, string>) => {
+    setError(null)
+    saveState.clearError()
     setDropped(false)
     setValues(change)
   }
@@ -406,6 +417,8 @@ export default function InputsForm({
   // preview still in flight for the restored boxes is retired; the totals are asked about the
   // saved boxes the way any edit asks.
   const discardRestored = () => {
+    setError(null)
+    saveState.clearError()
     figureSeq.current += 1
     setValues(baseline)
     setRestored(false)
@@ -457,6 +470,7 @@ export default function InputsForm({
   }, [flashIds])
 
   const submit = () => {
+    if (saving) return
     // "a number", not "a plain number": grouping, "$" and "=" arithmetic are all valid
     // entry now (spec §3.1/§3.2), so the older wording named a stricter rule than this
     // form enforces. Client-local sentences with no server twin, so they are ours to word;
@@ -467,15 +481,20 @@ export default function InputsForm({
     ].filter((sentence) => sentence !== '')
     if (problems.length > 0) {
       setError(problems.join(' · '))
+      const field = document.getElementById(`tax-input-${invalidCells[0]}`)
+      if (field !== null) {
+        // Person-qualified ids contain a colon; an attribute selector addresses the actual
+        // column without interpreting it as a CSS pseudo-class.
+        revealEditor(field.closest<HTMLElement>('.tax-input-row'), `[id="${field.id}"]`)
+      }
       return
     }
     if (changedCount === 0) return
-    setSaving(true)
     setError(null)
     // The DIFF, through the same column splitter the preview builds its whole-form body
     // with: an untouched cell is never sent, because sending one blank would DELETE a stored
     // input the user never looked at.
-    putTaxInputs(
+    void saveState.run(() => putTaxInputs(
       inputs.year,
       bodyOf(
         flatCells.flatMap((cell): Array<[Cell, string | null]> => {
@@ -511,12 +530,7 @@ export default function InputsForm({
         setDropped(false)
         onSaved(echo)
       })
-      .catch((err: unknown) => {
-        // Includes the Apply-then-save path: a suggestion is an unbounded engine output,
-        // so it can legitimately exceed the 10^10 input bound. The edits stay on screen.
-        setError(err instanceof ApiError ? err.message : 'Save failed')
-      })
-      .finally(() => setSaving(false))
+    )
   }
 
   // Range paste (spec §4.1): this FORM owns the values record, so the scope container does
@@ -675,7 +689,6 @@ export default function InputsForm({
           typed them.
         </p>
       )}
-      <FeedBanner error={error} />
       {/* One entry scope for every cell the server sent: Enter/ArrowDown walks the column
           across section boundaries, and from the last cell lands on Save — so Enter here
           ADVANCES rather than submitting, and Ctrl+Enter is what saves (spec §3.4). */}
@@ -857,19 +870,15 @@ export default function InputsForm({
             which is what lets position: sticky work inside it (taxes.css carries its own copy of
             the rule — never an import of the wizard's sheet). */}
         <div className={`tax-form-actions entry-footer${changedCount > 0 ? ' is-dirty' : ''}`}>
-          <span className="drill-hint">
-            {changedCount === 0
+          <FeedBanner error={error ?? saveState.error} />
+          <span className="drill-hint" role={saveState.status === 'saved' || saving ? 'status' : undefined}>
+            {saveState.status === 'saved'
+              ? 'Saved just now'
+              : saving ? 'Saving…'
+              : changedCount === 0
               ? 'No changes yet'
               : `${changedCount} change${changedCount === 1 ? '' : 's'} to save`}
           </span>
-          <button
-            type="submit"
-            data-entry-primary=""
-            className="button button-primary"
-            disabled={saving || changedCount === 0}
-          >
-            {saving ? 'Saving…' : 'Save inputs'}
-          </button>
           {/* No aria-label on the span: naming a generic role is prohibited, and the two <kbd>s
               already read as "Ctrl+Enter" (2026-09-13 review round). */}
           {changedCount > 0 && (
@@ -877,6 +886,14 @@ export default function InputsForm({
               <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
             </span>
           )}
+          <SaveButton
+            state={saveState}
+            type="submit"
+            data-entry-primary=""
+            className="button button-primary"
+          >
+            Save inputs
+          </SaveButton>
         </div>
       </form>
     </section>

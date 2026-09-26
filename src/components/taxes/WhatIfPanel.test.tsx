@@ -866,9 +866,9 @@ describe('WhatIfPanel', () => {
     mount('/taxes?whatif=annual_salary%3A250000', { definitions: DEFS, inputs: INPUTS })
     await screen.findByText('Δ total tax')
     await formReady()
-    expect(apply().disabled).toBe(false)
+    expect((apply().getAttribute('aria-disabled') === 'true')).toBe(false)
     fireEvent.click(addOverride())
-    expect(apply().disabled).toBe(true)
+    expect((apply().getAttribute('aria-disabled') === 'true')).toBe(true)
     expect(screen.getByText(/Finish or remove the override row that is not in the scenario yet/)).toBeTruthy()
     // Code review M4: the visible reason is the disabled button's description, not only a title.
     const describedBy = apply().getAttribute('aria-describedby') ?? ''
@@ -876,7 +876,7 @@ describe('WhatIfPanel', () => {
       /^Finish or remove the override row that is not in the scenario yet/,
     )
     fireEvent.click(screen.getByRole('button', { name: 'Remove override 2' }))
-    expect(apply().disabled).toBe(false)
+    expect((apply().getAttribute('aria-disabled') === 'true')).toBe(false)
   })
 
   // Review of 2026-09-23 §B7: re-keying a row already in the scenario used to carry its figure
@@ -1123,7 +1123,7 @@ describe('WhatIfPanel', () => {
     })
     await screen.findByText('Δ total tax')
     await formReady()
-    expect(applyButton().disabled).toBe(false)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false)
 
     // Apply confirms `changed_inputs` from the run ON SCREEN but PUTs the URL's overrides —
     // so inside the run that follows a keystroke those are two different scenarios, and an
@@ -1133,14 +1133,14 @@ describe('WhatIfPanel', () => {
     fireEvent.focus(field('Override 1 value'))
     fireEvent.change(field('Override 1 value'), { target: { value: '220000' } })
     fireEvent.blur(field('Override 1 value'))
-    await waitFor(() => expect(applyButton().disabled).toBe(true))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true))
     fireEvent.click(applyButton())
     expect(onApplyOverrides).not.toHaveBeenCalled()
 
     await act(async () => {
       slow.resolve(resultFixture())
     })
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
 
     // The other half: a refusal leaves an OLDER result under the stale line, which is not
     // this scenario's answer either.
@@ -1148,7 +1148,7 @@ describe('WhatIfPanel', () => {
     fireEvent.focus(field('Override 1 value'))
     fireEvent.change(field('Override 1 value'), { target: { value: '230000' } })
     fireEvent.blur(field('Override 1 value'))
-    await waitFor(() => expect(applyButton().disabled).toBe(true))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true))
     expect(onApplyOverrides).not.toHaveBeenCalled()
   })
 
@@ -1164,7 +1164,7 @@ describe('WhatIfPanel', () => {
     fireEvent.blur(field('Override 1 value'))
     await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: '210000' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Apply 1 override to 2024' }))
-    expect(onApplyOverrides).toHaveBeenCalledWith({ annual_salary: '210000' }, resultFixture().changed_inputs)
+    expect(onApplyOverrides).toHaveBeenCalledWith({ annual_salary: '210000' }, resultFixture().changed_inputs, expect.any(HTMLButtonElement))
   })
 
   it('defaultOpen mounts the card open with no toggle and loads its feeds at once', async () => {

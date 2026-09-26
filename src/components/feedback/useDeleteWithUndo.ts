@@ -155,9 +155,10 @@ export function useDeleteWithUndo(): (options: DeleteWithUndoOptions) => Promise
       // Where the caret goes after the delete, and again after a refused Undo: the caller's destination,
       // else that neighbour — never <body>.
       const handBack = (onlyIfLost: boolean) => {
+        if (onlyIfLost && !caretLost()) return
         const named = options.focusAfter?.() ?? null
-        if (named !== null) named.focus()
-        else if (!onlyIfLost || caretLost()) focusIn(neighbour, asked)
+        if (named?.isConnected) named.focus()
+        else focusIn(neighbour, asked)
       }
       if (row !== null) {
         leaving.add(row)
@@ -190,12 +191,14 @@ export function useDeleteWithUndo(): (options: DeleteWithUndoOptions) => Promise
       }
       const batch = batchId
       const undo = async () => {
+        const anchor = document.activeElement
+        const returnFocus = () => document.activeElement === anchor || caretLost()
         try {
           await undoBatch(batch)
         } catch (err) {
           toast.error(errorDetail(err))
           // The Undo button that held the caret is leaving with its toast: back to the list.
-          handBack(false)
+          if (returnFocus()) handBack(false)
           return
         }
         await quietly(options.onRestored)
@@ -203,11 +206,11 @@ export function useDeleteWithUndo(): (options: DeleteWithUndoOptions) => Promise
         if (restored !== null) {
           revealRow(restored)
           flashElement(restored)
-          focusIn(restored, asked)
-        }
+          if (returnFocus()) focusIn(restored, asked)
+        } else if (returnFocus()) handBack(false)
         toast.success(`Restored ${name}`)
       }
-      toast.success(`Deleted ${name}`, { action: { label: 'Undo', onAction: () => void undo() } })
+      toast.success(`Deleted ${name}`, { action: { label: 'Undo', onAction: undo } })
       return true
     },
     [toast, afterCommit],

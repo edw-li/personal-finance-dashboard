@@ -86,6 +86,15 @@
   border-radius: 4px;
 }
 
+.tax-input-row [id^="tax-input-"] {
+  scroll-margin-top: calc(var(--sticky-inset, 0px) + 2rem);
+  scroll-margin-bottom: 4rem;
+}
+
+.tax-input-row { scroll-margin-bottom: 7rem; }
+
+.tax-apply-confirm { white-space: pre-line; }
+
 .tax-input-label {
   display: flex;
   align-items: center;
@@ -214,6 +223,15 @@
 .tax-form-actions .drill-hint {
   margin: 0;
 }
+
+/* Clean, dirty and saved states share the same right-aligned action. */
+.tax-form-actions > .button {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.tax-form-actions .tax-save-shortcut { margin-left: auto; }
+.tax-save-shortcut + .button { margin-left: 0; }
 
 /* The save bar rides the viewport bottom while the form scrolls (2026-09-13 polish spec §12). The
    wizard's .entry-footer recipe, COPIED under this page's scope rather than imported —

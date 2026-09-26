@@ -126,6 +126,50 @@ describe('ToastProvider', () => {
     expect(screen.queryByText('Deleted the NVDA buy')).toBeNull()
   })
 
+  it('keeps an async action mounted while its confirmation has focus outside the toast', async () => {
+    let finish!: () => void
+    const onUndo = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+    renderHost(onUndo)
+    fireEvent.click(screen.getByText('fire success'))
+    const undo = screen.getByRole('button', { name: 'Undo' })
+    undo.focus()
+    fireEvent.click(undo)
+    screen.getByText('fire success').focus()
+    fireEvent.mouseOver(region())
+    fireEvent.mouseOut(region())
+    act(() => vi.advanceTimersByTime(60_000))
+    expect(undo.isConnected).toBe(true)
+    fireEvent.click(undo)
+    expect(onUndo).toHaveBeenCalledOnce()
+    await act(async () => { finish() })
+    act(() => vi.advanceTimersByTime(EXIT_WINDOW_MS))
+    expect(undo.isConnected).toBe(false)
+  })
+
+  it('keeps a declined async action available to try again', async () => {
+    const onUndo = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(undefined)
+    renderHost(onUndo)
+    fireEvent.click(screen.getByText('fire success'))
+    const undo = screen.getByRole('button', { name: 'Undo' })
+    await act(async () => { fireEvent.click(undo) })
+    act(() => vi.advanceTimersByTime(EXIT_WINDOW_MS))
+    expect(undo.isConnected).toBe(true)
+    await act(async () => { fireEvent.click(undo) })
+    expect(onUndo).toHaveBeenCalledTimes(2)
+    act(() => vi.advanceTimersByTime(EXIT_WINDOW_MS))
+    expect(undo.isConnected).toBe(false)
+  })
+
+  it('an async action settling after unmount schedules no removal timer', async () => {
+    let finish!: () => void
+    const { unmount } = renderHost(() => new Promise<void>(resolve => { finish = resolve }))
+    fireEvent.click(screen.getByText('fire success'))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    unmount()
+    await act(async () => { finish() })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   // The focus latch's release path. Browsers fire no focusout for a node that is REMOVED
   // while focused, so activating Undo (or Dismiss) by keyboard used to wedge the pause on
   // forever: every later toast was born unarmed and never auto-dismissed.

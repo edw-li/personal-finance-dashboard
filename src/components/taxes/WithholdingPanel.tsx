@@ -2,7 +2,10 @@ import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
-import { fetchWithholding, putTaxInputs } from '../../api/taxes'
+import { fetchWithholding, putTaxInputsLogged } from '../../api/taxes'
+import BusyButton from '../feedback/BusyButton'
+import { useConfirm } from '../feedback/confirm'
+import { useLatest } from '../reorder/useLatest'
 import Disclosure from '../Disclosure'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
@@ -28,7 +31,7 @@ import {
   typedDetail,
   typedText,
 } from './reconciliation'
-import type { TaxSection } from './taxSections'
+import type { TaxNavigate } from './taxSections'
 import type { Tone } from '../../utils/tone'
 // This component's own sheet, like its siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.error-banner/.empty-note/.drill-hint) is panels.css, which the
@@ -202,15 +205,17 @@ function ReconciliationStrip({
   rec,
   year,
   applying,
+  applyError,
   onApply,
   goTo,
 }: {
   rec: Reconciliation
   year: number
-  applying: boolean
+  applying: string | null
+  applyError: { key: string; message: string } | null
   /** Present only when the page can complete an Apply (it remounts the inputs form). */
-  onApply?: (row: ReconciliationRow) => void
-  goTo?: (section: TaxSection) => void
+  onApply?: (row: ReconciliationRow, anchor: HTMLElement) => void
+  goTo?: TaxNavigate
 }) {
   const headingId = useId()
   const matched = rec.rows.length > 0 ? matchedFace(rec.balance_if_matched) : null
@@ -292,29 +297,31 @@ function ReconciliationStrip({
                           <td className="num">{effectText(row.tax_effect, flagNote !== null)}</td>
                           <td className="recon-actions">
                             {row.apply !== null && onApply !== undefined && (
-                              <button
+                              <BusyButton
                                 type="button"
-                                className="chip"
-                                disabled={applying}
+                                className="button chip"
+                                busy={applying === `${row.key}:${row.person_id}`}
+                                inert={applying !== null}
                                 aria-label="Apply vest income to W-2 inputs"
                                 // The row's own label and person — the server's target,
                                 // never a hard-coded input or "the primary".
                                 title={`Set ${row.label} to ${formatCurrency(row.apply.value)} for ${whose}`}
-                                onClick={() => onApply(row)}
+                                onClick={event => onApply(row, event.currentTarget)}
                               >
-                                {applying ? 'Applying…' : 'Apply'}
-                              </button>
+                                Apply
+                              </BusyButton>
                             )}
                             {goTo !== undefined && (
                               <button
                                 type="button"
                                 className="chip"
                                 aria-label={`Open Inputs — ${row.label}, ${whose}`}
-                                onClick={() => goTo('inputs')}
+                                onClick={() => goTo('inputs', { key: row.typed_keys[0], personId: row.person_id })}
                               >
                                 Open Inputs
                               </button>
                             )}
+                            {applyError?.key === `${row.key}:${row.person_id}` && <span className="feedback-status is-error" role="alert">{applyError.message}</span>}
                           </td>
                         </tr>
                       )
@@ -351,10 +358,10 @@ export default function WithholdingPanel({
   /** The page's reload door: adopts the PUT echo, remounts the inputs form on it and
    *  refreshes the totals. The RSU row's Apply renders ONLY when the page provides this — an
    *  Apply that could not complete that loop would leave a stale form under a fresh number. */
-  onVestApplied?: (echo: TaxInputsOut) => void
+  onVestApplied?: (echo: TaxInputsOut, batchId?: string | null, message?: string) => void
   /** The page's view switch (2026-09-13 polish spec §14): the partner note's "Open Inputs" and
    *  the missing-tables "Open Tax tables" doors. Absent → the sentences alone. */
-  goTo?: (section: TaxSection) => void
+  goTo?: TaxNavigate
   /** Bumped by the page when the year's answer moved under this card — an inputs or tables
    *  save, a filing-status change or its Undo; each new value reloads the feed, keeping the
    *  figures on screen until the fresh ones land. The card stays mounted while the other
@@ -375,8 +382,14 @@ export default function WithholdingPanel({
   const [reload, setReload] = useState({})
   // D4's write, single-flight and with a failure surface of its own: an inputs PUT that
   // failed says nothing about the estimate already on screen, so it never touches `error`.
-  const [applying, setApplying] = useState(false)
-  const [applyError, setApplyError] = useState<string | null>(null)
+  const [applying, setApplying] = useState<string | null>(null)
+  const [applyError, setApplyError] = useState<{ key: string; message: string } | null>(null)
+  const confirm = useConfirm()
+  const latest = useLatest({ year, onVestApplied })
+  const applyFlight = useRef(false)
+  const alive = useRef(true)
+  const panelRef = useRef<HTMLElement>(null)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   // Two loads in flight — a year change over an open request — must land in order: only the
   // newest may write the card or complain about it.
   const seqRef = useRef(0)
@@ -447,32 +460,45 @@ export default function WithholdingPanel({
   // the server only while the typed figure differs from a complete projection — the row carries
   // its own figure. With no reconciliation (a refused year, an older payload) there is no Apply
   // at all: nothing has checked the vest figure against the stored input.
-  const writeVestIncome = (apply: ReconciliationApply) => {
-    if (onVestApplied === undefined || applying) return
-    if (
-      inputsDirty &&
-      !window.confirm(
-        'Applying writes the W-2 vest input and reloads the Inputs view, discarding its unsaved edits. Continue?',
-      )
-    )
-      return
-    setApplying(true)
+  const writeVestIncome = async (apply: ReconciliationApply, rowKey: string, anchor: HTMLElement) => {
+    if (onVestApplied === undefined || applyFlight.current) return
+    if (inputsDirty && !await confirm({
+      anchor,
+      title: 'Apply vest income and discard unsaved inputs?',
+      body: 'Applying writes the W-2 vest input and reloads the Inputs view, discarding its unsaved edits.',
+      confirmLabel: 'Apply vest income',
+      tone: 'default',
+    })) return
+    if (!alive.current || latest.current.year !== year || applyFlight.current) return
+    applyFlight.current = true
+    setApplying(rowKey)
     setApplyError(null)
     // The server's own target, person-qualified (code-quality M2): the row names the key, the
     // column and the figure, so the browser assumes nothing about whose input it is.
-    putTaxInputs(year, {
+    try {
+      const { data, batchId } = await putTaxInputsLogged(year, {
       values: {},
       rows: [{ key: apply.key, person_id: apply.person_id, value: apply.value }],
-    })
-      .then((echo) => {
-        onVestApplied(echo)
+      })
+      onVestApplied(data, batchId, `Set RSU income to ${formatCurrencyWhole(apply.value)}`)
+      if (alive.current && latest.current.year === year) {
+        // The matched row will lose Apply when this read lands; its Inputs door stays.
+        if (document.activeElement === anchor) anchor.closest('tr')?.querySelector<HTMLElement>('[aria-label^="Open Inputs"]')?.focus({ preventScroll: true })
         // This card's own liability just moved with the input it wrote.
         setReload({})
+      }
+    } catch (err: unknown) {
+      if (alive.current && latest.current.year === year) setApplyError({ key: rowKey, message: err instanceof ApiError ? err.message : 'Failed to apply the vest income' })
+    } finally {
+      applyFlight.current = false
+      if (alive.current) setApplying(null)
+      // A successful Apply may remove its row's chip. Keep a stable neighbouring door focused.
+      requestAnimationFrame(() => {
+        if (!alive.current || latest.current.year !== year || document.activeElement !== document.body) return
+        const target = anchor.isConnected ? anchor : panelRef.current?.querySelector<HTMLElement>('[aria-label^="Open Inputs"]')
+        target?.focus({ preventScroll: true })
       })
-      .catch((err: unknown) => {
-        setApplyError(err instanceof ApiError ? err.message : 'Failed to apply the vest income')
-      })
-      .finally(() => setApplying(false))
+    }
   }
 
   // Which partner story this card is telling. The SOURCE picks the words (it is the
@@ -573,7 +599,7 @@ export default function WithholdingPanel({
   }
 
   return (
-    <section className="card withholding-panel">
+    <section className="card withholding-panel" ref={panelRef}>
       <h2 className="eyebrow">
         Will I owe? — {year}
         <InfoHint text="Estimated all-in withholding — salary checks plus RSU vests — against the tax engine&apos;s liability for this year. An estimate, not advice." />
@@ -685,11 +711,12 @@ export default function WithholdingPanel({
               rec={reconciliation}
               year={year}
               applying={applying}
+              applyError={applyError}
               onApply={
                 onVestApplied === undefined
                   ? undefined
-                  : (row) => {
-                      if (row.apply !== null) writeVestIncome(row.apply)
+                  : (row, anchor) => {
+                      if (row.apply !== null) void writeVestIncome(row.apply, `${row.key}:${row.person_id}`, anchor)
                     }
               }
               goTo={goTo}
@@ -815,7 +842,7 @@ export default function WithholdingPanel({
                   {goTo !== undefined && (
                     <>
                       {' '}
-                      <button type="button" className="button" onClick={() => goTo('inputs')}>
+                      <button type="button" className="button" onClick={() => goTo('inputs', { key: 'w2_fed_withholding', person: 'partner' })}>
                         Open Inputs
                       </button>
                     </>
@@ -870,7 +897,6 @@ export default function WithholdingPanel({
 
           {/* The write's OWN failure line: the estimate above it came back and is still
               true, so this never becomes the card's error banner. */}
-          <FeedBanner error={applyError} />
 
           {/* One accordion on the page, and the right tool for it: explanation, not controls. */}
           <Disclosure

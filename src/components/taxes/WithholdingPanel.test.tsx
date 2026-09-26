@@ -3,12 +3,13 @@ import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
-import type { WithholdingOut } from '../../types/api'
+import type { TaxInputsOut, WithholdingOut } from '../../types/api'
 import WithholdingPanel from './WithholdingPanel'
+import { ConfirmProvider } from '../feedback/confirm'
 
 // Every case mounts inside a router: the nudge under the unsplit card links to the Paycheck
 // page, and a <Link> outside a Router throws.
-const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MemoryRouter })
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: ({ children }) => <MemoryRouter><ConfirmProvider>{children}</ConfirmProvider></MemoryRouter> })
 
 // The two calls this card makes: its own feed, and (D4) the inputs PUT the Apply chip fires.
 // JURISDICTIONS and the other taxes helpers stay real — nothing here touches them, but the
@@ -17,8 +18,9 @@ vi.mock('../../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/taxes')>()),
   fetchWithholding: vi.fn(),
   putTaxInputs: vi.fn(),
+  putTaxInputsLogged: vi.fn(),
 }))
-import { fetchWithholding, putTaxInputs } from '../../api/taxes'
+import { fetchWithholding, putTaxInputs, putTaxInputsLogged } from '../../api/taxes'
 
 // A promise this file settles by hand — the only way to hold two loads in flight at once and
 // choose which one answers first (TaxesPage.test.tsx's).
@@ -174,6 +176,7 @@ const retryButton = () =>
   screen.getByRole('button', { name: 'Retry loading the withholding estimate' })
 
 beforeEach(() => {
+  vi.mocked(putTaxInputsLogged).mockImplementation(async (year, body) => ({ data: await putTaxInputs(year, body), batchId: "vest-batch" }))
   vi.mocked(fetchWithholding).mockResolvedValue(fixture())
 })
 
@@ -880,7 +883,7 @@ describe('WithholdingPanel', () => {
     fireEvent.click(applyChip())
 
     await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
-    expect(onApplied).toHaveBeenCalledWith(inputsEcho)
+    expect(onApplied).toHaveBeenCalledWith(inputsEcho, 'vest-batch', 'Set RSU income to $171,235')
     // The liability this card compares against just moved with the input it wrote.
     await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
   })
@@ -906,17 +909,34 @@ describe('WithholdingPanel', () => {
   it('asks before clobbering unsaved input edits below, and respects a no', async () => {
     vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const nativeConfirm = vi.spyOn(window, 'confirm')
     render(<WithholdingPanel year={2026} inputsDirty={true} onVestApplied={vi.fn()} />)
     await screen.findByText('Your inputs vs your records')
+    act(() => applyChip().focus())
     fireEvent.click(applyChip())
-    expect(confirmSpy).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(vi.mocked(putTaxInputsLogged)).not.toHaveBeenCalled()
+    await waitFor(() => expect(document.activeElement).toBe(applyChip()))
+    fireEvent.click(applyChip())
+    fireEvent.click(screen.getByRole('button', { name: 'Apply vest income' }))
+    await waitFor(() => expect(vi.mocked(putTaxInputsLogged)).toHaveBeenCalledTimes(1))
+    expect(nativeConfirm).not.toHaveBeenCalled()
+    nativeConfirm.mockRestore()
+  })
 
-    confirmSpy.mockReturnValue(true)
+  it('keeps focus on a different control chosen while vest Apply is pending', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    const pending = deferred<TaxInputsOut>()
+    vi.mocked(putTaxInputs).mockReturnValueOnce(pending.promise)
+    render(<WithholdingPanel year={2026} onVestApplied={vi.fn()} goTo={vi.fn()} />)
+    await screen.findByText('Your inputs vs your records')
+    act(() => applyChip().focus())
     fireEvent.click(applyChip())
-    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
-    confirmSpy.mockRestore()
+    const other = screen.getByRole('button', { name: 'Open Inputs — Salary wages, Grace' })
+    act(() => other.focus())
+    await act(async () => { pending.resolve(inputsEcho) })
+    await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())) })
+    expect(document.activeElement).toBe(other)
   })
 
   it('lands an Apply failure on its own error line, figures kept', async () => {
@@ -926,7 +946,7 @@ describe('WithholdingPanel', () => {
     await screen.findByText('Your inputs vs your records')
     fireEvent.click(applyChip())
 
-    expect(await screen.findByText('inputs unavailable')).toBeTruthy()
+    expect((await screen.findByText('inputs unavailable')).closest('.recon-actions')).not.toBeNull()
     // The estimate on screen is still true — and no reload was spent on a write that failed.
     expect(screen.getByText('$123,456.78')).toBeTruthy()
     expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
@@ -968,7 +988,7 @@ describe('WithholdingPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open Tax tables' }))
     expect(goTo).toHaveBeenCalledWith('tables')
     fireEvent.click(screen.getByRole('button', { name: 'Open Inputs' }))
-    expect(goTo).toHaveBeenCalledWith('inputs')
+    expect(goTo).toHaveBeenCalledWith('inputs', { key: 'w2_fed_withholding', person: 'partner' })
   })
 })
 
@@ -1249,7 +1269,7 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
         name: 'Open Inputs — HSA (paycheck), Grace',
       }),
     )
-    expect(goTo).toHaveBeenCalledWith('inputs')
+    expect(goTo).toHaveBeenCalledWith('inputs', { key: 'hsa_contributions', personId: 2 })
   })
 
   it('keys its notes by position, so two identical notes both render without a key clash (code-quality nit)', async () => {

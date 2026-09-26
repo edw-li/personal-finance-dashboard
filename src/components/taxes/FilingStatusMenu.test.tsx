@@ -104,7 +104,7 @@ describe('FilingStatusMenu (2026-09-23 spec §W8)', () => {
     await waitFor(() => expect(dialog().textContent).not.toMatch(/Reading what/))
     expect(consequences()).toEqual([])
     const change = within(dialog()).getByRole('button', { name: 'Change to…' }) as HTMLButtonElement
-    expect(change.disabled).toBe(true)
+    expect(change.getAttribute('aria-disabled') === 'true').toBe(true)
   })
 
   it('names what MFS would mean — whose inputs count, the missing tables, the partner leaving the card, next year’s safe harbor — and sends nothing until confirmed', async () => {
@@ -123,7 +123,7 @@ describe('FilingStatusMenu (2026-09-23 spec §W8)', () => {
     expect(onChange).not.toHaveBeenCalled()
 
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Change to Married filing separately' }))
-    expect(onChange).toHaveBeenCalledWith('married_separate')
+    expect(onChange).toHaveBeenCalledWith('married_separate', expect.any(HTMLButtonElement))
     // Handed to the page, which asks about unsaved work and PATCHes; the dialog is done.
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(document.activeElement).toBe(trigger())
@@ -207,7 +207,7 @@ describe('FilingStatusMenu (2026-09-23 spec §W8)', () => {
     // The consequences are the server's; without them the dialog says less, never something else.
     expect(consequences()).toEqual([])
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Change to Single' }))
-    expect(onChange).toHaveBeenCalledWith('single')
+    expect(onChange).toHaveBeenCalledWith('single', expect.any(HTMLButtonElement))
   })
 
   it('holds the change while the page is busy with the year', async () => {
@@ -216,6 +216,6 @@ describe('FilingStatusMenu (2026-09-23 spec §W8)', () => {
     await waitFor(() => expect(dialog().textContent).not.toMatch(/Reading what/))
     fireEvent.click(radio(/^Single/))
     const change = within(dialog()).getByRole('button', { name: 'Change to Single' }) as HTMLButtonElement
-    expect(change.disabled).toBe(true)
+    expect(change.getAttribute('aria-disabled') === 'true').toBe(true)
   })
 })

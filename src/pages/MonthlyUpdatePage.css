@@ -137,7 +137,7 @@
 }
 
 /* Live totals ride the viewport bottom while the column scrolls (the sheet's total row). */
-.entry-footer {
+.monthly-update-page .entry-footer {
   position: sticky;
   bottom: 0;
   display: flex;
@@ -244,10 +244,6 @@
 }
 
 /* ── Delete month — the Review head's arm-and-confirm, inside the kebab popover ──── */
-.danger-button:not(:disabled) {
-  border-color: var(--negative);
-  color: var(--negative);
-}
 .review-change-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: .75rem 0 0; }
 .review-change-group { min-width: 0; }
 .review-change-group table { width: 100%; font-size: .85rem; }

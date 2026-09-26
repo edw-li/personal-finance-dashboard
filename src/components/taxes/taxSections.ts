@@ -4,3 +4,7 @@
  * that mounts them. A section added to the page is added here.
  */
 export type TaxSection = 'summary' | 'whatif' | 'inputs' | 'tables'
+
+/** A person-qualified cell; the page resolves single-column inputs to their unqualified ids. */
+export interface TaxInputTarget { key: string; personId?: number | null; person?: 'partner' }
+export type TaxNavigate = (section: TaxSection, target?: TaxInputTarget) => void

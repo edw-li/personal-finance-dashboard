@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import BusyButton from '../feedback/BusyButton'
+import { useConfirm } from '../feedback/confirm'
+import { useLatest } from '../reorder/useLatest'
 import { usePopoverDismiss } from '../usePopoverDismiss'
 import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
@@ -7,11 +10,11 @@ import './taxes.css'
  * "New tax year…" — the page's primary action, in PageFrame's actions slot (2026-09-13 polish
  * spec §11; audit A3/S1: the create/delete row sat in a <details> above every view's results).
  * One popover holds the whole year-management row: the year box and Create, and under a rule the
- * "Delete {year}…" door with its arm-and-confirm INSIDE the popover — no window.confirm; the
- * question and its two answers appear right where the reader is looking.
+ * "Delete {year}…" door. Its confirmation leaves the menu standing, so Cancel and Escape return
+ * to the control that asked and an accepted question still names the same year.
  *
  * The PAGE keeps the state and the requests (newYear, createYear, deleteYear); this component
- * owns only whether it is open and whether the delete is armed. `onCreate` resolves true when the
+ * owns whether it is open. `onCreate` resolves true when the
  * year now exists — the popover closes on it and hands focus back to the trigger.
  */
 export default function TaxYearMenu({
@@ -31,7 +34,7 @@ export default function TaxYearMenu({
   newYear: string
   onNewYearChange: (value: string) => void
   /** Resolves true when the year was created (the popover closes), false when it was refused. */
-  onCreate: () => Promise<boolean>
+  onCreate: (anchor: HTMLElement) => Promise<boolean>
   creating: boolean
   createError: string | null
   /** The whole menu is shut while the year list is still loading. */
@@ -46,60 +49,39 @@ export default function TaxYearMenu({
   deleteDisabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
-  // The year the delete was armed FOR: a different selection while armed drops the arm, so the
-  // question can never describe one year while the button deletes another.
-  const [armedYear, setArmedYear] = useState<number | null>(null)
-  const armed = armedYear !== null && armedYear === selectedYear
   const triggerRef = useRef<HTMLButtonElement>(null)
   const surfaceRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const armRef = useRef<HTMLButtonElement>(null)
-  const confirmRef = useRef<HTMLButtonElement>(null)
-  const wasArmed = useRef(false)
+  const createRef = useRef<HTMLButtonElement>(null)
+  const confirm = useConfirm()
+  const latest = useLatest({ selectedYear, deleteDisabled, onDelete })
 
   // Stable across renders: usePopoverDismiss keys its effect on the callback, so a fresh closure
   // per keystroke in the year box would tear the document listeners down and re-add them on every
   // character typed (2026-09-13 review round).
   const close = useCallback(() => {
     setOpen(false)
-    setArmedYear(null)
   }, [])
   // Outside pointerdown and Escape close it; focus returns to the trigger (the shared hook).
   usePopoverDismiss(open, close, triggerRef, surfaceRef)
-
-  // A year switched while the delete is armed drops the arm rather than re-aiming it: the
-  // question names a year, and the button under it must never delete a different one. `armed`
-  // already reads false in that window — this is what clears the state behind it, so a switch
-  // back to the original year does not silently re-arm. Adjusted DURING render, never from an
-  // effect body (the house rule — TryItPanel's arrival latch): React re-renders immediately, so
-  // the question for the old year never paints beside the new one.
-  if (armedYear !== null && armedYear !== selectedYear) setArmedYear(null)
 
   // The year box takes the caret when the popover opens — DOM calls only, no state.
   useEffect(() => {
     if (open) inputRef.current?.focus()
   }, [open])
-  // Arming moves the caret onto the confirm button (the question is its description); a "Keep"
-  // hands it back to the door that was pressed, so a keyboard reader is never left on nothing.
-  useEffect(() => {
-    if (armed) confirmRef.current?.focus()
-    else if (wasArmed.current) armRef.current?.focus()
-    wasArmed.current = armed
-  }, [armed])
-
   return (
     <div className="tax-year-menu">
-      <button
+      <BusyButton
         ref={triggerRef}
         type="button"
         className="button button-primary"
         aria-haspopup="dialog"
         aria-expanded={open}
-        disabled={disabled}
+        inert={disabled}
         onClick={() => (open ? close() : setOpen(true))}
       >
         New tax year…
-      </button>
+      </BusyButton>
       {open && (
         <div
           ref={surfaceRef}
@@ -115,7 +97,8 @@ export default function TaxYearMenu({
             noValidate
             onSubmit={(e) => {
               e.preventDefault()
-              onCreate().then((created) => {
+              if (creating || createRef.current === null) return
+              void onCreate(createRef.current).then((created) => {
                 if (!created) return
                 close()
                 triggerRef.current?.focus()
@@ -134,58 +117,35 @@ export default function TaxYearMenu({
               value={newYear}
               onChange={(e) => onNewYearChange(e.target.value)}
             />
-            <button type="submit" className="button button-primary" disabled={creating}>
-              {creating ? 'Creating…' : 'Create year'}
-            </button>
+            <BusyButton ref={createRef} type="submit" className="button button-primary" busy={creating}>
+              Create year
+            </BusyButton>
             <span className="drill-hint">{createHint}</span>
           </form>
           <FeedBanner error={createError} />
-          {/* The other end of this menu's job — Create makes the year in the box, Delete throws
-              away the SELECTED one. Armed in place: the question and its two answers appear under
-              the door, and "Keep" folds them away. type="button" throughout, so the form's submit
-              stays the create path's alone. Disabled rather than absent with no year selected, so
-              its shut state is visible rather than missing. */}
+          {/* Create names the year in the box; Delete names the selected year. */}
           <div className="tax-year-delete">
-            <button
-              ref={armRef}
+            <BusyButton
               type="button"
               className="button"
-              aria-expanded={armed}
-              disabled={selectedYear === null || deleteDisabled}
-              onClick={() => setArmedYear(armed ? null : selectedYear)}
+              inert={selectedYear === null || deleteDisabled}
+              onClick={async (event) => {
+                const year = selectedYear
+                if (year === null || deleteDisabled) return
+                const accepted = await confirm({
+                  anchor: event.currentTarget,
+                  title: `Delete tax year ${year}?`,
+                  body: 'All of its inputs and brackets will be deleted. This cannot be undone.',
+                  confirmLabel: `Delete ${year}`,
+                })
+                if (!accepted || latest.current.selectedYear !== year || latest.current.deleteDisabled) return
+                latest.current.onDelete()
+                close()
+                triggerRef.current?.focus()
+              }}
             >
               {selectedYear === null ? 'Delete year…' : `Delete ${selectedYear}…`}
-            </button>
-            {armed && selectedYear !== null && (
-              <div className="tax-year-delete-confirm">
-                <p id="tax-year-delete-question" className="drill-hint">
-                  Delete tax year {selectedYear} and all of its inputs and brackets? This cannot be
-                  undone.
-                </p>
-                <div className="tax-year-delete-actions">
-                  <button
-                    ref={confirmRef}
-                    type="button"
-                    className="button"
-                    aria-describedby="tax-year-delete-question"
-                    // The same gate the door above carries: arming, then pressing Create, leaves
-                    // the question on screen over a page that is busy creating a year — firing
-                    // the delete from there would race the create (2026-09-13 review round).
-                    disabled={deleteDisabled}
-                    onClick={() => {
-                      onDelete()
-                      close()
-                      triggerRef.current?.focus()
-                    }}
-                  >
-                    Delete {selectedYear}
-                  </button>
-                  <button type="button" className="button" onClick={() => setArmedYear(null)}>
-                    Keep {selectedYear}
-                  </button>
-                </div>
-              </div>
-            )}
+            </BusyButton>
           </div>
         </div>
       )}

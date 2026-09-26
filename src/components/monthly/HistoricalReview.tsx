@@ -6,6 +6,9 @@ import { describeError } from '../../api/client'
 import type { CoverageOut } from '../../types/api'
 import { formatMonth } from '../../utils/format'
 import { currentMonthIso } from '../../utils/months'
+import BusyButton from '../feedback/BusyButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 
 type OpenMonth = Pick<MonthReview, 'month' | 'state'>
 
@@ -47,29 +50,35 @@ export default function HistoricalReview({ onChanged, coverage }: { onChanged: (
   const [months, setMonths] = useState<MonthReview[] | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmed, setConfirmed] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const closeState = useSaveState({ dirty: selected.size > 0 })
+  const closing = closeState.status === 'saving'
+  const busy = loading || closing
   const load = async () => {
-    setBusy(true)
+    if (busy) return
+    setLoading(true)
+    closeState.clearError()
     try { const data = await fetchMonthReviews(); setMonths(openMonths(data.months)); setSelected(new Set()); setConfirmed(false); setMessage(null) }
     catch (err) { setMessage(describeError(err, 'historical reviews')) }
-    finally { setBusy(false) }
+    finally { setLoading(false) }
   }
   const close = async () => {
-    setBusy(true)
-    try {
+    if (busy || !confirmed || selected.size === 0) return
+    await closeState.run(async () => {
       const result = await batchCloseMonths((months ?? []).filter(m => selected.has(m.month)).map(m => ({ month: m.month, expected_revision: m.input_revision })))
       setMonths(current => current?.filter(m => !result.months.some(closed => closed.month === m.month)) ?? null)
-      setSelected(new Set()); setConfirmed(false); setMessage(`Closed ${result.months.length} reviewed months.`); onChanged()
-    } catch (err) { setMessage(describeError(err, 'closing historical months')) }
-    finally { setBusy(false) }
+      setSelected(new Set()); setConfirmed(false); setMessage(null); onChanged()
+    })
   }
   const toggle = (month: string, checked: boolean) => {
+    closeState.clearError()
     const next = new Set(selected)
     if (checked) next.add(month); else next.delete(month)
     setSelected(next); setConfirmed(false)
   }
   const selectYear = (rows: MonthReview[]) => {
+    closeState.clearError()
     const next = new Set(selected)
     rows.filter(eligible).forEach((m) => next.add(m.month))
     setSelected(next); setConfirmed(false)
@@ -83,12 +92,12 @@ export default function HistoricalReview({ onChanged, coverage }: { onChanged: (
   return <section className="card historical-review">
     <div className="historical-review-head">
       <h2 className="eyebrow">Review historical months</h2>
-      {months === null
-        ? <button type="button" className="button" disabled={busy} onClick={() => void load()}>{busy ? 'Loading…' : 'Load history'}</button>
-        : <button type="button" className="button" disabled={busy} onClick={() => void load()}>Refresh history</button>}
+      <BusyButton type="button" className="button" busy={loading} inert={closing} onClick={() => void load()}>
+        {months === null ? 'Load history' : 'Refresh history'}
+      </BusyButton>
     </div>
     <p className="drill-hint">{summaryOf(known)}</p>
-    {message && <p role="status">{message}</p>}
+    {message && <p role="alert">{message}</p>}
     {months !== null && months.length > 0 && <div className="history-review-list">
       {years.map(({ year, rows }) => <section className="history-review-year" key={year}>
         <div className="history-review-year-head">
@@ -108,9 +117,10 @@ export default function HistoricalReview({ onChanged, coverage }: { onChanged: (
     </div>}
     {selected.size > 0 && <label className="entry-zero-confirm"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />I checked balances, spending, and take-home for these {selected.size} months.</label>}
     <div className="historical-review-footer">
-      <button type="button" className="button" disabled={busy || !confirmed || selected.size === 0} onClick={() => void close()}>
-        {busy && confirmed ? 'Closing…' : selected.size > 0 ? `Close selected months (${selected.size})` : 'Close selected months'}
-      </button>
+      <BusyButton type="button" className="button" busy={closing} inert={loading || !confirmed || selected.size === 0} onClick={() => void close()}>
+        {selected.size > 0 ? `Close selected months (${selected.size})` : 'Close selected months'}
+      </BusyButton>
+      {closeState.status !== 'dirty' && <SaveStatus state={closeState} />}
     </div>
   </section>
 }
