@@ -11,8 +11,9 @@
 
 /* Sticky, not static: as a plain flex child the sidebar is as tall as the PAGE, so on a
    long page the nav scrolled away at the top and logout sat at the document's bottom.
-   Pinned to the viewport instead, with its own scrollbar for viewports shorter than the
-   nav (height is the viewport exactly — border-box, so the padding is inside it). */
+   Pinned to the viewport instead (height is the viewport exactly — border-box, so the padding
+   is inside it). Its own scrollbar is a fallback now, for a window under ~700px: the short-screen
+   rhythm below and the one-row footer (shell.css) fit it from 768px of height up. */
 .sidebar {
   position: sticky;
   top: 0;
@@ -50,8 +51,8 @@
   text-align: left;
 }
 
-/* One line always: the pill is 210px wide minus the kbd, and a wrapped "Search or
-   jump…" read as two rows in the two-theme smoke. Ellipsis rather than wrap. */
+/* One line always. The label is "Search…" (2026-09-25 polish spec §2): "Search or jump…" was cut to
+   "Search or ju…" at every width, so the ellipsis below is now only a guard. */
 .sidebar-search span {
   flex: 1;
   min-width: 0;
@@ -156,6 +157,34 @@
 
 .nav-link.active svg {
   color: var(--accent);
+}
+
+/* Short screens (2026-09-25 polish spec §2, SGS-06): the nav and its footer needed 886px, so at
+   1280×800, 1366×768 and 1536×864 the sidebar grew a scrollbar of its own and pushed the theme and
+   log-out buttons below its fold. Under 900px of height the rhythm tightens — the links most of all,
+   fourteen of them. Compact density scales these rems with the root font, so the two compose; at
+   901px and up nothing here applies and nothing in the nav moves. */
+@media (max-height: 900px) {
+  .nav-link {
+    padding-top: 0.32rem;
+    padding-bottom: 0.32rem;
+  }
+
+  .nav-heading {
+    margin-top: 0.2rem;
+  }
+
+  .sidebar nav {
+    gap: 0.3rem;
+  }
+
+  .sidebar-title {
+    padding-bottom: 0.6rem;
+  }
+
+  .sidebar-search {
+    margin-bottom: 0.4rem;
+  }
 }
 
 .content {
