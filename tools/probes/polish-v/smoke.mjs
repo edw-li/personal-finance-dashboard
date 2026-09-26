@@ -273,12 +273,25 @@ async function monthsGroup(options) {
   const sp = (await api(config, 'spending/matrix')).months
   await runCase('months', options, async (page, id) => {
     for (const [route, offered] of [['/net-worth', nw], ['/spending', sp]]) {
-      const months = [...new Set(offered.map(month => month.slice(0, 7)))]
+      const months = [...new Set(offered.map(month => month.slice(0, 7)))].sort()
       const observed = []
+      // Cold route loading is covered separately. Traverse the actual ribbon here so every
+      // selected month is checked without needlessly reloading the entire application.
+      await visit(page, `${route}?month=${months[0]}`)
       for (const month of months) {
-        await visit(page, `${route}?month=${month}`)
-        const row = (await tileRows(page))[0]
         const expectedLabel = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${month}-01T00:00:00Z`))
+        const chip = page.locator(`.month-chip2[aria-label^="${expectedLabel} "]`)
+        for (let window = 0; await chip.count() === 0 && window < 10; window++) {
+          const later = page.getByRole('button', { name: 'Later months', exact: true })
+          if (await later.getAttribute('aria-disabled') === 'true') throw new Error(`No ribbon window contains requested ${month}`)
+          await later.click()
+        }
+        if (await chip.getAttribute('aria-pressed') !== 'true') {
+          await chip.click()
+          await settle(page, 250)
+          await page.waitForFunction(() => !document.querySelector('.kpi-row .skeleton-tile'), null, { timeout: 25000 })
+        }
+        const row = (await tileRows(page))[0]
         const selected = await page.locator('.month-chip2[aria-pressed="true"]').getAttribute('aria-label')
         check(id, `${route}: requested ${month} is the selected ribbon month`, !!selected && selected.startsWith(expectedLabel + ' '), { requested: month, selected, url: page.url() })
         observed.push({ month, selected, height: row?.h ?? null, lines: row ? judge(row) : null })
