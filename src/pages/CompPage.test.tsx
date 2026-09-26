@@ -305,11 +305,11 @@ beforeEach(() => {
   vi.mocked(fetchEvents).mockResolvedValue(EVENTS)
   vi.mocked(createEvent).mockResolvedValue(event2027)
   vi.mocked(updateEvent).mockResolvedValue(event2026)
-  vi.mocked(deleteEvent).mockResolvedValue(undefined)
+  vi.mocked(deleteEvent).mockResolvedValue({ batchId: null })
   vi.mocked(fetchVestingSchedule).mockResolvedValue(EMPTY_SCHEDULE)
   vi.mocked(createRsuGrant).mockResolvedValue(GRANT_NEW_HIRE)
   vi.mocked(updateRsuGrant).mockResolvedValue(GRANT_NEW_HIRE)
-  vi.mocked(deleteRsuGrant).mockResolvedValue(undefined)
+  vi.mocked(deleteRsuGrant).mockResolvedValue({ batchId: null })
   confirmSpy.mockReturnValue(true)
 })
 

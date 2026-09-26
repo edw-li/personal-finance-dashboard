@@ -324,7 +324,7 @@ beforeEach(() => {
   vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026))
   vi.mocked(createProfile).mockResolvedValue(profile2026)
   vi.mocked(updateProfile).mockResolvedValue(profile2026)
-  vi.mocked(deleteProfile).mockResolvedValue(undefined)
+  vi.mocked(deleteProfile).mockResolvedValue({ batchId: null })
   confirmSpy.mockReturnValue(true)
 })
 

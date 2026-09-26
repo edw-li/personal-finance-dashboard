@@ -1,4 +1,5 @@
-import { api } from './client'
+import { api, apiDeleteLogged, apiLogged } from './client'
+import type { Logged } from './client'
 import type {
   CalendarOverrideBody,
   CalendarOverrideOut,
@@ -25,8 +26,9 @@ export function updateCustomEvent(id: number, body: CustomEventBody): Promise<Cu
   })
 }
 
-export function deleteCustomEvent(id: number): Promise<void> {
-  return api<void>(`/calendar/events/${id}`, { method: 'DELETE' })
+// Logged (2026-09-25 polish spec §6.1): the answer names the batch an Undo reverts.
+export function deleteCustomEvent(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/calendar/events/${id}`)
 }
 
 // The user's edits on GENERATED events (2026-09-03 calendar spec §13) — keyed by the
@@ -36,6 +38,18 @@ export function putCalendarOverride(
   body: CalendarOverrideBody,
 ): Promise<CalendarOverrideOut> {
   return api<CalendarOverrideOut>(`/calendar/overrides/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+/** putCalendarOverride's twin for the one-click Hide / Mark done / Your figure (spec §6.2): the same
+ *  PUT, answered with the change batch the toggle's Undo toast reverts. */
+export function putCalendarOverrideLogged(
+  key: string,
+  body: CalendarOverrideBody,
+): Promise<Logged<CalendarOverrideOut>> {
+  return apiLogged<CalendarOverrideOut>(`/calendar/overrides/${encodeURIComponent(key)}`, {
     method: 'PUT',
     body: JSON.stringify(body),
   })

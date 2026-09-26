@@ -1,4 +1,5 @@
-import { api, apiWithHeaders } from './client'
+import { api, apiLogged, apiWithHeaders } from './client'
+import type { Logged } from './client'
 import type {
   DerivedPreviewOut,
   FilingStatus,
@@ -108,6 +109,16 @@ export function fetchTaxInputs(year: number): Promise<TaxInputsOut> {
 // auto-create the tax_years row (1900..2100) — that IS the "new year" affordance.
 export function putTaxInputs(year: number, body: TaxInputsUpdate): Promise<TaxInputsOut> {
   return api<TaxInputsOut>(`/taxes/years/${year}/inputs`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+/** putTaxInputs' twin for the two applies — What-if "Apply N overrides" and Vest "Apply" (2026-09-25
+ *  polish spec §6.2): the same PUT, answered with the change batch their Undo toast reverts. The
+ *  Inputs form keeps the original: a form save is reachable from Activity. */
+export function putTaxInputsLogged(year: number, body: TaxInputsUpdate): Promise<Logged<TaxInputsOut>> {
+  return apiLogged<TaxInputsOut>(`/taxes/years/${year}/inputs`, {
     method: 'PUT',
     body: JSON.stringify(body),
   })

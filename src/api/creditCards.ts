@@ -1,4 +1,5 @@
-import { api } from './client'
+import { api, apiDeleteLogged, apiLogged } from './client'
+import type { Logged } from './client'
 import type {
   CardCreditIn,
   CardCreditOut,
@@ -26,8 +27,16 @@ export function updateCreditCard(id: number, body: CreditCardIn): Promise<Credit
   return api<CreditCardOut>(`/credit-cards/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
-export function deleteCreditCard(id: number): Promise<void> {
-  return api<void>(`/credit-cards/${id}`, { method: 'DELETE' })
+/** updateCreditCard's twin for the one-click Archive / Unarchive (2026-09-25 polish spec §6.2): the
+ *  same PATCH, answered with the change batch the toggle's Undo toast reverts. */
+export function updateCreditCardLogged(id: number, body: CreditCardIn): Promise<Logged<CreditCardOut>> {
+  return apiLogged<CreditCardOut>(`/credit-cards/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+// Logged (spec §6.1): the undo brings the card back with its credits, multipliers, limit history
+// and the categories pinned to it — null when nothing was recorded.
+export function deleteCreditCard(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/credit-cards/${id}`)
 }
 
 /** Drag-to-reorder the card list (2026-09-23 spec §3.2): `ids` is every card, active and
@@ -54,8 +63,8 @@ export function updateCardCredit(creditId: number, body: CardCreditIn): Promise<
   })
 }
 
-export function deleteCardCredit(creditId: number): Promise<void> {
-  return api<void>(`/credit-cards/credits/${creditId}`, { method: 'DELETE' })
+export function deleteCardCredit(creditId: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/credit-cards/credits/${creditId}`)
 }
 
 // Response is the card's FULL limit history, ascending — the editor renders it
@@ -70,8 +79,8 @@ export function createLimitEvent(
   })
 }
 
-export function deleteLimitEvent(cardId: number, eventId: number): Promise<void> {
-  return api<void>(`/credit-cards/${cardId}/limits/${eventId}`, { method: 'DELETE' })
+export function deleteLimitEvent(cardId: number, eventId: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/credit-cards/${cardId}/limits/${eventId}`)
 }
 
 export function fetchRewardCategories(): Promise<RewardCategoryOut[]> {
@@ -95,8 +104,21 @@ export function updateRewardCategory(
   })
 }
 
-export function deleteRewardCategory(id: number): Promise<void> {
-  return api<void>(`/credit-cards/categories/${id}`, { method: 'DELETE' })
+/** updateRewardCategory's twin for the one-click Hide / Show (spec §6.2): the same PATCH, answered
+ *  with the change batch the toggle's Undo toast reverts. */
+export function updateRewardCategoryLogged(
+  id: number,
+  body: RewardCategoryUpdate,
+): Promise<Logged<RewardCategoryOut>> {
+  return apiLogged<RewardCategoryOut>(`/credit-cards/categories/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+// Logged (spec §6.1): the undo brings the category back with its multipliers.
+export function deleteRewardCategory(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/credit-cards/categories/${id}`)
 }
 
 /** One PUT for the whole Categories & weights order (2026-09-23 spec §3.2) — it replaces the

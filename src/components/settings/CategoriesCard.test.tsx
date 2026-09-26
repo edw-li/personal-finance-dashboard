@@ -92,7 +92,7 @@ beforeEach(() => {
   vi.mocked(fetchCategories).mockResolvedValue([GROCERIES, PETS, TAXES])
   vi.mocked(createCategory).mockResolvedValue(GROCERIES)
   vi.mocked(updateCategory).mockResolvedValue(GROCERIES)
-  vi.mocked(deleteCategory).mockResolvedValue(undefined)
+  vi.mocked(deleteCategory).mockResolvedValue({ batchId: null })
   vi.mocked(reorderCategories).mockResolvedValue({ data: [PETS, GROCERIES, TAXES], batchId: 'batch-7' })
   vi.mocked(undoBatch).mockResolvedValue(UNDONE)
   // jsdom has no layout: a keyboard lift measures every row at y=0 and asks the page to scroll it
