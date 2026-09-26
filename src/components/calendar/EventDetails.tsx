@@ -1,4 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import BusyButton from '../feedback/BusyButton'
+import { revealEditor, useEscapeCancel } from '../feedback/reveal'
 import { NavLink } from 'react-router-dom'
 import type { CalendarEvent, CalendarOverrideBody } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
@@ -12,7 +15,7 @@ interface Props {
   onDelete: (event: CalendarEvent) => void
   deleting: boolean
   /** Generated events only: the FULL override body (spec §13 — PUT is a full replace). */
-  onOverride: (event: CalendarEvent, body: CalendarOverrideBody) => void
+  onOverride: (event: CalendarEvent, body: CalendarOverrideBody) => void | Promise<boolean>
   saving: boolean
 }
 
@@ -41,6 +44,13 @@ export default function EventDetails({
   const [figureOpen, setFigureOpen] = useState(false)
   const [figureBox, setFigureBox] = useState(event.amount_overridden ? (event.amount ?? '') : '')
   const [noteBox, setNoteBox] = useState(event.note ?? '')
+  const figureRef = useRef<HTMLFormElement>(null)
+  const figureButtonRef = useRef<HTMLButtonElement>(null)
+  const closeFigure = () => {
+    flushSync(() => setFigureOpen(false))
+    figureButtonRef.current?.focus()
+  }
+  useEscapeCancel(figureRef, closeFigure, figureOpen)
   const generated = event.id === null
   const overlay = overlayOf(event)
   // Items that carry no money at all — the monthly reminder's pending parts (2026-09-23 spec §T6)
@@ -53,8 +63,9 @@ export default function EventDetails({
     if (!figureValid) return
     const amount = figureBox.trim() === '' ? null : canonicalAmount(figureBox, { expressions: false })
     const note = noteBox.trim() === '' ? null : noteBox.trim()
-    onOverride(event, { ...overlay, amount, note })
-    setFigureOpen(false)
+    const saved = onOverride(event, { ...overlay, amount, note })
+    if (saved === undefined) closeFigure()
+    else void saved.then((ok) => { if (ok) closeFigure() })
   }
 
   return (
@@ -114,63 +125,72 @@ export default function EventDetails({
         )}
         {!generated && (
           <>
-            <button type="button" className="button" onClick={() => onEdit(event)}>
+            <BusyButton type="button" className="button" onClick={() => onEdit(event)}>
               Edit
-            </button>
-            <button
+            </BusyButton>
+            <BusyButton
               type="button"
               className="button"
-              disabled={deleting}
+              busy={deleting}
               onClick={() => onDelete(event)}
             >
               Delete
-            </button>
+            </BusyButton>
           </>
         )}
         {generated && isDeadline(event) && (
-          <button
+          <BusyButton
             type="button"
             className="button"
-            disabled={saving}
+            inert={saving}
             onClick={() => onOverride(event, { ...overlay, done: !event.done })}
           >
             {event.done ? 'Reopen' : 'Mark done'}
-          </button>
+          </BusyButton>
         )}
         {generated && (
-          <button
+          <BusyButton
             type="button"
             className="button"
-            disabled={saving}
+            inert={saving}
             onClick={() => onOverride(event, { ...overlay, hidden: !event.hidden })}
           >
             {event.hidden ? 'Unhide' : 'Hide'}
-          </button>
+          </BusyButton>
         )}
         {generated && !figureOpen && (
-          <button
+          <BusyButton
             type="button"
             className="button"
-            disabled={saving}
-            onClick={() => setFigureOpen(true)}
+            inert={saving}
+            ref={figureButtonRef}
+            onClick={() => {
+              flushSync(() => {
+                setFigureBox(event.amount_overridden ? (event.amount ?? '') : '')
+                setNoteBox(event.note ?? '')
+                setFigureOpen(true)
+              })
+              revealEditor(figureRef.current)
+            }}
           >
             Your figure
-          </button>
+          </BusyButton>
         )}
         {generated && event.amount_overridden && (
-          <button
+          <BusyButton
             type="button"
             className="button"
-            disabled={saving}
+            inert={saving}
             onClick={() => onOverride(event, { ...overlay, amount: null })}
           >
             Use the estimate
-          </button>
+          </BusyButton>
         )}
       </div>
       {generated && figureOpen && (
         <form
           className="cal-figure-form"
+          ref={figureRef}
           onSubmit={(e) => {
             e.preventDefault()
             saveFigure()
@@ -196,12 +216,12 @@ export default function EventDetails({
               onChange={(e) => setNoteBox(e.target.value)}
             />
           </label>
-          <button type="submit" className="button button-primary" disabled={saving || !figureValid}>
+          <BusyButton type="submit" className="button button-primary" busy={saving} inert={!figureValid}>
             Save figure
-          </button>
-          <button type="button" className="button" onClick={() => setFigureOpen(false)}>
+          </BusyButton>
+          <BusyButton type="button" className="button" onClick={closeFigure}>
             Cancel
-          </button>
+          </BusyButton>
         </form>
       )}
     </div>

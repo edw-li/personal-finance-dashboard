@@ -18,7 +18,9 @@ vi.mock('../api/calendar', async (importOriginal) => ({
   updateCustomEvent: vi.fn(),
   deleteCustomEvent: vi.fn(),
   putCalendarOverride: vi.fn(),
+  putCalendarOverrideLogged: vi.fn(),
 }))
+vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn() }))
 vi.mock('../api/calendarFeed', () => ({ downloadCalendarIcs: vi.fn() }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 
@@ -45,9 +47,11 @@ import {
   deleteCustomEvent,
   fetchCalendar,
   putCalendarOverride,
+  putCalendarOverrideLogged,
   updateCustomEvent,
 } from '../api/calendar'
 import { fetchHousehold } from '../api/household'
+import { undoBatch } from '../api/lifecycle'
 import { downloadCalendarIcs } from '../api/calendarFeed'
 
 // Wall-clock-proof fixtures: the page boots on the current month, so every date derives
@@ -133,6 +137,8 @@ const v2Body = { amount: null, direction: 'neutral', recurrence: 'none', until: 
 beforeEach(() => {
   vi.clearAllMocks()
   clearSnapshots()
+  vi.mocked(putCalendarOverrideLogged).mockImplementation(async (key, body) => ({ data: await putCalendarOverride(key, body), batchId: 'override-batch' }))
+  vi.mocked(undoBatch).mockResolvedValue({ batch_id: 'undone', label: 'Restored event' } as Awaited<ReturnType<typeof undoBatch>>)
   vi.mocked(fetchHousehold).mockResolvedValue({
     people: [
       { id: 1, name: 'Ed', is_primary: true },
@@ -376,12 +382,12 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
     await waitFor(() => expect(url()).toBe('/calendar'))
   })
 
-  it('Add event defaults to the first of the viewed month and posts every v2 field', async () => {
+  it('Add event defaults to the active day and posts every v2 field', async () => {
     vi.mocked(createCustomEvent).mockResolvedValue({ id: 99, date: MONTH, label: 'Rent', detail: null, person_id: null, amount: '2400', direction: 'out', recurrence: 'monthly', until: addMonths(MONTH, 3) })
     renderPage()
     await screen.findByRole('grid')
     fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
-    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(MONTH)
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(todayIso())
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: ' Rent ' } })
     fireEvent.change(screen.getByLabelText('Amount (optional)'), { target: { value: '2400' } })
     fireEvent.change(screen.getByLabelText('Direction'), { target: { value: 'out' } })
@@ -391,7 +397,7 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save event' }))
     expect(createCustomEvent).toHaveBeenCalledWith({
-      date: MONTH,
+      date: todayIso(),
       label: 'Rent',
       detail: null,
       person_id: null,
@@ -479,8 +485,8 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
     expect((screen.getByLabelText('Person') as HTMLSelectElement).value).toBe('2')
   })
 
-  it('Delete offers Undo that re-POSTs the v2 body', async () => {
-    vi.mocked(deleteCustomEvent).mockResolvedValue({ batchId: null })
+  it('Delete offers exact batch Undo and confirms the restoration', async () => {
+    vi.mocked(deleteCustomEvent).mockResolvedValue({ batchId: 'event-delete' })
     vi.mocked(createCustomEvent).mockResolvedValue({ id: 77, date: DAY_15, label: 'Car insurance', detail: 'policy 8841', person_id: null, ...v2Body } as never)
     renderPage()
     await screen.findByRole('grid')
@@ -488,13 +494,10 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(deleteCustomEvent).toHaveBeenCalledWith(41)
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
-    expect(createCustomEvent).toHaveBeenCalledWith({
-      date: DAY_15,
-      label: 'Car insurance',
-      detail: 'policy 8841',
-      person_id: null,
-      ...v2Body,
-    })
+    await screen.findByText('Restored Car insurance')
+    expect(undoBatch).toHaveBeenCalledWith('event-delete')
+    expect(createCustomEvent).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(document.body)
   })
 
   // The delete path reports the same way an override does (v1's deliberate choice, kept):
@@ -515,7 +518,7 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
   // starting there). The series' own start is what a restore has to send.
   it('Undo restores a series from its start, not from the clicked occurrence', async () => {
     const seriesStart = `${PREV.slice(0, 8)}05`
-    vi.mocked(deleteCustomEvent).mockResolvedValue({ batchId: null })
+    vi.mocked(deleteCustomEvent).mockResolvedValue({ batchId: 'event-delete' })
     vi.mocked(createCustomEvent).mockResolvedValue({ id: 78, date: seriesStart, label: 'Piano lesson', detail: null, person_id: null, amount: '60.00', direction: 'out', recurrence: 'weekly', until: null })
     renderPage([
       calendarEvent({ date: DAY_16, type: 'custom', label: 'Piano lesson', short_label: 'Piano lesson', id: 43, amount: '60.00', direction: 'out', basis: 'confirmed', recurrence: 'weekly', until: null, series_start: seriesStart }),
@@ -524,16 +527,9 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
     fireEvent.click(chipIn(DAY_16, 'Piano lesson'))
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
-    expect(createCustomEvent).toHaveBeenCalledWith({
-      date: seriesStart,
-      label: 'Piano lesson',
-      detail: null,
-      person_id: null,
-      amount: '60.00',
-      direction: 'out',
-      recurrence: 'weekly',
-      until: null,
-    })
+    await screen.findByText('Restored Piano lesson')
+    expect(undoBatch).toHaveBeenCalledWith('event-delete')
+    expect(createCustomEvent).not.toHaveBeenCalled()
   })
 })
 
@@ -564,12 +560,9 @@ describe('CalendarPage — overrides', () => {
       amount: null,
     })
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
-    expect(putCalendarOverride).toHaveBeenLastCalledWith(Q3_KEY, {
-      done: false,
-      hidden: false,
-      note: null,
-      amount: null,
-    })
+    await screen.findByText('Restored Tax deadline — Q3 estimated payment')
+    expect(undoBatch).toHaveBeenCalledWith('override-batch')
+    expect(putCalendarOverride).toHaveBeenCalledTimes(1)
   })
 
   // A write that failed is not the month's data going stale: the frame's line would blame
@@ -654,7 +647,7 @@ describe('CalendarPage — Add event in the shared detail panel (2026-09-13 spec
     fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
     const dialog = await screen.findByRole('dialog', { name: 'Add event' })
     const date = within(dialog).getByLabelText('Date') as HTMLInputElement
-    expect(date.value).toBe(MONTH)
+    expect(date.value).toBe(todayIso())
     // Exactly one form, and it is the panel's.
     expect(document.querySelectorAll('.cal-form')).toHaveLength(1)
     expect(dialog.contains(document.querySelector('.cal-form'))).toBe(true)
@@ -694,5 +687,32 @@ describe('CalendarPage — Add event in the shared detail panel (2026-09-13 spec
     expect(screen.getByRole('heading', { name: 'Add event' })).toBeTruthy()
     expect(document.querySelector('.card .cal-form')).not.toBeNull()
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
+describe('Polish L7 calendar feedback', () => {
+  it('defaults Add to the active day and submits with Enter through a real form', async () => {
+    const saved = { id: 99, date: DAY_16, label: 'New event', detail: null, person_id: null, ...v2Body }
+    vi.mocked(createCustomEvent).mockResolvedValue(saved as Awaited<ReturnType<typeof createCustomEvent>>)
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(cell(DAY_16))
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(DAY_16)
+    const title = screen.getByLabelText('Title')
+    fireEvent.change(title, { target: { value: 'New event' } })
+    vi.mocked(fetchCalendar).mockResolvedValue(payload([...fixtureEvents(), calendarEvent({ date: DAY_16, id: 99, type: 'custom', label: 'New event', short_label: 'New event' })]))
+    fireEvent.submit(title.closest('form')!)
+    await waitFor(() => expect(document.activeElement).toBe(cell(DAY_16)))
+    await waitFor(() => expect(chipIn(DAY_16, 'New event')?.hasAttribute('data-flash')).toBe(true))
+  })
+
+  it('Edit focuses the title and a clean form has no save to make', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(chipIn(DAY_15, 'Car insurance'))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Title')))
+    expect(screen.getByRole('button', { name: 'Save changes' }).getAttribute('aria-disabled')).toBe('true')
   })
 })

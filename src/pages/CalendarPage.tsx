@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { undoBatch } from '../api/lifecycle'
+import { errorDetail } from '../api/client'
+import { useDeleteWithUndo } from '../components/feedback/useDeleteWithUndo'
+import { useSaveState } from '../components/feedback/useSaveState'
+import { SaveStatus } from '../components/feedback/SaveStatus'
+import { flashElement, revealEditor } from '../components/feedback/reveal'
+import { useLatest } from '../components/reorder/useLatest'
 import { useSearchParams } from 'react-router-dom'
 import {
   createCustomEvent,
   deleteCustomEvent,
   fetchCalendar,
-  putCalendarOverride,
+  putCalendarOverrideLogged,
   updateCustomEvent,
 } from '../api/calendar'
 import { downloadCalendarIcs } from '../api/calendarFeed'
@@ -111,15 +118,23 @@ export default function CalendarPage() {
   // button that opened it used to be (the drawer's "Add event on …" unmounts with it).
   const [formTick, setFormTick] = useState(0)
   const formDateRef = useRef<HTMLInputElement | null>(null)
+  const formTitleRef = useRef<HTMLInputElement | null>(null)
+  const landingRef = useRef<{ id: number; day: string } | null>(null)
+  const formReturnRef = useRef<{ key: string; day: string } | null>(null)
+  const deleteWithUndo = useDeleteWithUndo()
   const [form, setForm] = useState<FormState>(null)
   const [fields, setFields] = useState<EventFields>(EMPTY_FIELDS)
   // Its own fetch, outside the per-month snapshot: the roster does not change with the
   // month, and folding it in would invalidate every cached month.
   const [people, setPeople] = useState<PersonOut[]>([])
-  const [saving, setSaving] = useState(false)
+  const [baseline, setBaseline] = useState<EventFields>(EMPTY_FIELDS)
+  const saveState = useSaveState({ dirty: form !== null && JSON.stringify(fields) !== JSON.stringify(baseline) })
+  const clearSaveError = saveState.clearError
+  const saving = saveState.status === 'saving'
   const [formError, setFormError] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState(false)
-  const [overriding, setOverriding] = useState(false)
+  const [deleting, setDeleting] = useState<Set<string>>(new Set())
+  const [overriding, setOverriding] = useState<Set<string>>(new Set())
+  const [overlays, setOverlays] = useState<Map<string, CalendarOverrideBody>>(new Map())
   const anchorRef = useRef<HTMLElement | null>(null)
   const popoverRef = useRef<HTMLDivElement | null>(null)
   const addEventBtnRef = useRef<HTMLButtonElement | null>(null)
@@ -162,7 +177,7 @@ export default function CalendarPage() {
   const load = (monthIso: string) => {
     const seq = ++seqRef.current
     const { start, end } = windowFor(monthIso)
-    fetchCalendar(start, end)
+    return fetchCalendar(start, end)
       .then((payload) => {
         if (seq !== seqRef.current) return
         setSnapshot(calendarKey(monthIso), payload)
@@ -196,10 +211,15 @@ export default function CalendarPage() {
   // lands), else the previous month's payload dimmed under `busy` — whose window is the
   // month ± one, so it already holds this month's events. Derived, never seeded from an
   // effect.
-  const shown: CalendarResponse | null =
+  const storedShown: CalendarResponse | null =
     data !== null && data.month === month
       ? data.payload
       : (getSnapshot<CalendarResponse>(calendarKey(month)) ?? data?.payload ?? null)
+  const shown = useMemo(() => storedShown === null ? null : { ...storedShown, events: storedShown.events.map((event) => {
+    const overlay = overlays.get(event.key)
+    return overlay === undefined ? event : { ...event, done: overlay.done, hidden: overlay.hidden,
+      note: overlay.note, amount: overlay.amount ?? event.amount, amount_overridden: overlay.amount !== null }
+  }) }, [storedShown, overlays])
   const busy = revalidating || data === null || data.month !== month
   const visible = shown === null ? [] : visibleEvents(shown.events)
   const byDate = groupByDate(visible)
@@ -217,10 +237,32 @@ export default function CalendarPage() {
         ? todayIso()
         : month
 
+  const cursorRef = useLatest(cursorDay)
+  const viewRef = useLatest(view)
+  const eventElement = (key: string) => Array.from(document.querySelectorAll<HTMLElement>('[data-event-key]'))
+    .find((element) => element.dataset.eventKey === key && !element.closest('[hidden]')) ?? null
+  const dayElement = (day: string) => document.querySelector<HTMLElement>(`[role="gridcell"][data-day="${day}"]`)
+  const focusDay = (day: string) => (dayElement(day) ?? addEventBtnRef.current)?.focus({ preventScroll: true })
   const revalidate = (monthIso: string) => {
     setRevalidating(true)
-    load(monthIso)
+    return load(monthIso)
   }
+  const reloadRef = useLatest(revalidate)
+
+  // The POST can finish before the chip's refresh. Retain the id until that chip actually mounts.
+  useEffect(() => {
+    const pending = landingRef.current
+    if (!pending) return
+    const event = shown?.events.find((row) => row.id === pending.id && row.date === pending.day)
+    if (!event) return
+    const frame = requestAnimationFrame(() => {
+      const chip = eventElement(event.key)
+      if (!chip) return
+      flashElement(chip)
+      landingRef.current = null
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [shown, drawerDay, openListKey])
 
   const showMonth = (next: string) => {
     setOpenKey(null)
@@ -331,16 +373,20 @@ export default function CalendarPage() {
     until: event.until,
   })
 
-  // Defaults to the VIEWED month's first day, or the day handed in (spec §8). useCallback
+  // Defaults to the active day, or the day handed in (polish §5.3). useCallback
   // over stable setters and a ref: the arrival effect depends on it.
   const openAddForm = useCallback((day?: string) => {
     setForm({ mode: 'add', day })
-    setFields({ ...EMPTY_FIELDS, date: day ?? monthRef.current })
+    const initial = { ...EMPTY_FIELDS, date: day ?? cursorRef.current }
+    setFields(initial)
+    setBaseline(initial)
+    clearSaveError()
+    formReturnRef.current = null
     setFormError(null)
     setOpenKey(null)
     setDrawerDay(null)
     setFormTick((tick) => tick + 1)
-  }, [])
+  }, [cursorRef, clearSaveError])
 
   // The caret lands in the date box when the form opens; tick 0 is the initial render, where there
   // is no form. Inline, the box is mounted by the time this runs. In the panel it is attached only
@@ -350,12 +396,12 @@ export default function CalendarPage() {
   useEffect(() => {
     if (formTick === 0 || !formShown) return
     if (!hasPanel) {
-      formDateRef.current?.focus()
+      revealEditor(formDateRef.current?.form ?? null, form?.mode === 'edit' ? '#cal-event-title' : '#cal-event-date')
       return
     }
-    const frame = requestAnimationFrame(() => formDateRef.current?.focus())
+    const frame = requestAnimationFrame(() => revealEditor(formDateRef.current?.form ?? null, form?.mode === 'edit' ? '#cal-event-title' : '#cal-event-date'))
     return () => cancelAnimationFrame(frame)
-  }, [formTick, formShown, hasPanel])
+  }, [formTick, formShown, hasPanel, form?.mode])
 
   // The panel follows the form: open (or retitle) it while a form is up, close it when the form
   // goes. Save and Cancel end here; a close the panel itself started (×, Escape) has already
@@ -409,7 +455,7 @@ export default function CalendarPage() {
     setForm({ mode: 'edit', id: event.id })
     // Every field the PATCH will replace is stashed here, money and series included: the
     // form IS the body, so a field the form never showed would be sent as its empty value.
-    setFields({
+    const initial: EventFields = {
       date: stored.date,
       label: stored.label,
       detail: stored.detail ?? '',
@@ -418,7 +464,12 @@ export default function CalendarPage() {
       direction: stored.direction,
       recurrence: stored.recurrence,
       until: stored.until ?? '',
-    })
+    }
+    setFields(initial)
+    setBaseline(initial)
+    saveState.clearError()
+    formReturnRef.current = { key: event.key, day: event.date }
+    setFormTick((tick) => tick + 1)
     setFormError(null)
     setOpenKey(null)
     setOpenListKey(null)
@@ -430,11 +481,11 @@ export default function CalendarPage() {
     setActiveDay(day)
     const target = `${day.slice(0, 7)}-01`
     if (target !== monthRef.current) showMonth(target)
-    else revalidate(target)
+    return reloadRef.current(target)
   }
 
   const saveForm = () => {
-    if (form === null) return
+    if (form === null || saving || saveState.status === 'clean' || saveState.status === 'saved' || !fields.label.trim() || !fields.date) return
     const amountText = fields.amount.trim()
     if (amountText !== '' && !isAmount(amountText, { expressions: false })) {
       setFormError('Amount must be a plain number.')
@@ -456,76 +507,100 @@ export default function CalendarPage() {
       recurrence: fields.recurrence,
       until: fields.recurrence === 'none' || fields.until === '' ? null : fields.until,
     }
-    setSaving(true)
-    const call = form.mode === 'add' ? createCustomEvent(body) : updateCustomEvent(form.id, body)
-    call
-      .then(() => {
-        setForm(null)
-        landOn(body.date)
+    setFormError(null)
+    void saveState.run(async () => {
+      const saved = await (form.mode === 'add' ? createCustomEvent(body) : updateCustomEvent(form.id, body))
+      landingRef.current = { id: saved.id, day: body.date }
+      setBaseline(fields)
+      setForm(null)
+      await landOn(body.date)
+      setFocusTick((tick) => tick + 1)
+      requestAnimationFrame(() => {
+        if (viewRef.current === 'list') {
+          const event = document.querySelector<HTMLElement>(`[data-custom-event-id="${saved.id}"]`)
+          ;(event ?? addEventBtnRef.current)?.focus()
+        } else focusDay(body.date)
       })
-      .catch((err: unknown) =>
-        setFormError(err instanceof ApiError ? err.message : 'Could not save the event.'),
-      )
-      .finally(() => setSaving(false))
+    })
   }
+
+  const cancelForm = () => {
+    setForm(null)
+    setFormError(null)
+    saveState.clearError()
+    requestAnimationFrame(() => {
+      const back = formReturnRef.current
+      ;(back ? eventElement(back.key) ?? dayElement(back.day) ?? addEventBtnRef.current : addEventBtnRef.current)?.focus()
+    })
+  }
+
+  const markPending = (set: typeof setDeleting, key: string, pending: boolean) => set((current) => {
+    const next = new Set(current)
+    if (pending) next.add(key)
+    else next.delete(key)
+    return next
+  })
 
   const removeEvent = (event: CalendarEvent) => {
-    if (event.id === null) return
-    const restore = storedBody(event)
-    setDeleting(true)
-    deleteCustomEvent(event.id)
-      .then(() => {
+    if (event.id === null || deleting.has(event.key)) return
+    const id = event.id
+    markPending(setDeleting, event.key, true)
+    void deleteWithUndo({
+      name: event.label,
+      row: eventElement(event.key),
+      request: () => deleteCustomEvent(id),
+      onDeleted: async () => {
         setOpenKey(null)
+        setOpenListKey(null)
         setDrawerDay(null)
-        // The focused Delete button unmounts with the popover — hand focus to a stable
-        // landmark instead of letting it drop to <body>.
-        addEventBtnRef.current?.focus()
-        revalidate(monthRef.current)
-        // Already confirm-free; the toast carries the recovery affordance. Undo re-POSTs the
-        // row — a new id is acceptable.
-        toast.success(`Deleted ${event.label}`, {
-          action: {
-            label: 'Undo',
-            onAction: () => {
-              createCustomEvent(restore)
-                .then(() => revalidate(monthRef.current))
-                .catch(() => toast.error(`Could not restore ${event.label}`))
-            },
-          },
-        })
-      })
-      // A toast, not the frame's stale line: the month on screen came back fine and is still
-      // true, so raising it would blame the calendar for a write that failed.
-      .catch((err: unknown) =>
-        toast.error(err instanceof ApiError ? err.message : 'Could not delete the event.'),
-      )
-      .finally(() => setDeleting(false))
+        await reloadRef.current(monthRef.current)
+      },
+      focusAfter: () => dayElement(event.date) ?? addEventBtnRef.current,
+      onRestored: async () => {
+        await landOn(event.date)
+        // A crowded day may not show this chip in its first three slots. Its drawer does.
+        if (viewRef.current === 'grid' && !eventElement(event.key)) setDrawerDay(event.date)
+      },
+      restoredRow: () => eventElement(event.key) ?? dayElement(event.date) ?? addEventBtnRef.current,
+    }).finally(() => markPending(setDeleting, event.key, false))
   }
 
-  // Generated events: the user's edits are an overlay keyed by the event key (spec §13).
-  const applyOverride = (event: CalendarEvent, body: CalendarOverrideBody) => {
-    setOverriding(true)
-    putCalendarOverride(event.key, body)
-      .then(() => {
-        revalidate(monthRef.current)
-        if (body.hidden && !event.hidden) {
-          setOpenKey(null)
-          toast.success(`Hidden ${event.label}`, {
-            action: {
-              label: 'Undo',
-              onAction: () => {
-                putCalendarOverride(event.key, { ...body, hidden: false })
-                  .then(() => revalidate(monthRef.current))
-                  .catch(() => toast.error(`Could not unhide ${event.label}`))
-              },
-            },
+  // Overlays are optimistic by event key; another event remains available while one saves.
+  const applyOverride = async (event: CalendarEvent, body: CalendarOverrideBody): Promise<boolean> => {
+    if (overriding.has(event.key)) return false
+    markPending(setOverriding, event.key, true)
+    setOverlays((current) => new Map(current).set(event.key, body))
+    if (body.hidden && !event.hidden) {
+      setOpenKey(null)
+      requestAnimationFrame(() => focusDay(event.date))
+    }
+    try {
+      const { batchId } = await putCalendarOverrideLogged(event.key, body)
+      await reloadRef.current(monthRef.current)
+      const verb = body.hidden !== event.hidden ? (body.hidden ? 'Hid' : 'Showed')
+        : body.done !== event.done ? (body.done ? 'Marked' : 'Reopened') : 'Updated'
+      const message = `${verb} ${event.label}${body.done !== event.done && body.done ? ' done' : ''}`
+      toast.success(message, batchId === null ? undefined : { action: { label: 'Undo', onAction: () => {
+        markPending(setOverriding, event.key, true)
+        void undoBatch(batchId).then(async () => {
+          await reloadRef.current(monthRef.current)
+          requestAnimationFrame(() => {
+            const restored = eventElement(event.key)
+            flashElement(restored)
+            ;(restored ?? dayElement(event.date) ?? addEventBtnRef.current)?.focus()
           })
-        }
-      })
-      .catch((err: unknown) =>
-        toast.error(err instanceof ApiError ? err.message : 'Could not save the change.'),
-      )
-      .finally(() => setOverriding(false))
+          toast.success(`Restored ${event.label}`)
+        }).catch((err: unknown) => { toast.error(errorDetail(err)); focusDay(cursorRef.current) })
+          .finally(() => markPending(setOverriding, event.key, false))
+      } } })
+      return true
+    } catch (err) {
+      toast.error(errorDetail(err))
+      return false
+    } finally {
+      setOverlays((current) => { const next = new Map(current); next.delete(event.key); return next })
+      markPending(setOverriding, event.key, false)
+    }
   }
 
   const renderDetails = (event: CalendarEvent) => (
@@ -533,16 +608,16 @@ export default function CalendarPage() {
       event={event}
       onEdit={startEdit}
       onDelete={removeEvent}
-      deleting={deleting}
+      deleting={deleting.has(event.key)}
       onOverride={applyOverride}
-      saving={overriding}
+      saving={overriding.has(event.key)}
     />
   )
 
   const field =
     <K extends keyof EventFields>(key: K) =>
     (value: EventFields[K]) =>
-      setFields((current) => ({ ...current, [key]: value }))
+      { setFormError(null); saveState.clearError(); setFields((current) => ({ ...current, [key]: value })) }
   const eventForm =
     form === null ? null : (
       <AddEventForm
@@ -551,10 +626,11 @@ export default function CalendarPage() {
         onField={field}
         people={orderedPeople}
         error={formError}
-        saving={saving}
+        saveState={saveState}
         onSave={saveForm}
-        onCancel={() => setForm(null)}
+        onCancel={cancelForm}
         dateRef={formDateRef}
+        titleRef={formTitleRef}
         hosted={hasPanel ? 'panel' : 'card'}
       />
     )
@@ -571,6 +647,7 @@ export default function CalendarPage() {
             <button type="button" className="button" ref={addEventBtnRef} onClick={() => openAddForm()}>
               Add event
             </button>
+            {form === null && <SaveStatus state={saveState} />}
             <button
               type="button"
               className="button"
@@ -688,6 +765,8 @@ export default function CalendarPage() {
                               <li key={key}>
                                 <button
                                   type="button"
+                                  data-event-key={event.key}
+                                  data-custom-event-id={event.id ?? undefined}
                                   className={`row-toggle cal-list-item${event.hidden ? ' is-hidden' : ''}${event.done ? ' is-done' : ''}`}
                                   aria-expanded={isOpen}
                                   onClick={() => setOpenListKey(isOpen ? null : key)}

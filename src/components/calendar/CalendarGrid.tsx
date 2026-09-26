@@ -210,6 +210,8 @@ export default function CalendarGrid({
                     <div key={event.key} className="cal-chip-slot">
                       <button
                         type="button"
+                        data-event-key={event.key}
+                        data-custom-event-id={event.id ?? undefined}
                         className={`cal-chip${event.done ? ' is-done' : ''}`}
                         tabIndex={tab}
                         aria-expanded={isOpen}

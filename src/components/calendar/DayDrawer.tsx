@@ -71,6 +71,8 @@ export default function DayDrawer({
             <div key={event.key} className="cal-drawer-item">
               <button
                 type="button"
+                data-event-key={event.key}
+                data-custom-event-id={event.id ?? undefined}
                 className={`cal-drawer-row${event.done ? ' is-done' : ''}`}
                 aria-expanded={isOpen}
                 onClick={() => setOpen(isOpen ? null : event.key)}
