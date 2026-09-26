@@ -5,6 +5,7 @@ export async function sidebar(page) {
   return page.evaluate(() => {
     const root = document.querySelector('.sidebar'), search = root?.querySelector('.sidebar-search span')
     if (!root) return null
+    const email = root.querySelector('.sidebar-footer-email'), emailBox = email?.getBoundingClientRect()
     return {
       overflow: root.scrollHeight - root.clientHeight,
       footerRows: (() => {
@@ -12,10 +13,17 @@ export async function sidebar(page) {
         return centers.length ? Math.max(...centers) - Math.min(...centers) <= 1 ? 1 : 2 : 0
       })(),
       searchText: search?.textContent, searchTruncated: search ? search.scrollWidth > search.clientWidth : null,
+      identity: email && emailBox ? {
+        text: email.textContent.trim(), top: emailBox.top, bottom: emailBox.bottom,
+        visible: emailBox.width > 0 && emailBox.height > 0 && emailBox.top >= 0 && emailBox.bottom <= innerHeight,
+        truncated: email.scrollWidth > email.clientWidth + 1 || email.scrollHeight > email.clientHeight + 1,
+        textOverflow: getComputedStyle(email).textOverflow,
+      } : null,
       links: [...root.querySelectorAll('nav .nav-link')].map(a => ({ href: a.getAttribute('href'), top: a.getBoundingClientRect().top })),
       buttons: [...root.querySelectorAll('.sidebar-footer button')].map(b => {
         const r = b.getBoundingClientRect()
-        return { name: b.getAttribute('aria-label'), width: r.width, height: r.height, top: r.top, bottom: r.bottom, visible: r.top >= 0 && r.bottom <= innerHeight }
+        const color = getComputedStyle(b).color, channels = color.match(/[\d.]+/g)?.map(Number) ?? []
+        return { name: b.getAttribute('aria-label'), width: r.width, height: r.height, top: r.top, bottom: r.bottom, visible: r.top >= 0 && r.bottom <= innerHeight, color, red: channels.length >= 3 && channels[0] > channels[1] * 1.2 && channels[0] > channels[2] * 1.2 }
       }),
     }
   })

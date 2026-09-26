@@ -90,6 +90,8 @@ function assertTiles(id, rows, oneLine = false) {
   for (const [index, row] of rows.entries()) {
     const secondLines = secondLineCoverage(row)
     check(id, `Tile row ${index + 1}: mixed tiles have real second lines`, secondLines.ok, secondLines, { blankBand: baseline.mixedTileBlankBand, bareTilesBySurface: baseline.mixedBareTiles })
+    const realTiles = row.tiles.filter(tile => !tile.ghost)
+    check(id, `Tile row ${index + 1}: badges share the title header without a blank badge track`, realTiles.length > 0 && realTiles.every(tile => tile.header !== null && tile.legacyBadgeRows === 0 && (!tile.badge || tile.badgePlacement !== null && tile.badgePlacement.titleOverlap > 0 && tile.badgePlacement.gapAfterTitle >= -1 && Math.abs(tile.badgePlacement.rightInset) <= 1)), realTiles.map(({ label, badge, header, legacyBadgeRows, badgePlacement }) => ({ label, badge, header, legacyBadgeRows, badgePlacement })))
     const counts = row.layout.split('+').map(Number)
     const lastFull = row.tiles.length === 5 && counts.join('+') === '2+2+1' && row.tiles.at(-1).w >= row.w - 2
     check(id, `Tile row ${index + 1} has no orphan fifth tile`, row.tiles.length !== 5 || ['5', '3+2'].includes(row.layout) || lastFull, { layout: row.layout, width: row.w, lastTileWidth: row.tiles.at(-1)?.w })
@@ -105,7 +107,8 @@ async function sidebarGroup(options) {
     await visit(page, '/guide')
     const observed = await measure.sidebar(page)
     check(id, 'Sidebar fits viewport', observed && observed.overflow <= 1, observed, (density === 'compact' ? baseline.compactSidebarOverflow : baseline.sidebarOverflow)[`${options.width}x${options.height}`])
-    check(id, 'Footer has one row and both 28px buttons fully visible', observed?.footerRows === 1 && observed?.buttons.length === 2 && observed.buttons.every(b => b.visible && Math.abs(b.width - 28) <= 1 && Math.abs(b.height - 28) <= 1), observed?.buttons)
+    check(id, 'Footer shows the full identity above one row of visible 28px actions', observed?.identity?.visible && observed.identity.text.includes('@') && !observed.identity.truncated && observed.identity.textOverflow !== 'ellipsis' && observed.buttons.length === 2 && observed.buttons.every(b => b.visible && Math.abs(b.width - 28) <= 1 && Math.abs(b.height - 28) <= 1) && measure.spread(observed.buttons.map(b => b.top)) <= 1 && observed.identity.bottom <= Math.min(...observed.buttons.map(b => b.top)) + 1, { identity: observed?.identity, buttons: observed?.buttons })
+    check(id, 'Logout uses the requested red color', observed?.buttons.some(button => button.name === 'Log out' && button.red), observed?.buttons.find(button => button.name === 'Log out'))
     check(id, 'Search label is intact; all navigation links present', observed?.searchText?.trim() === 'Search…' && observed.searchTruncated === false && observed.links.length === 14, { search: observed?.searchText, truncated: observed?.searchTruncated, links: observed?.links })
     await snap(page, id)
   })
@@ -367,7 +370,7 @@ async function monthsGroup(options) {
           const row = document.querySelector('.kpi-row-steady')
           if (!row || row.getBoundingClientRect().height === 0 || row.closest('.loading-dim.is-loading') || row.querySelector('.skeleton-tile')) return false
           const tile = row.querySelector('.stat-tile')
-          const label = tile?.querySelector('.stat-label')?.textContent.trim()
+          const label = (tile?.querySelector('.stat-label-text') ?? tile?.querySelector('.stat-label'))?.textContent.trim()
           const value = tile?.querySelector('.stat-value-figure')?.textContent.trim()
           return label === expected.label && (expected.value === undefined || value === expected.value) ? { label, value, loading: false } : false
         }, expectedTile, { timeout: 25000 }).catch(error => { throw new Error(`${route}: ${month} KPI did not settle to the requested data: ${error.message}`) })

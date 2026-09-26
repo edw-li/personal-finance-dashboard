@@ -4,6 +4,8 @@
 
 **Ownership:** this plan and `tools/probes/polish-v/` only. Product defects go to the coordinator with measurements, reproduction and the responsible surface. Screenshots, dumps, tokens, generated configs, logs and JSON reports stay in ignored scratch storage. No changes to another lane's worktree or shared `node_modules`.
 
+**Later user direction (2026-09-26):** show the full footer email, make logout red, and place each tile badge at the top right beside its title without a dedicated blank badge row. The compact identity-above-actions footer supersedes the original one-row footer contract. Continue verification without another heavyweight test run for these cosmetic changes; preserve the actual earlier gate results and run the browser acceptance against the final merged appearance.
+
 ## 1. Source and environment
 
 - [x] Read the approved spec, overview and L1/L2 as-built records; recover the original audit harness and L1/L2/L5 measurement scripts.
@@ -33,7 +35,7 @@ Each group runs dark and light at **1280×800, 1366×768, 1440×900, 1536×864, 
 
 | Group | Acceptance and actual measurement |
 |---|---|
-| Sidebar (§2) | `scrollHeight - clientHeight <= 1`; theme and logout buttons fully visible, 28×28; one footer row; Search… not truncated; all navigation links present. Confirm normal rhythm is retained above 900px height. |
+| Sidebar (§2, updated user direction) | `scrollHeight - clientHeight <= 1`; full email visible above a single row of 28×28 theme/logout buttons; logout red; Search… not truncated; all navigation links present. Confirm normal rhythm is retained above 900px height. |
 | Five chart pairs (§3.1) | Overview Portfolio performance/Recent spending, Spending Trends, Paycheck breakdown/flow, ESPP anatomy/price, card detail credits/limit history: bottom difference <=1px with Tables closed, each available Table open, and closed again. Trends plot tops and bottoms also <=1px. Record before/after. |
 | Overview (§3.2) | Wealth/agenda bottoms <=1px; Changes blank band <=24px with trend Table closed/open/closed. Customize hide/show leaves no isolated half-width hole or horizontal overflow. |
 | Settings (§3.3) | Walk all five tabs; each real paired row bottoms <=1px; gap above pinned actions <=96px. At 1440/1920 record natural-height spread <=15% for pairs covered by the pairing rule, with Appearance/Password's explicitly retained pairing reported separately. |
@@ -42,7 +44,7 @@ Each group runs dark and light at **1280×800, 1366×768, 1440×900, 1536×864, 
 | Allocation (§3.6) | Card-height spread <=1px across Asset class, Industry, Geography, Account, Holding type; aside scroll box/pinned header and plot remain contained. |
 | Meters (§3.7) | Budget meter right edges and Paycheck pace track right edges each spread <=1px; empty budget track differs from card background. |
 | Guide (§3.8) | Numbered rail shows Step N of M, Previous/Next select neighbor and focus the selected rail row; unnumbered rail has Next only. |
-| Tiles (§4) | Every visible real tile row: shared value baseline <=1px and equal tile bottoms within each visual row; five tiles lay out 5, 3+2, or 2+2+1 only when the last spans the full width (never orphan 4+1 or unfilled 2+2+1). Repeat with the metric detail dock open. At 1440, Overview/Net worth/Spending deltas each fit one line. |
+| Tiles (§4, updated user direction) | Every visible real tile row: shared value baseline <=1px and equal tile bottoms within each visual row; badge shares the title header at its right edge without overlap or a dedicated badge row. Mixed rows have real second lines except the documented Realized gains / household-wallet exceptions; named §4.4 tiles are explicitly required, with the current withholding branch attributed. Five tiles lay out 5, 3+2, or 2+2+1 only when the last spans the full width (never orphan 4+1 or unfilled 2+2+1). Repeat with the metric detail dock open. At 1440, Overview/Net worth/Spending deltas each fit one line. |
 | Month stability (§4.3) | Traverse every month offered by Net worth and Spending, both themes; row-height spread <=1px. The full matrix records this at every target viewport, including audit-sensitive 1280. |
 | Loading/CLS (§4.6, §9) | Fresh context/route for all 14 navigation destinations plus distinct tile/editor tabs. Record browser layout-shift entries without recent input and require CLS <0.1 per route/case. Observe cold five-tile skeletons and settled rows; no phantom loading placeholders. |
 | Errors (§9) | No native dialog, page error, console error, failed API response, unexpected blocked write or route fallback. Known pre-existing observations stay explicit failures/notes until coordinator disposition, never an automatic green allowlist. |

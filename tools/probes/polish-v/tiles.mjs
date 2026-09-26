@@ -38,10 +38,12 @@ export async function tileRows(page) {
       const tiles = kids.map((k) => {
         const tile = k.classList.contains('stat-tile') ? k : k.querySelector('.stat-tile') ?? k
         const r = tile.getBoundingClientRect()
-        const label = tile.querySelector('.stat-label')
+        const label = tile.querySelector('.stat-label-text') ?? tile.querySelector('.stat-label')
+        const header = tile.querySelector('.stat-header')
         const value = tile.querySelector('.stat-value')
         const delta = tile.querySelector('.stat-delta')
         const badge = tile.querySelector('.stat-badge')
+        const labelBox = label?.getBoundingClientRect(), badgeBox = badge?.getBoundingClientRect(), headerBox = header?.getBoundingClientRect()
         return {
           label: (label?.textContent ?? '').trim().slice(0, 40),
           ghost: tile.classList.contains('skeleton-tile'),
@@ -49,6 +51,14 @@ export async function tileRows(page) {
           valueBaseline: baselineOf(value),
           valueTop: value ? round(value.getBoundingClientRect().top + scrollY) : null,
           badge: badge ? badge.textContent.trim() : null,
+          header: headerBox ? { top: round(headerBox.top), bottom: round(headerBox.bottom), right: round(headerBox.right) } : null,
+          legacyBadgeRows: tile.querySelectorAll('.stat-badge-row').length,
+          badgePlacement: badgeBox && labelBox && headerBox ? {
+            titleOverlap: Math.min(labelBox.bottom, badgeBox.bottom) - Math.max(labelBox.top, badgeBox.top),
+            gapAfterTitle: badgeBox.left - labelBox.right,
+            rightInset: headerBox.right - badgeBox.right,
+            top: badgeBox.top - headerBox.top,
+          } : null,
           delta: delta ? delta.textContent.trim().slice(0, 90) : null,
           deltaLines: linesOf(delta),
           deltaTop: delta ? round(delta.getBoundingClientRect().top + scrollY) : null,
