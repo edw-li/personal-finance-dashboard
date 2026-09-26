@@ -4,6 +4,7 @@ import {
   formatCurrency,
   formatCurrencyCompact,
   formatCurrencyWhole,
+  outflowsLine,
   formatBytes,
   formatDate,
   formatDateTime,
@@ -189,5 +190,22 @@ describe('formatCurrencyWhole', () => {
     expect(formatCurrencyWhole(null)).toBe('—')
     expect(formatCurrencyWhole(undefined)).toBe('—')
     expect(formatCurrencyWhole('')).toBe('—')
+  })
+})
+
+// A month's other outflows under a tile (2026-09-25 polish review): Spending's Living spending and the
+// Review's Cash outflow say the same thing the same way — each named only when the month had it.
+describe('outflowsLine', () => {
+  it('names only the outflows a month had, in whole dollars', () => {
+    expect(outflowsLine('5044.00', '0.00')).toBe('tax $5,044')
+    expect(outflowsLine(0, 1200)).toBe('transfers $1,200')
+    expect(outflowsLine('5044.00', '1200.40')).toBe('tax $5,044 · transfers $1,200')
+    expect(outflowsLine('-12.00', 0)).toBe('tax -$12') // a refund is still a figure the month had
+  })
+
+  it('says so when there was neither, and counts a missing figure as none', () => {
+    expect(outflowsLine('0.00', '0.00')).toBe('No tax or transfers')
+    expect(outflowsLine(0, 0)).toBe('No tax or transfers')
+    expect(outflowsLine(null, undefined)).toBe('No tax or transfers')
   })
 })

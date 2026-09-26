@@ -94,7 +94,7 @@ import type {
 } from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import { canonicalAmount, isAmount } from '../utils/amount'
-import { formatCurrency, formatCurrencyWhole, formatMonth, formatPct } from '../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatMonth, formatPct, outflowsLine } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import { useProductToday } from '../utils/productToday'
 import { classifyPaste, matchLabel } from '../utils/paste'
@@ -2303,7 +2303,8 @@ function MonthlyUpdateWizard() {
               <StatTile
                 label="Cash outflow"
                 value={formatCurrency(preview.cashSpend)}
-                delta={`tax ${formatCurrencyWhole(preview.taxSpend)} · transfers ${formatCurrencyWhole(preview.transfers)}`}
+                // The month's other outflows, as Spending's Living tile words them (utils/format outflowsLine).
+                delta={outflowsLine(preview.taxSpend, preview.transfers)}
                 tone="neutral"
                 hint="Living spending plus tax paid from take-home. Transfers to your own accounts stayed yours and are listed, not counted."
               />

@@ -29,6 +29,21 @@ export function formatCurrencyWhole(value: string | number | null | undefined): 
   return Math.abs(n) < 1 ? currency.format(n) : wholeCurrency.format(n)
 }
 
+/** A month's other outflows as a tile's second line (2026-09-25 polish review) — Spending's Living
+ *  spending and the Review's Cash outflow: each named only when the month had it, in whole dollars
+ *  ("tax $5,044 · transfers $1,200"), and "No tax or transfers" when it had neither. A missing figure
+ *  counts as none. */
+export function outflowsLine(
+  tax: string | number | null | undefined,
+  transfers: string | number | null | undefined,
+): string {
+  const parts = [
+    Number(tax ?? 0) !== 0 ? `tax ${formatCurrencyWhole(tax)}` : null,
+    Number(transfers ?? 0) !== 0 ? `transfers ${formatCurrencyWhole(transfers)}` : null,
+  ].filter((part): part is string => part !== null)
+  return parts.length > 0 ? parts.join(' · ') : 'No tax or transfers'
+}
+
 export function formatCurrencyCompact(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return '—'
   const n = Number(value)

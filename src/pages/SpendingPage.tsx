@@ -51,7 +51,7 @@ import { partialFootnote, partlyEnteredMonths } from '../charts/partlyEntered'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
-import { formatCurrency, formatCurrencyWhole, formatMonth, formatPct } from '../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatMonth, formatPct, outflowsLine } from '../utils/format'
 import { addMonths, todayIso } from '../utils/months'
 import { hasVsBudget, monthMovers } from '../utils/spending'
 import '../components/panels.css'
@@ -117,21 +117,15 @@ function versusMonthBefore(
   return { text: `${change(Math.abs(difference))} vs ${name}`, tone: difference > 0 ? 'positive' : 'negative' }
 }
 
-/** The Living spending tile's line (2026-09-25 polish review): the month's other outflows, each only when
- *  there was any — "tax $5,044 · transfers $1,200", "tax $5,044" — or "No tax or transfers"; nothing on a
- *  payload without the two series. Whole dollars. */
 /** The comparison's count — "1 eligible month" for the history's first month, never "1 … months". */
 function eligibleMonths(count: number): string {
   return `${count} eligible ${count === 1 ? 'month' : 'months'}`
 }
 
+/** The Living spending tile's line (2026-09-25 polish review): the month's other outflows in the
+ *  Review's own words (utils/format outflowsLine); nothing on a payload without the two series. */
 function otherOutflows(tax: string | undefined, transfers: string | undefined): string | undefined {
-  if (tax === undefined && transfers === undefined) return undefined
-  const parts = [
-    Number(tax ?? 0) !== 0 ? `tax ${formatCurrencyWhole(tax)}` : null,
-    Number(transfers ?? 0) !== 0 ? `transfers ${formatCurrencyWhole(transfers)}` : null,
-  ].filter((part): part is string => part !== null)
-  return parts.length > 0 ? parts.join(' · ') : 'No tax or transfers'
+  return tax === undefined && transfers === undefined ? undefined : outflowsLine(tax, transfers)
 }
 
 export default function SpendingPage() {
