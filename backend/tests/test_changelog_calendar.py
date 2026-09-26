@@ -5,8 +5,9 @@ revoke; tests/test_changelog_pin.py says why."""
 
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
+from app.api import calendar as calendar_api
 from app.api.calendar import _override_label
 from app.models import (
     CalendarEventOverride,
@@ -197,6 +198,40 @@ async def test_a_key_no_event_carries_is_named_by_the_key(auth_client, db, monke
         assert resp.status_code == 200, resp.text
         [row] = await logged(db, resp.headers["x-change-batch"])
         assert row.label == f"Hid calendar event {key}"
+
+
+async def test_keys_at_the_ends_of_the_calendar_still_take_their_override(
+    auth_client, db, monkeypatch
+):
+    """KEY_RE admits any four-digit year, and the generators cannot step past year 1 or 9999.
+    Such a key is named by the key — and saved, exactly as it was before overrides had labels."""
+    freeze_today(monkeypatch)
+    for key in ("tax:2026-q3:9999-12-31", "custom:1:0001-01-01"):
+        resp = await auth_client.put(f"{CALENDAR}/overrides/{key}", json=overlay(hidden=True))
+        assert resp.status_code == 200, resp.text
+        [row] = await logged(db, resp.headers["x-change-batch"])
+        assert row.label == f"Hid calendar event {key}"
+
+
+async def test_an_event_that_cannot_be_named_still_takes_its_override(auth_client, db, monkeypatch):
+    """The name is a nicety. A loader that fails — here with a database error, which would abort
+    the write's own transaction but for the savepoint — costs the label its event name, never
+    the write."""
+    freeze_today(monkeypatch)
+
+    async def failing_compose(session, *_args, **_kwargs):
+        await session.execute(text("SELECT 1 / 0"))
+
+    monkeypatch.setattr(calendar_api, "_compose_for", failing_compose)
+    hidden = await auth_client.put(f"{CALENDAR}/overrides/{Q3}", json=overlay(hidden=True))
+    assert hidden.status_code == 200, hidden.text
+    [row] = await logged(db, hidden.headers["x-change-batch"])
+    assert row.label == f"Hid calendar event {Q3}"
+    cleared = await auth_client.delete(f"{CALENDAR}/overrides/{Q3}")
+    assert cleared.status_code == 204, cleared.text
+    [row] = await logged(db, cleared.headers["x-change-batch"])
+    assert row.label == f"Cleared your edits on calendar event {Q3}"
+    assert await images(db, CalendarEventOverride) == []  # both writes went through
 
 
 # ── feed links ───────────────────────────────────────────────────────────────────────

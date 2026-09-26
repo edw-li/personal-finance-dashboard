@@ -11,6 +11,7 @@ GET-never-rejects: every degradable source degrades inside the loaders or compos
 nothing stored can 500 this."""
 
 import hashlib
+import logging
 import secrets
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -78,6 +79,8 @@ from app.services.money import MONEY_MAX_ABS_12_2, quantize_money
 from app.services.paycheck_calc import breakdown, half_up2
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/calendar", tags=["calendar"], dependencies=[Depends(get_current_user)])
 
@@ -764,24 +767,38 @@ def _override_out(row: CalendarEventOverride) -> OverrideOut:
 
 async def _event_name(db: AsyncSession, key: str) -> str:
     """How an Activity label names the event an override sits on: the calendar's own label and
-    the day in its key — "Payday of Sep 15, 2026". Composed for that day as GET /calendar would,
-    before any write; the overdue monthly reminder sits on today while its key keeps the nominal
-    day, so a ritual key's window runs on to today. A key no event carries (or a day no calendar
-    has — KEY_RE admits 2026-02-30) is named by the key itself. The label is the only reason an
-    override route composes anything."""
+    the day in its key — "Payday of Sep 15, 2026". Composed for that day as GET /calendar would;
+    the overdue monthly reminder sits on today while its key keeps the nominal day, so a ritual
+    key's window runs on to today. A key no event carries (or a day no calendar has — KEY_RE
+    admits 2026-02-30) is named by the key itself. The label is the only reason an override
+    route composes anything.
+
+    A label is a nicety and must never cost the write it describes. The compose runs inside a
+    SAVEPOINT, so a loader's database error cannot abort the write's transaction; and any
+    failure at all — a loader that raises, a year the generators cannot step past (KEY_RE
+    admits 0001 and 9999) — names the event by its key, with a warning in the log."""
+    by_key = f"calendar event {key}"
     source, _ref, day_text = key.split(":")
     try:
         day = date.fromisoformat(day_text)
     except ValueError:
-        return f"calendar event {key}"
+        return by_key
     today = clock.product_today()
     end = max(day, today) if source == "ritual" else day
-    if (end - day).days <= MAX_SPAN_DAYS:
-        events, _health, _quoted_at = await _compose_for(db, day, end, today)
-        for event in events:
-            if event.key == key:
-                return f"{event.label} of {long_day(day)}"
-    return f"calendar event {key}"
+    if (end - day).days > MAX_SPAN_DAYS:
+        return by_key
+    try:
+        async with db.begin_nested():
+            events, _health, _quoted_at = await _compose_for(db, day, end, today)
+    except Exception:
+        logger.warning(
+            "could not name calendar event %s; labelling it by its key", key, exc_info=True
+        )
+        return by_key
+    for event in events:
+        if event.key == key:
+            return f"{event.label} of {long_day(day)}"
+    return by_key
 
 
 # The overlay a first PUT is judged against: what "no override row" means.
