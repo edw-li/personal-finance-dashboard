@@ -112,14 +112,17 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const saveState = useSaveState({ dirty: JSON.stringify(form) !== JSON.stringify(savedForm) })
   const toast = useToast()
   const formRef = useRef<HTMLFormElement>(null)
+  const revealRequested = useRef(false)
   const landingId = useRef<number | null>(null)
   const [rowUpdates, setRowUpdates] = useState<Record<number, Partial<AccountOut>>>({})
   const deleteWithUndo = useDeleteWithUndo()
   const findRow = (id: number) => document.querySelector<HTMLElement>(`#accounts [data-settings-row="${id}"]`)
 
   useLayoutEffect(() => {
-    if (editingId !== null) revealEditor(formRef.current, 'input')
-  }, [editingId])
+    if (!revealRequested.current) return
+    revealRequested.current = false
+    revealEditor(formRef.current, 'input')
+  })
   useLayoutEffect(() => {
     if (busy || landingId.current === null) return
     const row = findRow(landingId.current)
@@ -127,7 +130,8 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     landingId.current = null
     revealRow(row)
     flashElement(row)
-    row.querySelector<HTMLButtonElement>('[data-edit]')?.focus({ preventScroll: true })
+    // Single-add lists hand focus to the row; the page follows if its inner scroller is offscreen.
+    row.querySelector<HTMLButtonElement>('[data-edit]')?.focus()
   }, [accounts, busy])
 
 
@@ -162,10 +166,11 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     (field: 'name' | 'person_id' | 'parent_account_id') => (value: string) => {
       setForm((f) => ({ ...f, [field]: value }))
       setFormError(null)
-    saveState.clearError()
+      saveState.clearError()
     }
 
   const startEdit = (account: AccountOut) => {
+    revealRequested.current = true
     setEditingId(account.id)
     setFormError(null)
     saveState.clearError()
@@ -526,9 +531,11 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
               <select
                 className="field-input"
                 value={form.group}
-                onChange={(e) =>
+                onChange={(e) => {
                   setForm((f) => ({ ...f, group: e.target.value as AccountGroup }))
-                }
+                  setFormError(null)
+                  saveState.clearError()
+                }}
               >
                 {GROUP_ORDER.map((group) => (
                   <option key={group} value={group}>
@@ -574,7 +581,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                 onChange={(e) => {
                   setForm((f) => ({ ...f, is_component: e.target.checked }))
                   setFormError(null)
-    saveState.clearError()
+                  saveState.clearError()
                 }}
               />
               Component of the parent

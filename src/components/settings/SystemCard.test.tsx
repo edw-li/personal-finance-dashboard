@@ -88,6 +88,7 @@ it('renders the healthy rows verbatim', async () => {
   expect(screen.getByText('117.7 MB')).toBeDefined()
   expect(screen.getByText('e7c5a9f4b2d8')).toBeDefined()
   expect(screen.getByText('prod')).toBeDefined()
+  expect(screen.getByText('Build').nextElementSibling?.textContent).toBe(__BUILD_HASH__)
 })
 
 it('tones the backup amber past 48 hours, wording unchanged', async () => {

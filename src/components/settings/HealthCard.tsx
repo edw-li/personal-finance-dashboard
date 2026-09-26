@@ -135,7 +135,7 @@ export default function HealthCard() {
   }
 
   return (
-    <section ref={cardRef} tabIndex={-1} className="card span-6" id="health" role="region" aria-label="Data health">
+    <section ref={cardRef} tabIndex={-1} className="card span-12" id="health" role="region" aria-label="Data health">
       <h2 className="eyebrow">
         Data health
         {/* The §199A check went with the stored itemized total (2026-09-11 spec §1.4): a

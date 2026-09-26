@@ -9,6 +9,7 @@ import InfoHint from '../components/InfoHint'
 import { useConfirm } from '../components/feedback/confirm'
 import { useLatest } from '../components/reorder/useLatest'
 import { SaveButton } from '../components/feedback/SaveButton'
+import BusyButton from '../components/feedback/BusyButton'
 import { SaveStatus } from '../components/feedback/SaveStatus'
 import { useSaveState } from '../components/feedback/useSaveState'
 import AccountsCard from '../components/settings/AccountsCard'
@@ -336,7 +337,7 @@ export default function SettingsPage() {
 <LocalSectionPanel state={views} section="account" className="span-12 card-grid">
 <h2 className="settings-section visually-hidden" id="sec-account">Account</h2>
 <AppearanceCard />
-{loadedOnce && <section className="card span-6" id="password">
+{loadedOnce && <section className="card span-12" id="password">
                 <h2 className="eyebrow">
                   Password
                   <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
@@ -355,7 +356,7 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="current-password"
                       value={currentPw}
-                        readOnly={pwState.status === 'saving'}
+                      readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setCurrentPw)(e.target.value)}
                     />
                   </label>
@@ -366,7 +367,7 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="new-password"
                       value={newPw}
-                        readOnly={pwState.status === 'saving'}
+                      readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setNewPw)(e.target.value)}
                     />
                   </label>
@@ -377,7 +378,7 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="new-password"
                       value={confirmPw}
-                        readOnly={pwState.status === 'saving'}
+                      readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setConfirmPw)(e.target.value)}
                     />
                   </label>
@@ -420,22 +421,24 @@ export default function SettingsPage() {
                     edited here for sheet-covered years are reset to the sheet.
                   </p>
                   <div className="settings-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
-                      disabled={file === null || importBusy !== null}
+                      inert={file === null || importBusy === 'apply'}
+                      busy={importBusy === 'dry'}
                       onClick={() => runImport(true)}
                     >
-                      {importBusy === 'dry' ? 'Dry run…' : 'Dry run'}
-                    </button>
-                    <button
+                      Dry run
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button button-primary"
-                      disabled={!canApply}
+                      inert={!canApply}
+                      busy={importBusy === 'apply'}
                       onClick={(event) => void applyImport(event.currentTarget)}
                     >
-                      {importBusy === 'apply' ? 'Applying…' : 'Apply import'}
-                    </button>
+                      Apply import
+                    </BusyButton>
                   </div>
                 </div>
                 {importError && (

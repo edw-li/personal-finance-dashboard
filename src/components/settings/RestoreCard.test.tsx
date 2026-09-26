@@ -131,7 +131,7 @@ const dateBox = () => {
 }
 const dryButton = () => screen.getByRole('button', { name: /^dry run/i }) as HTMLButtonElement
 const restoreButton = () =>
-  (screen.queryByRole('button', { name: 'Restore snapshot', exact: true }) ?? screen.getByRole('button', { name: 'Restore', exact: true })) as HTMLButtonElement
+  (screen.queryByRole('button', { name: 'Restore snapshot' }) ?? screen.getByRole('button', { name: 'Restore' })) as HTMLButtonElement
 // The card's OWN banner, scoped to it: ToastProvider always mounts an (empty) role="alert"
 // live region beside its children, so a bare screen.findByRole('alert') would resolve
 // against that one the moment it exists and never see the card's message.

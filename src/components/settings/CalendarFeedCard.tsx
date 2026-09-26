@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createFeedToken, feedUrl, fetchFeedTokens, revokeFeedToken } from '../../api/calendarFeed'
 import { ApiError } from '../../api/client'
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
@@ -39,11 +39,20 @@ export default function CalendarFeedCard() {
   const [dayBox, setDayBox] = useState('')
   const [dayError, setDayError] = useState<string | null>(null)
   const dayState = useSaveState({ dirty: settings !== null && dayBox !== String(settings.calendar_update_due_day) })
-  const [busy, setBusy] = useState(false)
+  const [pending, setPending] = useState<'create' | number | null>(null)
+  const busy = pending !== null
   const seqRef = useRef(0)
   const toast = useToast()
   const ask = useConfirm()
   const cardRef = useRef<HTMLElement>(null)
+  const focusLinkForm = useRef(false)
+
+  // Creating and dismissing the once-shown URL replace a form, so hand focus to its new box.
+  useLayoutEffect(() => {
+    if (!focusLinkForm.current) return
+    focusLinkForm.current = false
+    cardRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+  }, [fresh])
 
   // A plain function over stable setters, called from the effect and from Retry (the
   // LimitsCard idiom — a useCallback here trips preserve-manual-memoization).
@@ -74,15 +83,17 @@ export default function CalendarFeedCard() {
   const create = () => {
     const label = labelBox.trim()
     if (label === '') return
-    setBusy(true)
+    if (busy) return
+    setPending('create')
     setError(null)
     createFeedToken(label)
       .then((created) => {
+        focusLinkForm.current = true
         setFresh({ label: created.label, url: feedUrl(created.token) })
         setLabelBox('')
       })
       .catch((err: unknown) => setError(message(err, 'Could not create the feed link.')))
-      .finally(() => setBusy(false))
+      .finally(() => setPending(null))
   }
 
   const copy = () => {
@@ -94,6 +105,7 @@ export default function CalendarFeedCard() {
   }
 
   const dismissFresh = () => {
+    focusLinkForm.current = true
     setFresh(null)
     load(false, false)
   }
@@ -105,7 +117,7 @@ export default function CalendarFeedCard() {
       body: "Calendars using it stop updating — this can't be undone",
       confirmLabel: 'Revoke link',
     })) return
-    setBusy(true)
+    setPending(token.id)
     setError(null)
     // No Undo: the plaintext is gone for good, which is the point of revoking.
     revokeFeedToken(token.id)
@@ -115,7 +127,7 @@ export default function CalendarFeedCard() {
         cardRef.current?.querySelector<HTMLInputElement>('input')?.focus()
       })
       .catch((err: unknown) => setError(message(err, 'Could not revoke the link.')))
-      .finally(() => setBusy(false))
+      .finally(() => setPending(null))
   }
 
   const saveDay = () => {
@@ -189,18 +201,19 @@ export default function CalendarFeedCard() {
                     placeholder="phone, laptop…"
                     maxLength={60}
                     value={labelBox}
-                    disabled={busy}
+                    readOnly={busy}
                     onChange={(e) => setLabelBox(e.target.value)}
                   />
                 </label>
                 <div className="settings-card-actions">
-                  <button
+                  <BusyButton
                     type="submit"
                     className="button button-primary"
-                    disabled={busy || labelBox.trim() === ''}
+                    busy={pending === 'create'}
+                    inert={(busy && pending !== 'create') || labelBox.trim() === ''}
                   >
                     New feed link
-                  </button>
+                  </BusyButton>
                 </div>
               </form>
             )}
@@ -277,7 +290,8 @@ export default function CalendarFeedCard() {
                           type="button"
                           className="button"
                           aria-label={`Revoke the ${token.label} link`}
-                          disabled={busy}
+                          busy={pending === token.id}
+                          inert={busy && pending !== token.id}
                           onClick={(event) => void revoke(token, event.currentTarget)}
                         >
                           Revoke

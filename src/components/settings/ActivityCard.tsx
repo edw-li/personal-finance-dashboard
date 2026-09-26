@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { fetchActivity, fetchActivityRun, undoBatch } from '../../api/lifecycle'
 import type { ActivityEntry, ActivityRun, ActivityRunDetail, ImportReport, RestoreReport } from '../../types/api'
@@ -56,11 +56,20 @@ export default function ActivityCard() {
   const [armed, setArmed] = useState<string | null>(null) // the batch id whose Undo is armed
   const [detail, setDetail] = useState<ActivityRunDetail | null>(null)
   const seqRef = useRef(0)
+  const cardRef = useRef<HTMLElement>(null)
+  const focusBatch = useRef<string | null>(null)
   const toast = useToast()
+
+  // Undo removes its own button. Its original row still says what was undone.
+  useLayoutEffect(() => {
+    if (focusBatch.current === null) return
+    cardRef.current?.querySelector<HTMLElement>(`[data-activity-batch="${focusBatch.current}"]`)?.focus()
+    focusBatch.current = null
+  }, [entries])
 
   const load = (initial = false) => {
     const seq = ++seqRef.current
-    warmSource(initial)(WARM.activity, () => fetchActivity())
+    return warmSource(initial)(WARM.activity, () => fetchActivity())
       .then((pageOut) => {
         if (seq !== seqRef.current) return
         setEntries(pageOut.entries)
@@ -104,7 +113,8 @@ export default function ActivityCard() {
     undoBatch(batchId)
       .then(() => {
         toast.success(`Undone — ${label}`)
-        load()
+        focusBatch.current = batchId
+        return load()
       })
       .catch((err: unknown) => setError(message(err, 'Undo failed.')))
       .finally(() => setBusy(false))
@@ -120,7 +130,7 @@ export default function ActivityCard() {
   }
 
   return (
-    <section className="card span-12" id="activity" role="region" aria-label="Activity">
+    <section ref={cardRef} className="card span-12" id="activity" role="region" aria-label="Activity">
       <h2 className="eyebrow">
         Activity
         <InfoHint text="Every money-bearing change — month saves and deletes; account, category and budget edits; portfolio transactions, dividends and securities; credit cards and reward categories, multipliers, credits and limits; ESPP lots, offerings and periods; paycheck profiles; comp events and RSU grants; calendar events and overrides; reorders; imports, restores and snapshots — newest first. Undo replays one change in reverse while nothing later touched the same rows; imports and restores are summaries and are undone by restoring a snapshot instead." />
@@ -139,7 +149,7 @@ export default function ActivityCard() {
           <ul className="activity-list">
             {entries.map((entry) =>
               entry.type === 'batch' ? (
-                <li key={`b:${entry.batch_id}`} className="activity-row">
+                <li key={`b:${entry.batch_id}`} className="activity-row" data-activity-batch={entry.batch_id} tabIndex={-1}>
                   <span className="settings-note">{formatDateTime(entry.at)}</span>
                   <span className={`badge activity-source activity-source-${entry.source}`}>{entry.source}</span>
                   <span className="activity-label">{entry.label}</span>

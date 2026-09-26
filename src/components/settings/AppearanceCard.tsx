@@ -37,7 +37,7 @@ export default function AppearanceCard() {
   useEffect(() => subscribeSynced(setSynced), [])
   useEffect(() => subscribe('landing_page', setLanding), [])
   return (
-    <section className="card span-6" id="appearance" role="region" aria-label="Appearance">
+    <section className="card span-12" id="appearance" role="region" aria-label="Appearance">
       <h2 className="eyebrow">
         Appearance
         <InfoHint text="Theme, density and your landing page. They paint from this browser first and follow your account once signed in — a second browser picks them up at its next sign-in. System follows your operating system's light or dark setting live. Chart patterns add textures to stacked bars and pies so segments read apart without colour." />

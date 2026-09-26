@@ -246,9 +246,8 @@
   margin-bottom: 0.75rem;
 }
 
-/* The Accounts card's SECOND table (2026-08-28 spec §5). Its heading needs the top gap the
-   single-table layout never had, and the owner select needs a floor width or the longest
-   name reflows the column on every retag. */
+/* Ownership has its own card; a floor width keeps the longest name from reflowing the
+   column on every retag. */
 .portfolio-accounts-heading {
   margin-top: 0;
 }
@@ -306,9 +305,7 @@
 @media (prefers-reduced-motion: no-preference) {
   /* On the BASE card, or the ring would vanish instantly when the class comes off — the
      fade is the half that matters. */
-  .settings-page .card {
-  display: flex;
-  flex-direction: column; transition: outline-color var(--t-page) ease; }
+  .settings-page .card { transition: outline-color var(--t-page) ease; }
 }
 
 /* --- backups & restore cards (2026-09-03 data-lifecycle spec §7–§8) --- */
@@ -359,7 +356,7 @@
   margin-bottom: 0.75rem;
 }
 
-/* The typed-date arm and the red button, side by side (the wizard's danger-row shape). */
+/* Restore keeps a stable action row below its report; the date arm lives in the question. */
 .restore-arm {
   display: flex;
   flex-wrap: wrap;
@@ -370,7 +367,6 @@
 
 /* The source picker's labels wear the same form register as every other label on the page
    (audit S-6): 16px body text over a select read as a sentence, not a field. */
-.restore-arm label,
 .restore-source label {
   display: flex;
   flex-direction: column;
@@ -620,3 +616,11 @@
 
 .household-rename { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
 .activity-report { flex-basis: 100%; min-width: 0; }
+
+/* This last form carries the Household card's bottom action alongside the ownership list. */
+.household-date {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 1rem;
+}

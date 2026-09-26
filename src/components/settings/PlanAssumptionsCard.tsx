@@ -186,7 +186,7 @@ export default function PlanAssumptionsCard() {
   }
 
   return (
-    <section className="card span-6" id="plan-assumptions" role="region" aria-label="Plan assumptions">
+    <section className="card span-12" id="plan-assumptions" role="region" aria-label="Plan assumptions">
       <h2 className="eyebrow">
         Plan assumptions
         <InfoHint text="The knobs the Projection, ESPP and Paycheck pages derive from. The employer match is set per person on the Paycheck page." />
@@ -198,6 +198,7 @@ export default function PlanAssumptionsCard() {
           className="settings-card-form"
           onSubmit={(e) => {
             e.preventDefault()
+            e.currentTarget.querySelector<HTMLButtonElement>('button[type="submit"]')?.focus()
             save()
           }}
         >

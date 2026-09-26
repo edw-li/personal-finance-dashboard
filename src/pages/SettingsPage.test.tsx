@@ -536,17 +536,17 @@ describe('SettingsPage — xlsx import', () => {
     renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
-    expect(dryButton().disabled).toBe(true)
-    expect(applyButton().disabled).toBe(true)
+    expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
 
     pick(xlsx())
-    expect(dryButton().disabled).toBe(false)
+    expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(false)
     // A file is not a permission: Apply waits on a REPORT, so nothing reaches the live
     // database that has not been parsed and shown to the user first.
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
 
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
   })
 
   it('dry-runs the chosen file and renders the per-sheet diff', async () => {
@@ -607,7 +607,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(screen.getByText('1 sample changes')).toBeTruthy()
     expect(screen.getByText('2024-06-14 gross 12500.00 -> 12750.00')).toBeTruthy()
     // Samples are not a refusal: a clean sheet with a preview still arms Apply.
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
   })
 
   it('renders sheet errors and leaves Apply disabled', async () => {
@@ -623,7 +623,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(await screen.findByText('ERROR: 2024: bracket rows overlap at 100000')).toBeTruthy()
     // A dry run that found errors is a REFUSAL, not a preview: the same workbook applied
     // would write every sheet that parsed and leave this one half-imported.
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 
   it('renders a sheet key the view does not know about', async () => {
@@ -642,7 +642,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(await screen.findByText('ERROR: row 3: unknown symbol "XBT"')).toBeTruthy()
     // Labelled by its raw key: a guess would be worse than the server's own word.
     expect(screen.getByText('crypto')).toBeTruthy()
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 
   it('drops the report when another file is picked', async () => {
@@ -659,7 +659,7 @@ describe('SettingsPage — xlsx import', () => {
     // OLD file arming Apply for the new one.
     expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
     expect(screen.queryByText('+2')).toBeNull()
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 
   it('spends no request when the clobber warning is declined', async () => {
@@ -669,10 +669,10 @@ describe('SettingsPage — xlsx import', () => {
 
     pick(xlsx())
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     fireEvent.click(applyButton())
     expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     expect(screen.queryByRole('alertdialog')).toBeNull()
     // One call: the dry run. "No" means nothing was uploaded a second time.
@@ -690,10 +690,10 @@ describe('SettingsPage — xlsx import', () => {
     const file = xlsx()
     pick(file)
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     fireEvent.click(applyButton())
     expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
-    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook' }))
 
     // The sentence names the one thing a dry run cannot show: sheet-covered years win, so
     // taxes work done in the UI for those years is gone after this.
@@ -706,7 +706,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
     // An applied report arms nothing: applying the same workbook twice means dry-running
     // it again, which is also the only way to see what the second pass would do.
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 
   it('toasts the restore point an applied import saved, and Roll back… pre-selects it in Restore', async () => {
@@ -724,7 +724,7 @@ describe('SettingsPage — xlsx import', () => {
     await screen.findByLabelText('Workbook (.xlsx)')
     pick(xlsx())
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     // From the moment the apply returns, the point is on the volume: every later read lists it.
     vi.mocked(fetchRestorePoints).mockResolvedValue([
       {
@@ -738,7 +738,7 @@ describe('SettingsPage — xlsx import', () => {
     ])
     fireEvent.click(applyButton())
     expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
-    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook' }))
     expect(
       await screen.findByText(/^Workbook imported\. The data it replaced is saved as a restore point \(/),
     ).toBeTruthy()
@@ -790,10 +790,10 @@ describe('SettingsPage — xlsx import', () => {
 
     pick(xlsx())
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     fireEvent.click(applyButton())
     expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
-    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook' }))
 
     expect(await screen.findByText('import failed: database is locked')).toBeTruthy()
     // A failed APPLY may still have written — the import is not one transaction. The
@@ -801,10 +801,10 @@ describe('SettingsPage — xlsx import', () => {
     // it is no longer a true preview and must not be left arming Apply for a second pass.
     await waitFor(() => expect(screen.queryByText('Dry run — nothing was written.')).toBeNull())
     expect(screen.queryByText('+2')).toBeNull()
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
     // Recovery is still one click: the file is still chosen, so a fresh dry run says where
     // things actually stand.
-    expect(dryButton().disabled).toBe(false)
+    expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(false)
     expect(fileBox().disabled).toBe(false)
   })
 
@@ -828,7 +828,7 @@ describe('SettingsPage — xlsx import', () => {
     // request that changed nothing — and leave Apply disarmed for no reason.
     expect(screen.getByText('Dry run — nothing was written.')).toBeTruthy()
     expect(screen.getByText('+2')).toBeTruthy()
-    expect(applyButton().disabled).toBe(false)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false)
     // Every failure carries it, the recoverable ones included.
     expect(screen.getByText(STALE_FILE_HINT)).toBeTruthy()
   })
@@ -842,10 +842,10 @@ describe('SettingsPage — xlsx import', () => {
     pick(xlsx())
     fireEvent.click(dryButton())
 
-    await waitFor(() => expect(dryButton().disabled).toBe(true))
+    await waitFor(() => expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(true))
     // Both buttons AND the file input: with all three shut there is no way to start a
     // second upload behind the first, which is what buys this card its missing seq guard.
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
     expect(fileBox().disabled).toBe(true)
     // Separate tasks keep their own request states; switching does not cancel the import.
     fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
@@ -859,9 +859,9 @@ describe('SettingsPage — xlsx import', () => {
       run.resolve(makeReport(SPENDING_DIFF))
     })
     fireEvent.click(screen.getByRole('tab', { name: 'Data' }))
-    await waitFor(() => expect(dryButton().disabled).toBe(false))
+    await waitFor(() => expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     expect(fileBox().disabled).toBe(false)
-    expect(applyButton().disabled).toBe(false)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false)
   })
 })
 

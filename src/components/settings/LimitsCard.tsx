@@ -118,7 +118,7 @@ export default function LimitsCard() {
   })
 
   return (
-    <section className="card span-6" id="limits" role="region" aria-label="Contribution limits">
+    <section className="card span-12" id="limits" role="region" aria-label="Contribution limits">
       <h2 className="eyebrow">
         Contribution limits
         <InfoHint text="Your own per-year caps. The dashboard ships none of its own — enter the year's published figures and the Paycheck page grades your contributions against them. A blank box means 'not entered', which the pace strip says out loud." />
@@ -153,6 +153,7 @@ export default function LimitsCard() {
           className="settings-card-form"
           onSubmit={(e) => {
             e.preventDefault()
+            e.currentTarget.querySelector<HTMLButtonElement>('button[type="submit"]')?.focus()
             save()
           }}
         >

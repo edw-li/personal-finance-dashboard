@@ -88,7 +88,7 @@ describe('AssistantCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /remove saved key/i }))
     expect(await screen.findByRole('alertdialog')).toBeTruthy()
     expect(putAssistantSettings).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Remove key', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove key' }))
     await waitFor(() =>
       expect(putAssistantSettings).toHaveBeenCalledWith({ api_key: null }),
     )

@@ -69,6 +69,7 @@ describe('CalendarFeedCard', () => {
     await waitFor(() => expect(createFeedToken).toHaveBeenCalledWith('watch'))
     const url = (await screen.findByLabelText('Feed URL')) as HTMLInputElement
     expect(url.value).toBe(`${window.location.origin}/api/v1/calendar/feed.ics?token=tok-abc`)
+    expect(document.activeElement).toBe(url)
     expect(screen.getByText(/shown once/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
     expect(writeText).toHaveBeenCalledWith(url.value)
@@ -79,6 +80,7 @@ describe('CalendarFeedCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     await waitFor(() => expect(screen.queryByLabelText('Feed URL')).toBeNull())
     expect(await screen.findByText('watch')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByLabelText('Label for the new link'))
     vi.unstubAllGlobals()
   })
 
@@ -92,6 +94,7 @@ describe('CalendarFeedCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Revoke link' }))
     await waitFor(() => expect(revokeFeedToken).toHaveBeenCalledWith(1))
     await waitFor(() => expect(fetchFeedTokens).toHaveBeenCalledTimes(2))
+    expect(document.activeElement).toBe(screen.getByLabelText('Label for the new link'))
   })
 
   it('stands the token form and the reminder-day form side by side', async () => {

@@ -49,6 +49,19 @@ afterEach(() => {
 })
 
 describe('ActivityCard', () => {
+  it('focuses the original activity row after Undo removes its action', async () => {
+    vi.mocked(fetchActivity)
+      .mockResolvedValueOnce(page([SAVE]))
+      .mockResolvedValueOnce(page([{ ...SAVE, undoable: false, undone_by: 'u-1' }]))
+    mount()
+    const button = await screen.findByRole('button', { name: 'Undo' })
+    button.focus()
+    fireEvent.click(button)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo?' }))
+    await screen.findByText('undone')
+    expect(document.activeElement).toBe(screen.getByText(SAVE.label).closest('li'))
+  })
+
   it('lists batches and runs with source pills, and offers Undo only where undoable', async () => {
     mount()
     expect(await screen.findByRole('region', { name: 'Activity' })).toBeTruthy()

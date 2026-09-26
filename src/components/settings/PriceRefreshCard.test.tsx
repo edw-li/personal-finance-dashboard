@@ -10,6 +10,8 @@ import { refreshPrices } from '../../api/prices'
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import { fetchSystemStatus } from '../../api/system'
 import PriceRefreshCard from './PriceRefreshCard'
+import { localDateKey } from '../../utils/format'
+import { setServerToday } from '../../utils/productToday'
 
 const SETTINGS = {
   swr_pct: '0.045000',
@@ -48,6 +50,21 @@ afterEach(() => {
 })
 
 describe('PriceRefreshCard', () => {
+  it('lists each recent run on its own line and names failed refreshes', async () => {
+    const at = '2026-09-25T20:10:00Z'
+    setServerToday(localDateKey(at))
+    vi.mocked(fetchSystemStatus).mockResolvedValue({ ...STATUS, refresh_runs: [
+      { at, trigger: 'manual', updated: 86, failed_count: 0 },
+      { at, trigger: 'scheduled', updated: 85, failed_count: 1 },
+    ] })
+    render(<PriceRefreshCard />)
+    const updated = await screen.findByText(/Today .* · 86 updated/)
+    const failed = screen.getByText(/Today .* · 85 updated · 1 failed/)
+    expect(updated.tagName).toBe('LI')
+    expect(updated.closest('ul')?.className).toBe('system-fact-list')
+    expect(failed.className).toBe('system-overdue')
+  })
+
   it('seeds the cron box and shows the four scheduler facts', async () => {
     render(<PriceRefreshCard />)
     expect(await screen.findByRole('region', { name: 'Price refresh' })).toBeTruthy()

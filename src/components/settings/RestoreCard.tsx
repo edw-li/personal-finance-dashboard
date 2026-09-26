@@ -143,7 +143,7 @@ export default function RestoreCard({
         setSource({ kind: 'stored', name })
         setReported(null)
         setError(null)
-            return true
+        return true
       },
       [stored, busy, load],
     ),
@@ -164,7 +164,7 @@ export default function RestoreCard({
         if (seq !== runSeqRef.current) return
         setReported({ source: target, report: result })
         if (result.applied) {
-                // Focus is moved in the effect below, once the applied report is on the page.
+          // Focus is moved in the effect below, once the applied report is on the page.
           focusReportRef.current = true
           const when =
             result.exported_at === null
@@ -221,9 +221,7 @@ export default function RestoreCard({
   // (formatDateTime). The stamp's text is UTC, so the 23:30 PT nightly listed as "Sep 3,
   // 11:30 PM" would otherwise demand "2026-09-04" here.
   const snapshotDate = report === null ? null : localDateKey(report.exported_at)
-  // The arm input appears after a dry run of the current selection that named a date — a
-  // report whose schema is incompatible (or that carries errors) still gets the box, with
-  // the button dead beside it: "this is what would arm it, and why it will not".
+  // Only a clean, compatible dry run can ask the typed-date question.
   const canRestore =
     source !== null &&
     report !== null &&
@@ -257,7 +255,7 @@ export default function RestoreCard({
   )
 
   return (
-    <section className="card span-6" id="restore" role="region" aria-label="Restore">
+    <section className="card span-12" id="restore" role="region" aria-label="Restore">
       <h2 className="eyebrow">
         Restore
         <InfoHint text="Replaces every exported table from a snapshot ZIP — one this app wrote, at this server's schema. Dry run shows what would change and writes nothing. Restore first saves a restore point of the current data — it is listed under Restore points below the snapshots, so the step back is one more restore. Your login, the operational trails and this server's backup markers are never touched." />
@@ -322,10 +320,8 @@ export default function RestoreCard({
           <RestoreReportView report={report} />
         </div>
       )}
-      {/* One row, always present, so the state is legible: a disabled Restore says "dry-run
-          first" as plainly as the armed one says "type the date". The BUTTON is the same
-          element on both sides of that toggle — two branches would remount it and drop
-          focus mid-flow. */}
+      {/* The same button survives the dry run and its typed-date question, keeping the
+          confirmation anchored to the action that opened it. */}
       <div className="restore-arm">
         <BusyButton
           type="button"

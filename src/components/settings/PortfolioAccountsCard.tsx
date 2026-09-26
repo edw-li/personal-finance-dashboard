@@ -42,6 +42,7 @@ export default function PortfolioAccountsCard({ people }: { people: PersonOut[] 
   // travels EXPLICITLY: an omitted key means "leave the owner alone", so clearing the
   // select has to send null on purpose.
   const retagPortfolioAccount = (account: PortfolioAccountOut, value: string) => {
+    if (portfolioBusy) return
     setPortfolioBusy(true)
     setPortfolioFormError(null)
     patchPortfolioAccount(account.id, { person_id: value === '' ? null : Number(value) })
@@ -94,7 +95,7 @@ export default function PortfolioAccountsCard({ people }: { people: PersonOut[] 
                             className="field-input"
                             aria-label={`Owner for ${account.label}`}
                             value={account.person_id === null ? '' : String(account.person_id)}
-                            disabled={portfolioBusy}
+                            aria-disabled={portfolioBusy || undefined}
                             onChange={(e) => retagPortfolioAccount(account, e.target.value)}
                           >
                             <option value="">Joint</option>
