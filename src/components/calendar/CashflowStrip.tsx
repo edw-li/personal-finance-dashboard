@@ -1,4 +1,4 @@
-import type { CalendarEvent, CalendarLiving } from '../../types/api'
+import type { CalendarEvent, CalendarEventType, CalendarLiving } from '../../types/api'
 import type { MetricEvidence } from '../../types/metrics'
 import { formatCurrency, formatDate, formatMonth } from '../../utils/format'
 import StatTile from '../StatTile'
@@ -32,6 +32,36 @@ function livingDefinition(estimate: CalendarLiving | null): string {
   return `Mean living spending of ${months} eligible months among the twelve calendar months before this month (before the current month, for a month still ahead) — the Spending page's Previous 12 months figure. ${why}`
 }
 
+/** What a scheduled leg counts, in the reader's nouns (singular, plural). */
+const LEG_NOUNS: Partial<Record<CalendarEventType, [string, string]>> = {
+  payday: ['payday', 'paydays'],
+  ex_dividend: ['dividend', 'dividends'],
+  card_credit: ['card credit', 'card credits'],
+  card_fee: ['card fee', 'card fees'],
+  tax_deadline: ['tax payment', 'tax payments'],
+  custom: ['custom event', 'custom events'],
+}
+
+/** A scheduled leg's second line (2026-09-25 polish spec §4.4): the events it sums, by kind — "2
+ *  paydays", "2 card fees · 1 tax payment · 1 more" (the two most frequent kinds, then the rest) — or
+ *  that there is nothing. Hidden events and vests are left out, as the leg's own sum leaves them. */
+function legWords(events: CalendarEvent[], month: string, direction: 'in' | 'out'): string {
+  const prefix = month.slice(0, 7)
+  const counts = new Map<CalendarEventType, number>()
+  for (const event of events) {
+    if (event.hidden || event.source === 'rsu' || event.direction !== direction || event.date.slice(0, 7) !== prefix) continue
+    counts.set(event.type, (counts.get(event.type) ?? 0) + 1)
+  }
+  if (counts.size === 0) return direction === 'in' ? 'Nothing scheduled' : 'Nothing due'
+  const ranked = [...counts].sort((a, b) => b[1] - a[1])
+  const named = ranked.slice(0, 2).map(([type, n]) => {
+    const [one, many] = LEG_NOUNS[type] ?? ['event', 'events']
+    return `${n} ${n === 1 ? one : many}`
+  })
+  const rest = ranked.slice(2).reduce((sum, [, n]) => sum + n, 0)
+  return [...named, ...(rest > 0 ? [`${rest} more`] : [])].join(' · ')
+}
+
 // Five tiles for the VISIBLE month (2026-09-03 calendar spec §10; 2026-09-23 spec §B2), integer
 // cents from the 2dp strings. The two dated legs say "Scheduled" in their LABELS, so the caveat
 // that used to hide in a receipt is on the tile; Living costs is the day-to-day spending those
@@ -40,6 +70,8 @@ function livingDefinition(estimate: CalendarLiving | null): string {
 // no estimate the tile says so and the net is the scheduled one, labelled as such. A tile whose
 // inputs include an estimate wears the tilde; the quote the vest estimates ride is on the Vesting
 // tile's own line. Hidden events are excluded; done deadlines are included (the money still moved).
+// Each labelled group is a slot of the row's four lines (2026-09-25 polish spec §4.1), and the two
+// scheduled legs say what they count (§4.4).
 export default function CashflowStrip({
   events,
   month,
@@ -89,10 +121,12 @@ export default function CashflowStrip({
     })
   return (
     <div className="kpi-row kpi-row-5 cal-strip" aria-label={`Cash flow for ${formatMonth(month)}`}>
-      <div role="group" aria-label="Scheduled in">
+      <div className="stat-tile-slot" role="group" aria-label="Scheduled in">
         <StatTile
           label="Scheduled in"
           value={money(s.cashIn, s.estimated.cashIn)}
+          delta={legWords(events, month, 'in')}
+          tone="neutral"
           evidence={receipt(
             'cashIn',
             'Scheduled in',
@@ -106,10 +140,12 @@ export default function CashflowStrip({
           }
         />
       </div>
-      <div role="group" aria-label="Scheduled out">
+      <div className="stat-tile-slot" role="group" aria-label="Scheduled out">
         <StatTile
           label="Scheduled out"
           value={money(s.cashOut, s.estimated.cashOut)}
+          delta={legWords(events, month, 'out')}
+          tone="neutral"
           evidence={receipt(
             'cashOut',
             'Scheduled out',
@@ -123,7 +159,7 @@ export default function CashflowStrip({
           }
         />
       </div>
-      <div role="group" aria-label="Living costs">
+      <div className="stat-tile-slot" role="group" aria-label="Living costs">
         <StatTile
           label="Living costs"
           value={livingCents === null ? '—' : `≈ ${formatWholeDollars(livingCents)}`}
@@ -137,7 +173,7 @@ export default function CashflowStrip({
           hint={livingDefinition(estimate)}
         />
       </div>
-      <div role="group" aria-label={netLabel}>
+      <div className="stat-tile-slot" role="group" aria-label={netLabel}>
         <StatTile
           label={netLabel}
           value={money(net, livingCents !== null || s.estimated.cashIn || s.estimated.cashOut)}
@@ -175,7 +211,7 @@ export default function CashflowStrip({
           }
         />
       </div>
-      <div role="group" aria-label="Vesting">
+      <div className="stat-tile-slot" role="group" aria-label="Vesting">
         <StatTile
           label="Vesting"
           value={money(s.vesting, s.estimated.vesting)}

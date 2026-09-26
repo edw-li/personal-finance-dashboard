@@ -103,4 +103,39 @@ describe('CashflowStrip', () => {
     expect(cashOut).toContain('$0.00')
     expect(cashOut).not.toContain('~')
   })
+
+  // 2026-09-25 polish spec §4.1 (PCC-17): each labelled group is a slot that takes part in the row's
+  // four lines, so the strip ends on one edge (the wrapped tiles were 22px short).
+  it('wraps each tile in a slot of the row', () => {
+    render(<CashflowStrip events={events} month="2026-09-01" quoteAsOf={null} living={BUDGET} />)
+    const groups = screen.getAllByRole('group')
+    expect(groups.every((group) => group.className === 'stat-tile-slot')).toBe(true)
+    expect(groups.every((group) => group.firstElementChild?.classList.contains('stat-tile'))).toBe(true)
+  })
+
+  // 2026-09-25 polish spec §4.4: the two bare legs say what they count, hidden events left out.
+  it('names what the scheduled legs count', () => {
+    render(<CashflowStrip events={events} month="2026-09-01" quoteAsOf={null} living={BUDGET} />)
+    const delta = (name: string) => screen.getByRole('group', { name }).querySelector('.stat-delta')?.textContent
+    expect(delta('Scheduled in')).toBe('2 paydays') // the RSU vest is Vesting's, not cash in
+    expect(delta('Scheduled out')).toBe('1 tax payment') // the hidden card fee is not on the calendar
+    cleanup()
+    render(<CashflowStrip events={[]} month="2026-09-01" quoteAsOf={null} living={BUDGET} />)
+    expect(delta('Scheduled in')).toBe('Nothing scheduled')
+    expect(delta('Scheduled out')).toBe('Nothing due')
+  })
+
+  it('names the two most frequent kinds and counts the rest', () => {
+    const busy = [
+      calendarEvent({ date: '2026-10-01', type: 'card_fee', label: 'Fee', amount: '95.00', direction: 'out' }),
+      calendarEvent({ date: '2026-10-02', type: 'card_fee', label: 'Fee', amount: '95.00', direction: 'out' }),
+      calendarEvent({ date: '2026-10-15', type: 'tax_deadline', label: 'Q4', amount: '395.00', direction: 'out' }),
+      calendarEvent({ date: '2026-10-20', type: 'custom', label: 'Gym', amount: '50.00', direction: 'out', id: 7 }),
+      calendarEvent({ date: '2026-10-09', type: 'ex_dividend', label: 'VOO', amount: '12.00', direction: 'in' }),
+    ]
+    render(<CashflowStrip events={busy} month="2026-10-01" quoteAsOf={null} living={[]} />)
+    const delta = (name: string) => screen.getByRole('group', { name }).querySelector('.stat-delta')?.textContent
+    expect(delta('Scheduled out')).toBe('2 card fees · 1 tax payment · 1 more')
+    expect(delta('Scheduled in')).toBe('1 dividend')
+  })
 })

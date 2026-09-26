@@ -639,7 +639,7 @@ export default function CalendarPage() {
           busy,
           retry: () => revalidate(month),
         }}
-        skeleton={{ tiles: 5, cards: [{ span: 12, height: 420 }] }}
+        skeleton={{ tiles: { count: 5, row: 'five', className: 'cal-strip' }, cards: [{ span: 12, height: 420 }] }}
       >
         {shown !== null && (
           <>
