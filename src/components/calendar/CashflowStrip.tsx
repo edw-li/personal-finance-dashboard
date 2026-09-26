@@ -38,12 +38,12 @@ const LEG_NOUNS: Partial<Record<CalendarEventType, [string, string]>> = {
   ex_dividend: ['dividend', 'dividends'],
   card_credit: ['card credit', 'card credits'],
   card_fee: ['card fee', 'card fees'],
-  tax_deadline: ['tax payment', 'tax payments'],
+  tax_deadline: ['tax deadline', 'tax deadlines'],
   custom: ['custom event', 'custom events'],
 }
 
 /** A scheduled leg's second line (2026-09-25 polish spec §4.4): the events it sums, by kind — "2
- *  paydays", "2 card fees · 1 tax payment · 1 more" (the two most frequent kinds, then the rest) — or
+ *  paydays", "2 card fees · 1 tax deadline · 1 more" (the two most frequent kinds, then the rest) — or
  *  that there is nothing. Hidden events and vests are left out, as the leg's own sum leaves them. */
 function legWords(events: CalendarEvent[], month: string, direction: 'in' | 'out'): string {
   const prefix = month.slice(0, 7)

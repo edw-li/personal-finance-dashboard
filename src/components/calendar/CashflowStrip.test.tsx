@@ -118,7 +118,7 @@ describe('CashflowStrip', () => {
     render(<CashflowStrip events={events} month="2026-09-01" quoteAsOf={null} living={BUDGET} />)
     const delta = (name: string) => screen.getByRole('group', { name }).querySelector('.stat-delta')?.textContent
     expect(delta('Scheduled in')).toBe('2 paydays') // the RSU vest is Vesting's, not cash in
-    expect(delta('Scheduled out')).toBe('1 tax payment') // the hidden card fee is not on the calendar
+    expect(delta('Scheduled out')).toBe('1 tax deadline') // the hidden card fee is not on the calendar
     cleanup()
     render(<CashflowStrip events={[]} month="2026-09-01" quoteAsOf={null} living={BUDGET} />)
     expect(delta('Scheduled in')).toBe('Nothing scheduled')
@@ -135,7 +135,7 @@ describe('CashflowStrip', () => {
     ]
     render(<CashflowStrip events={busy} month="2026-10-01" quoteAsOf={null} living={[]} />)
     const delta = (name: string) => screen.getByRole('group', { name }).querySelector('.stat-delta')?.textContent
-    expect(delta('Scheduled out')).toBe('2 card fees · 1 tax payment · 1 more')
+    expect(delta('Scheduled out')).toBe('2 card fees · 1 tax deadline · 1 more')
     expect(delta('Scheduled in')).toBe('1 dividend')
   })
 })
