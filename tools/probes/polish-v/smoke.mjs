@@ -362,6 +362,7 @@ async function monthsGroup(options) {
         check(id, `${route}: requested ${month} is the selected ribbon month`, !!selected && selected.startsWith(expectedLabel + ' '), { requested: month, selected, url: page.url() })
         observed.push({ month, selected, rendered, height: row?.h ?? null, lines: row ? judge(row) : null })
       }
+      if (options.width === 1440) check(id, `${route}: every offered month's deltas fit one line at 1440`, observed.length > 1 && observed.every(month => month.lines?.length > 0 && month.lines.every(line => line.maxDeltaLines <= 1)), observed.map(month => ({ month: month.month, lines: month.lines })))
       check(id, `${route}: every offered month has stable tile-row height`, observed.length > 1 && observed.every(o => o.height !== null) && measure.spread(observed.map(o => o.height)) <= 1, observed, route === '/net-worth' ? baseline.netWorthMonthHeights : undefined)
     }
   })
