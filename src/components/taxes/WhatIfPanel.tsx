@@ -308,6 +308,26 @@ export default function WhatIfPanel({
   }, [open])
 
   const unsoldLots = lots?.lots.filter((lot) => !lot.is_sold) ?? []
+  // Feed state can land before the router commits a legacy alias's replacement. Keep the
+  // first body together until that normalized scenario has answered, rather than painting
+  // an empty form and moving its result twice. The codec also drops an unusable legacy leg.
+  const legacyHolding = held.find((holding) => holding.ticker.toUpperCase() === legacy.ticker?.toUpperCase())
+  const legacyLot = unsoldLots.find((lot) => lot.id === legacy.lotId)
+  const legacyEntries = encodeTax(decodeTax(encodeTax({
+    sales: legacyHolding === undefined ? [] : [saleLegFor(legacyHolding)],
+    espp: legacyLot === undefined ? [] : [esppLegFor(legacyLot, lots?.current_price ?? null)],
+    overrides: {},
+  })))
+  const normalizingLegacy = legacyEntries.some((entry) => !sandbox.entries.includes(entry))
+  const [initialPhase, setInitialPhase] = useState<'feeds' | 'preview' | 'ready'>('feeds')
+  if (initialPhase !== 'ready' && feedError !== null) {
+    setInitialPhase('ready') // A failed feed must expose Retry.
+  } else if (initialPhase === 'feeds' && holdings !== null && !normalizingLegacy) {
+    // Retire the alias handoff once observed: Reset can change the URL while its run waits.
+    setInitialPhase('preview')
+  } else if (initialPhase === 'preview' && !sandbox.busy) {
+    setInitialPhase('ready') // Later runs keep the working body mounted.
+  }
   const holdingFor = (securityId: number) => held.find((h) => h.security_id === securityId)
   // Deliberately NOT counting the override rows: legCount feeds the MAX_LEGS fence, which is
   // the server's per-LIST sales/ESPP cap — the overrides are a dict, with no such cap.
@@ -468,6 +488,9 @@ export default function WhatIfPanel({
       presets={holdings === null ? null : <PresetRow presets={presets} />}
       staleNoun="this scenario"
       skeletonHeight={220}
+      initialLoading={initialPhase === 'ready' ? undefined : holdings === null
+        ? 'Loading holdings, ESPP lots and limits…'
+        : 'Running the scenario…'}
       compare={
         result === null ? null : previewUnusable ? (
           <p className="empty-note">
@@ -734,314 +757,316 @@ export default function WhatIfPanel({
         ) : undefined
       }
     >
-      <p className="drill-hint">
-        Sales are classified at average cost, the app&apos;s only basis method, and ESPP ordinary income
-        lands in Other W2 Income. Long/short is your call: imported transactions carry no dates, so the
-        app cannot verify a holding period. Nothing here is stored.
-      </p>
-      <FeedBanner error={feedError} retry={retryFeeds} />
-      {/* All three feeds land together (one Promise.all) or none does, so one null is the
-          whole "still waiting" question — and a set that FAILED leaves the banner above as
-          the card's only content: there is nothing to build a leg out of, and a form of
-          empty selects would read as "you hold nothing". */}
-      {holdings === null && feedError === null && (
-        <p className="empty-note">Loading holdings, ESPP lots and limits…</p>
-      )}
-      {holdings !== null && (
-        <>
-          <div className="whatif-legs">
-            {/* Position IS the identity here (a leg has no id of its own), and every field is
-                controlled from the URL's scenario — so an index key cannot strand a typed
-                value in a reused row (BracketsEditor's note). */}
-            {scenario.sales.map((leg, index) => {
-              const holding = holdingFor(leg.security_id)
-              const ticker = holding?.ticker ?? `#${leg.security_id}`
-              return (
-                <div key={index} className="whatif-form">
-                  <label htmlFor={`whatif-sale-security-${index}`}>Sell</label>
-                  <select
-                    id={`whatif-sale-security-${index}`}
-                    className="field-input whatif-select"
-                    value={String(leg.security_id)}
-                    onChange={(e) => setSaleSecurity(index, Number(e.target.value))}
-                  >
-                    {/* A link made before the position was sold names an id nobody holds; the
-                        row says so rather than silently reading as another ticker. */}
-                    {holding === undefined && <option value={String(leg.security_id)}>{ticker} (not held)</option>}
-                    {held.map((h) => (
-                      <option key={h.security_id} value={String(h.security_id)}>
-                        {h.ticker}
-                      </option>
-                    ))}
-                  </select>
-                  <DraftInput
-                    ariaLabel={`Sale ${index + 1} shares`}
-                    value={leg.shares}
-                    validate={(text) => {
-                      const shares = text.trim()
-                      // The CODEC's fence, never a looser Number() test: ".5", "+5" and
-                      // "5." all pass Number() but parseSale refuses them on arrival, so a
-                      // box that took one would write an entry the next decode drops — the
-                      // leg would vanish without a word (lane P's BoxKnob, same lesson).
-                      if (shares === '' || !isWireDecimal(shares) || !(Number(shares) > 0))
-                        return `${ticker}: shares must be a number greater than 0, like 12.5`
-                      // The server's own sentence (api/taxes.py's oversell 422) — one vocabulary.
-                      if (holding !== undefined && Number(shares) > Number(holding.shares))
-                        return `selling ${shares} ${ticker} — only ${holding.shares} held`
-                      return null
-                    }}
-                    onCommit={(text, immediate) => setSale(index, { shares: text.trim() }, immediate)}
-                    onInvalid={setFormError}
-                  />
-                  <DraftInput
-                    ariaLabel={`Sale ${index + 1} price`}
-                    placeholder="latest"
-                    value={leg.price ?? ''}
-                    validate={(text) => {
-                      const price = text.trim()
-                      return price !== '' && (!isWireDecimal(price) || !(Number(price) > 0))
-                        ? `${ticker}: price must be a number greater than 0, or blank — like 62.50`
-                        : null
-                    }}
-                    onCommit={(text, immediate) => {
-                      const price = text.trim()
-                      patch(
-                        (s) => ({
-                          ...s,
-                          sales: s.sales.map((row, i) => {
-                            if (i !== index) return row
-                            const next = { ...row }
-                            if (price === '') delete next.price // the omit case: the latest quote
-                            else next.price = price
-                            return next
-                          }),
-                        }),
-                        immediate,
-                      )
-                    }}
-                    onInvalid={setFormError}
-                  />
-                  <div className="segmented" role="group" aria-label={`Sale ${index + 1} term`}>
-                    <button
-                      type="button"
-                      className={leg.term === 'long' ? 'active' : ''}
-                      aria-pressed={leg.term === 'long'}
-                      onClick={() => setSale(index, { term: 'long' }, true)}
+      <div className="whatif-controls">
+        <p className="drill-hint">
+          Sales are classified at average cost, the app&apos;s only basis method, and ESPP ordinary income
+          lands in Other W2 Income. Long/short is your call: imported transactions carry no dates, so the
+          app cannot verify a holding period. Nothing here is stored.
+        </p>
+        <FeedBanner error={feedError} retry={retryFeeds} />
+        {/* All three feeds land together (one Promise.all) or none does, so one null is the
+            whole "still waiting" question — and a set that FAILED leaves the banner above as
+            the card's only content: there is nothing to build a leg out of, and a form of
+            empty selects would read as "you hold nothing". */}
+        {holdings === null && feedError === null && (
+          <p className="empty-note">Loading holdings, ESPP lots and limits…</p>
+        )}
+        {holdings !== null && (
+          <>
+            <div className="whatif-legs">
+              {/* Position IS the identity here (a leg has no id of its own), and every field is
+                  controlled from the URL's scenario — so an index key cannot strand a typed
+                  value in a reused row (BracketsEditor's note). */}
+              {scenario.sales.map((leg, index) => {
+                const holding = holdingFor(leg.security_id)
+                const ticker = holding?.ticker ?? `#${leg.security_id}`
+                return (
+                  <div key={index} className="whatif-form">
+                    <label htmlFor={`whatif-sale-security-${index}`}>Sell</label>
+                    <select
+                      id={`whatif-sale-security-${index}`}
+                      className="field-input whatif-select"
+                      value={String(leg.security_id)}
+                      onChange={(e) => setSaleSecurity(index, Number(e.target.value))}
                     >
-                      Long
-                    </button>
-                    <button
-                      type="button"
-                      className={leg.term === 'short' ? 'active' : ''}
-                      aria-pressed={leg.term === 'short'}
-                      onClick={() => setSale(index, { term: 'short' }, true)}
-                    >
-                      Short
-                    </button>
-                  </div>
-                  <span className="drill-hint">{formatShares(holding?.shares)} held</span>
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Remove sale ${index + 1}`}
-                    onClick={() => removeSale(index)}
-                  >
-                    Remove
-                  </button>
-                </div>
-              )
-            })}
-            {scenario.espp.map((leg, index) => {
-              const lot = unsoldLots.find((row) => row.id === leg.lot_id)
-              return (
-                <div key={index} className="whatif-form">
-                  <label htmlFor={`whatif-espp-lot-${index}`}>ESPP lot</label>
-                  <select
-                    id={`whatif-espp-lot-${index}`}
-                    className="field-input whatif-select"
-                    value={String(leg.lot_id)}
-                    onChange={(e) => setEspp(index, { lot_id: Number(e.target.value) }, true)}
-                  >
-                    {lot === undefined && (
-                      <option value={String(leg.lot_id)}>Lot {leg.lot_id} (not available)</option>
-                    )}
-                    {unsoldLots.map((row) => (
-                      <option key={row.id} value={String(row.id)}>
-                        {formatDate(row.purchase_date)} — {formatShares(row.shares)} sh
-                      </option>
-                    ))}
-                  </select>
-                  <DraftInput
-                    ariaLabel={`ESPP sale ${index + 1} price`}
-                    placeholder="latest"
-                    value={leg.sale_price ?? ''}
-                    validate={(text) => {
-                      const price = text.trim()
-                      return price !== '' && (!isWireDecimal(price) || !(Number(price) > 0))
-                        ? `Lot ${lot === undefined ? leg.lot_id : formatDate(lot.purchase_date)}: sale price must be a number greater than 0, or blank — like 150.00`
-                        : null
-                    }}
-                    onCommit={(text, immediate) => {
-                      const price = text.trim()
-                      patch(
-                        (s) => ({
-                          ...s,
-                          espp: s.espp.map((row, i) => {
-                            if (i !== index) return row
-                            const next = { ...row }
-                            if (price === '') delete next.sale_price
-                            else next.sale_price = price
-                            return next
+                      {/* A link made before the position was sold names an id nobody holds; the
+                          row says so rather than silently reading as another ticker. */}
+                      {holding === undefined && <option value={String(leg.security_id)}>{ticker} (not held)</option>}
+                      {held.map((h) => (
+                        <option key={h.security_id} value={String(h.security_id)}>
+                          {h.ticker}
+                        </option>
+                      ))}
+                    </select>
+                    <DraftInput
+                      ariaLabel={`Sale ${index + 1} shares`}
+                      value={leg.shares}
+                      validate={(text) => {
+                        const shares = text.trim()
+                        // The CODEC's fence, never a looser Number() test: ".5", "+5" and
+                        // "5." all pass Number() but parseSale refuses them on arrival, so a
+                        // box that took one would write an entry the next decode drops — the
+                        // leg would vanish without a word (lane P's BoxKnob, same lesson).
+                        if (shares === '' || !isWireDecimal(shares) || !(Number(shares) > 0))
+                          return `${ticker}: shares must be a number greater than 0, like 12.5`
+                        // The server's own sentence (api/taxes.py's oversell 422) — one vocabulary.
+                        if (holding !== undefined && Number(shares) > Number(holding.shares))
+                          return `selling ${shares} ${ticker} — only ${holding.shares} held`
+                        return null
+                      }}
+                      onCommit={(text, immediate) => setSale(index, { shares: text.trim() }, immediate)}
+                      onInvalid={setFormError}
+                    />
+                    <DraftInput
+                      ariaLabel={`Sale ${index + 1} price`}
+                      placeholder="latest"
+                      value={leg.price ?? ''}
+                      validate={(text) => {
+                        const price = text.trim()
+                        return price !== '' && (!isWireDecimal(price) || !(Number(price) > 0))
+                          ? `${ticker}: price must be a number greater than 0, or blank — like 62.50`
+                          : null
+                      }}
+                      onCommit={(text, immediate) => {
+                        const price = text.trim()
+                        patch(
+                          (s) => ({
+                            ...s,
+                            sales: s.sales.map((row, i) => {
+                              if (i !== index) return row
+                              const next = { ...row }
+                              if (price === '') delete next.price // the omit case: the latest quote
+                              else next.price = price
+                              return next
+                            }),
                           }),
-                        }),
-                        immediate,
-                      )
-                    }}
-                    onInvalid={setFormError}
-                  />
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Remove ESPP sale ${index + 1}`}
-                    onClick={() => removeEspp(index)}
-                  >
-                    Remove
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-
-          {rows.length > 0 && (
-            <div className="tax-section whatif-overrides">
-              <h3 className="eyebrow">
-                Input overrides
-                <InfoHint text="Absolute replacements applied AFTER the sale legs. An override addresses the household key map — on a married year a per-person line is replaced as one combined figure, the same aggregation the engine applies." />
-              </h3>
-              <p className="drill-hint">
-                Overrides set a key&apos;s household value for this scenario only. A row starts at the stored
-                value and joins the scenario once you change it; tick Clear this input to model the input as
-                cleared (the scenario computes it as 0).
-              </p>
-              <div className="whatif-legs">
-                {rows.map((row, index) => {
-                  const key = row.key
-                  const label = key === null ? 'This override' : labelOf(key)
-                  const cleared = row.committed && row.cleared
-                  const stored = key === null ? null : storedOf(key)
-                  const unit = key === null ? 'money' : unitOf(key)
-                  const pickerId = `whatif-override-key-${row.id}`
-                  return (
-                    // The row's own id, never its key or position: a row keeps its DOM — and the
-                    // reader's focus — while it joins or leaves the scenario.
-                    <div key={row.id} className="whatif-form">
-                      <label htmlFor={pickerId}>Override</label>
-                      <select
-                        id={pickerId}
-                        className="field-input whatif-select"
-                        value={key ?? ''}
-                        // The picker Add override just made is where the next keystroke belongs.
-                        autoFocus={row.id === overrideRows.state.focusId}
-                        onChange={(e) => overrideRows.choose(row.id, e.target.value)}
-                      >
-                        {key === null && (
-                          <option value="" disabled>
-                            Choose an input…
-                          </option>
-                        )}
-                        {key !== null && !definitions.some((d) => d.key === key) && <option value={key}>{key}</option>}
-                        {definitions.map((d) => (
-                          <option
-                            key={d.key}
-                            value={d.key}
-                            // One row per key: another row's key is shown but cannot be picked.
-                            disabled={rows.some((other) => other.id !== row.id && other.key === d.key)}
-                          >
-                            {d.label} ({d.key})
-                          </option>
-                        ))}
-                      </select>
-                      <DraftAmount
-                        ariaLabel={`Override ${index + 1} value`}
-                        unit={unit}
-                        value={cleared ? '' : row.draft}
-                        disabled={key === null || cleared}
-                        // Short enough for the 110px box: "choose an input" truncated to "choose an i…".
-                        placeholder={key === null ? 'pick input' : cleared ? 'cleared' : 'amount'}
-                        onCommit={(canonical) => overrideRows.commit(row.id, canonical)}
-                        onInvalid={() =>
-                          setFormError(`${label}: ${INVALID_WORDS[unit]} — or tick “Clear this input”`)
-                        }
-                      />
-                      <label className="whatif-clear">
-                        <input
-                          type="checkbox"
-                          // Numbered like the row's value box and Remove button, the visible words
-                          // first: two rows must not read as two identical checkboxes.
-                          aria-label={`Clear this input (override ${index + 1})`}
-                          checked={cleared}
-                          disabled={key === null}
-                          onChange={(e) => overrideRows.toggleClear(row.id, e.target.checked)}
-                        />
-                        Clear this input
-                      </label>
+                          immediate,
+                        )
+                      }}
+                      onInvalid={setFormError}
+                    />
+                    <div className="segmented" role="group" aria-label={`Sale ${index + 1} term`}>
                       <button
                         type="button"
-                        className="button"
-                        aria-label={`Remove override ${index + 1}`}
-                        onClick={() => overrideRows.remove(row.id)}
+                        className={leg.term === 'long' ? 'active' : ''}
+                        aria-pressed={leg.term === 'long'}
+                        onClick={() => setSale(index, { term: 'long' }, true)}
                       >
-                        Remove
+                        Long
                       </button>
-                      {key !== null && !row.committed && (
-                        <span className="drill-hint whatif-override-note">
-                          Not in the scenario yet —{' '}
-                          {stored === null
-                            ? 'nothing is stored for it; enter a value'
-                            : `change it from the stored ${figureText(unit, stored)}`}{' '}
-                          or tick Clear this input.
-                        </span>
-                      )}
+                      <button
+                        type="button"
+                        className={leg.term === 'short' ? 'active' : ''}
+                        aria-pressed={leg.term === 'short'}
+                        onClick={() => setSale(index, { term: 'short' }, true)}
+                      >
+                        Short
+                      </button>
                     </div>
-                  )
-                })}
-              </div>
+                    <span className="drill-hint">{formatShares(holding?.shares)} held</span>
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Remove sale ${index + 1}`}
+                      onClick={() => removeSale(index)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )
+              })}
+              {scenario.espp.map((leg, index) => {
+                const lot = unsoldLots.find((row) => row.id === leg.lot_id)
+                return (
+                  <div key={index} className="whatif-form">
+                    <label htmlFor={`whatif-espp-lot-${index}`}>ESPP lot</label>
+                    <select
+                      id={`whatif-espp-lot-${index}`}
+                      className="field-input whatif-select"
+                      value={String(leg.lot_id)}
+                      onChange={(e) => setEspp(index, { lot_id: Number(e.target.value) }, true)}
+                    >
+                      {lot === undefined && (
+                        <option value={String(leg.lot_id)}>Lot {leg.lot_id} (not available)</option>
+                      )}
+                      {unsoldLots.map((row) => (
+                        <option key={row.id} value={String(row.id)}>
+                          {formatDate(row.purchase_date)} — {formatShares(row.shares)} sh
+                        </option>
+                      ))}
+                    </select>
+                    <DraftInput
+                      ariaLabel={`ESPP sale ${index + 1} price`}
+                      placeholder="latest"
+                      value={leg.sale_price ?? ''}
+                      validate={(text) => {
+                        const price = text.trim()
+                        return price !== '' && (!isWireDecimal(price) || !(Number(price) > 0))
+                          ? `Lot ${lot === undefined ? leg.lot_id : formatDate(lot.purchase_date)}: sale price must be a number greater than 0, or blank — like 150.00`
+                          : null
+                      }}
+                      onCommit={(text, immediate) => {
+                        const price = text.trim()
+                        patch(
+                          (s) => ({
+                            ...s,
+                            espp: s.espp.map((row, i) => {
+                              if (i !== index) return row
+                              const next = { ...row }
+                              if (price === '') delete next.sale_price
+                              else next.sale_price = price
+                              return next
+                            }),
+                          }),
+                          immediate,
+                        )
+                      }}
+                      onInvalid={setFormError}
+                    />
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Remove ESPP sale ${index + 1}`}
+                      onClick={() => removeEspp(index)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )
+              })}
             </div>
-          )}
 
-          {sandbox.empty && rows.length === 0 && (
-            <p className="empty-note">
-              No legs yet — add a sale or an input override to model it against {year}&apos;s stored inputs.
-            </p>
-          )}
+            {rows.length > 0 && (
+              <div className="tax-section whatif-overrides">
+                <h3 className="eyebrow">
+                  Input overrides
+                  <InfoHint text="Absolute replacements applied AFTER the sale legs. An override addresses the household key map — on a married year a per-person line is replaced as one combined figure, the same aggregation the engine applies." />
+                </h3>
+                <p className="drill-hint">
+                  Overrides set a key&apos;s household value for this scenario only. A row starts at the stored
+                  value and joins the scenario once you change it; tick Clear this input to model the input as
+                  cleared (the scenario computes it as 0).
+                </p>
+                <div className="whatif-legs">
+                  {rows.map((row, index) => {
+                    const key = row.key
+                    const label = key === null ? 'This override' : labelOf(key)
+                    const cleared = row.committed && row.cleared
+                    const stored = key === null ? null : storedOf(key)
+                    const unit = key === null ? 'money' : unitOf(key)
+                    const pickerId = `whatif-override-key-${row.id}`
+                    return (
+                      // The row's own id, never its key or position: a row keeps its DOM — and the
+                      // reader's focus — while it joins or leaves the scenario.
+                      <div key={row.id} className="whatif-form">
+                        <label htmlFor={pickerId}>Override</label>
+                        <select
+                          id={pickerId}
+                          className="field-input whatif-select"
+                          value={key ?? ''}
+                          // The picker Add override just made is where the next keystroke belongs.
+                          autoFocus={row.id === overrideRows.state.focusId}
+                          onChange={(e) => overrideRows.choose(row.id, e.target.value)}
+                        >
+                          {key === null && (
+                            <option value="" disabled>
+                              Choose an input…
+                            </option>
+                          )}
+                          {key !== null && !definitions.some((d) => d.key === key) && <option value={key}>{key}</option>}
+                          {definitions.map((d) => (
+                            <option
+                              key={d.key}
+                              value={d.key}
+                              // One row per key: another row's key is shown but cannot be picked.
+                              disabled={rows.some((other) => other.id !== row.id && other.key === d.key)}
+                            >
+                              {d.label} ({d.key})
+                            </option>
+                          ))}
+                        </select>
+                        <DraftAmount
+                          ariaLabel={`Override ${index + 1} value`}
+                          unit={unit}
+                          value={cleared ? '' : row.draft}
+                          disabled={key === null || cleared}
+                          // Short enough for the 110px box: "choose an input" truncated to "choose an i…".
+                          placeholder={key === null ? 'pick input' : cleared ? 'cleared' : 'amount'}
+                          onCommit={(canonical) => overrideRows.commit(row.id, canonical)}
+                          onInvalid={() =>
+                            setFormError(`${label}: ${INVALID_WORDS[unit]} — or tick “Clear this input”`)
+                          }
+                        />
+                        <label className="whatif-clear">
+                          <input
+                            type="checkbox"
+                            // Numbered like the row's value box and Remove button, the visible words
+                            // first: two rows must not read as two identical checkboxes.
+                            aria-label={`Clear this input (override ${index + 1})`}
+                            checked={cleared}
+                            disabled={key === null}
+                            onChange={(e) => overrideRows.toggleClear(row.id, e.target.checked)}
+                          />
+                          Clear this input
+                        </label>
+                        <button
+                          type="button"
+                          className="button"
+                          aria-label={`Remove override ${index + 1}`}
+                          onClick={() => overrideRows.remove(row.id)}
+                        >
+                          Remove
+                        </button>
+                        {key !== null && !row.committed && (
+                          <span className="drill-hint whatif-override-note">
+                            Not in the scenario yet —{' '}
+                            {stored === null
+                              ? 'nothing is stored for it; enter a value'
+                              : `change it from the stored ${figureText(unit, stored)}`}{' '}
+                            or tick Clear this input.
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
-          <div className="whatif-actions">
-            <button
-              type="button"
-              className="button"
-              disabled={legCount >= MAX_LEGS || nextHolding() === undefined}
-              onClick={addSale}
-            >
-              Add sale
-            </button>
-            <button
-              type="button"
-              className="button"
-              disabled={legCount >= MAX_LEGS || nextLot() === undefined}
-              onClick={addEsppSale}
-            >
-              Add ESPP sale
-            </button>
-            <button type="button" className="button" disabled={!canAddOverride} onClick={overrideRows.add}>
-              Add override
-            </button>
-            <span className="drill-hint">
-              A blank price uses the latest quote. At most {MAX_LEGS} legs. Edits run as you type.
-            </span>
-          </div>
-          <FeedBanner error={formError} />
-        </>
-      )}
+            {sandbox.empty && rows.length === 0 && (
+              <p className="empty-note">
+                No legs yet — add a sale or an input override to model it against {year}&apos;s stored inputs.
+              </p>
+            )}
+
+            <div className="whatif-actions">
+              <button
+                type="button"
+                className="button"
+                disabled={legCount >= MAX_LEGS || nextHolding() === undefined}
+                onClick={addSale}
+              >
+                Add sale
+              </button>
+              <button
+                type="button"
+                className="button"
+                disabled={legCount >= MAX_LEGS || nextLot() === undefined}
+                onClick={addEsppSale}
+              >
+                Add ESPP sale
+              </button>
+              <button type="button" className="button" disabled={!canAddOverride} onClick={overrideRows.add}>
+                Add override
+              </button>
+              <span className="drill-hint">
+                A blank price uses the latest quote. At most {MAX_LEGS} legs. Edits run as you type.
+              </span>
+            </div>
+            <FeedBanner error={formError} />
+          </>
+        )}
+      </div>
     </SandboxPanel>
   )
 }

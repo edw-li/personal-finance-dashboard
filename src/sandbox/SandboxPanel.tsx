@@ -3,6 +3,7 @@ import BusyButton from '../components/feedback/BusyButton'
 import { PIN_LIMIT } from './pins'
 import type { ReactNode } from 'react'
 import InfoHint from '../components/InfoHint'
+import { SkeletonCard } from '../components/PageSkeleton'
 import Feed from '../components/shell/Feed'
 import { useToast } from '../components/ToastProvider'
 import type { Sandbox } from './useSandbox'
@@ -38,6 +39,9 @@ export interface SandboxPanelProps<S extends object, R> {
   compare?: ReactNode
   staleNoun?: string
   skeletonHeight?: number
+  /** Hold the first body until the page's controls and initial preview are ready. The page
+   *  clears this label once; later previews keep their controls and use Feed as usual. */
+  initialLoading?: string
   apply?: ReactNode
   hidePins?: boolean
 }
@@ -60,6 +64,7 @@ export default function SandboxPanel<S extends object, R extends NonNullable<unk
   compare,
   staleNoun = 'this scenario',
   skeletonHeight = 160,
+  initialLoading,
   apply,
   hidePins = false,
 }: SandboxPanelProps<S, R>) {
@@ -94,6 +99,8 @@ export default function SandboxPanel<S extends object, R extends NonNullable<unk
       </div>
       {!isOpen ? (
         closedHint
+      ) : initialLoading !== undefined ? (
+        <SkeletonCard height={skeletonHeight} label={initialLoading} />
       ) : (
         <>
           {presets}

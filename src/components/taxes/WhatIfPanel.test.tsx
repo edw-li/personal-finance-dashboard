@@ -306,6 +306,78 @@ describe('WhatIfPanel', () => {
     expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a cold result behind loading until the feeds arrive, then preserves the form during later previews', async () => {
+    const holdings = deferred<HoldingsResponse>()
+    vi.mocked(fetchHoldings).mockReturnValueOnce(holdings.promise)
+    const { container } = mount('/taxes?whatif=annual_salary%3A210000', {
+      defaultOpen: true,
+      definitions: [{ key: 'annual_salary', label: 'Annual Salary' }],
+    })
+    await act(async () => {}) // the preview can answer before the holdings feed
+    expect(screen.getByRole('heading', { name: /What-if — 2024/ })).toBeTruthy()
+    expect(screen.getByText('Loading holdings, ESPP lots and limits…')).toBeTruthy()
+    expect(container.querySelector('.whatif-result')).toBeNull()
+    expect(screen.queryByLabelText('Pin label')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add sale' })).toBeNull()
+
+    await act(async () => { holdings.resolve(holdingsFixture()) })
+    await formReady()
+    const controls = container.querySelector('.whatif-controls')
+    const override = field('Override 1 value')
+    expect(controls).not.toBeNull()
+    expect(container.querySelector('.whatif-result')).not.toBeNull()
+    expect(override.value).toBe('$210,000.00')
+
+    const later = deferred<WhatIfOut>()
+    vi.mocked(runWhatIf).mockReturnValueOnce(later.promise)
+    fireEvent.click(addSale())
+    await waitFor(() => expect(lastBody()?.sales).toHaveLength(1))
+    expect(container.querySelector('.whatif-controls')).toBe(controls)
+    expect(field('Override 1 value')).toBe(override)
+    expect(field('Sale 1 shares').value).toBe('100.0000')
+    await act(async () => { later.resolve(resultFixture()) })
+  })
+
+  it('keeps a cold legacy link loading until its normalized sale preview settles', async () => {
+    const holdings = deferred<HoldingsResponse>()
+    const sale = deferred<WhatIfOut>()
+    vi.mocked(fetchHoldings).mockReturnValueOnce(holdings.promise)
+    vi.mocked(runWhatIf).mockImplementation((body) => body.sales.length > 0
+      ? sale.promise
+      : Promise.resolve(resultFixture({ sale_details: [] })))
+    const { container } = mount('/taxes?whatif=VTI', { defaultOpen: true })
+    await act(async () => {})
+    expect(container.querySelector('.whatif-result')).toBeNull()
+    await act(async () => { holdings.resolve(holdingsFixture()) })
+    await waitFor(() => expect(lastBody()?.sales[0]?.security_id).toBe(7))
+    expect(url()).toBe('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    expect(screen.getByText('Running the scenario…')).toBeTruthy()
+    expect(screen.queryByText(/No legs yet/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add sale' })).toBeNull()
+
+    await act(async () => { sale.resolve(resultFixture()) })
+    await formReady()
+    expect(field('Sale 1 shares').value).toBe('100.0000')
+    expect(container.querySelector('.whatif-result')).not.toBeNull()
+  })
+
+  it('can reset a legacy sale while its first preview is pending without stranding the loading view', async () => {
+    const sale = deferred<WhatIfOut>()
+    vi.mocked(runWhatIf).mockImplementation((body) => body.sales.length > 0
+      ? sale.promise
+      : Promise.resolve(resultFixture({ sale_details: [] })))
+    mount('/taxes?whatif=VTI', { defaultOpen: true })
+    await waitFor(() => expect(lastBody()?.sales[0]?.security_id).toBe(7))
+    expect(screen.queryByRole('button', { name: 'Add sale' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to actual' }))
+    await formReady()
+    expect(url()).toBe('/taxes')
+    expect(screen.getByText(/No legs yet/)).toBeTruthy()
+    await act(async () => { sale.resolve(resultFixture()) })
+    expect(screen.queryByLabelText('Sale 1 shares')).toBeNull()
+    expect(url()).toBe('/taxes')
+  })
+
   it('Add sale prefills the first held security at its quote, writes the URL and runs at once; the second row moves on', async () => {
     mount()
     await openPanel()

@@ -116,6 +116,18 @@ describe('SandboxPanel', () => {
     expect(sb.reset).toHaveBeenCalledTimes(1)
   })
 
+  it('can hold the initial body behind one loading view while preserving its header', () => {
+    mount(sandbox(), { initialLoading: 'Loading scenario controls…' })
+    expect(screen.getByRole('heading', { name: /What if — 2026/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reset to actual' })).toBeTruthy()
+    expect(screen.getByText('Loading scenario controls…')).toBeTruthy()
+    expect(screen.queryByTestId('presets')).toBeNull()
+    expect(screen.queryByTestId('controls')).toBeNull()
+    expect(screen.queryByTestId('compare')).toBeNull()
+    expect(screen.queryByLabelText('Pin label')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Apply 1 override' })).toBeNull()
+  })
+
   it('empty scenario: Reset disabled, Pin and Copy link disabled, no Apply slot', () => {
     mount(sandbox({ empty: true, entries: [], scenario: {} }))
     expect((screen.getByRole('button', { name: 'Reset to actual' }) as HTMLButtonElement).disabled).toBe(true)

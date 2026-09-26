@@ -390,6 +390,13 @@
 
 /* --- what-if panel --- */
 
+/* These are successive parts of one form, not independent sandbox knobs. Keep the
+   explanation, legs, overrides and actions in one full-width grid cell. */
+.whatif-controls {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 /* One leg per row, in TaxesPage.css's .new-year-form row treatment — copied by design, not
    reached into: the two stylesheets are scoped to different screens (the note at the top
    of this file). No new spacing system; the gaps are this file's own. */
