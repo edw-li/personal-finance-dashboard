@@ -39,10 +39,29 @@ Every lane writes its own complete plan (this file's siblings) before coding, fo
 | 1 | L4 Feedback primitives + API clients | `feat/polish-feedback` · `.worktrees/polish-feedback` | `2026-09-25-polish-L4-feedback.md` | §5.1, §6.2, §6.3 |
 | 2 | L5 Settings | `feat/polish-settings` | `2026-09-25-polish-L5-settings.md` | §3.3 + §5 + §6.4 for `src/components/settings/*`, SettingsPage |
 | 2 | L6 Portfolio · ESPP · Comp · Paycheck | `feat/polish-money-a` | `2026-09-25-polish-L6-money-a.md` | §5 + §6.4 for those pages |
-| 2 | L7 Cards · Calendar · Taxes · Budgets · Monthly · Projection · Assistant | `feat/polish-money-b` | `2026-09-25-polish-L7-money-b.md` | §5 + §6.4 for those pages |
+| 2 | L7 Cards · Calendar · Budgets · Projection · Assistant | `feat/polish-money-b` | `2026-09-25-polish-L7-money-b.md` | §5 + §6.4 for those pages |
+| 2 | L8 Taxes · Monthly update | `feat/polish-taxes-monthly` | `2026-09-25-polish-L8-taxes-monthly.md` | §5 + §6.4 for those pages |
+| 1½ | L3c Undo engine follow-up (review findings of L3a/L3b) | `feat/polish-undo-engine` | `2026-09-25-polish-L3c-undo-engine.md` | §6.1 (`superseded` semantics, parent locks, batched re-inserts) |
 | 3 | V Verification | `feat/polish-verify` | `2026-09-25-polish-V-verify.md` | §9 |
 
-Wave 2 branches are cut from main AFTER every wave-1 lane has merged. Lane V is cut after wave 2 has merged.
+Wave 2 branches are cut from main AFTER every wave-1 frontend lane (L1, L2, L4) has merged; the backend lanes L3a/L3b are already
+merged, and L3c merges when ready. Lane V is cut after wave 2 has merged. (L7 as first planned was split in two on 2026-09-25:
+taxes and the Monthly update became L8.)
+
+**Wave-2 stacks:**
+- **Read-only:** each lane runs its own vite from its worktree (private cacheDir) against the shared read-only backend
+  `http://127.0.0.1:8077`, restarted from merged main.
+- **Write paths** (delete → Undo, saves), with ports:
+
+| Lane | Backend port | Database | Vite port |
+|---|---|---|---|
+| L5 | 8085 | `finance_polish_w5` | 5275 |
+| L6 | 8086 | `finance_polish_w6` | 5276 |
+| L7 | 8087 | `finance_polish_w7` | 5277 |
+| L8 | 8088 | `finance_polish_w8` | 5278 |
+
+  Each writable backend runs merged main's code on its own copy of the production data. Use the harness with
+  `{ writes: true }` only against your own backend.
 
 **File ownership.** A lane edits only files its plan lists.
 - **Wave-1 overlaps are in disjoint regions:**
