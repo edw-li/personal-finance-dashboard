@@ -117,3 +117,21 @@ async def test_undoing_a_grant_delete_after_its_label_was_reused_refuses(auth_cl
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == REPLAY_REFUSAL
     assert [row["id"] for row in await images(db, RsuGrant)] == [again_id]
+
+
+async def test_undoing_a_comp_event_delete_after_its_focal_year_was_reused_refuses(auth_client, db):
+    """Accepted (spec §6.1): focal_year is the event's natural key, so the replayed row cannot
+    sit beside the new event entered for the same year — the replay refusal, never a 500 and
+    never an overwrite of the newer event."""
+    event_id = (await auth_client.post(EVENTS, json=EVENT)).json()["id"]
+    deleted = await auth_client.delete(f"{EVENTS}/{event_id}")
+    assert deleted.status_code == 204
+    again = await auth_client.post(EVENTS, json={**EVENT, "new_base": "180000"})
+    assert again.status_code == 201, again.text
+    again_id = again.json()["id"]
+    refused = await undo(auth_client, deleted)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == REPLAY_REFUSAL
+    assert [(row["id"], row["new_base"]) for row in await images(db, CompEvent)] == [
+        (again_id, "180000.00")
+    ]

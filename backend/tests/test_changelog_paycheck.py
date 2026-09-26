@@ -7,6 +7,7 @@ import pytest
 
 from app.models import PaycheckProfile, Person
 from tests.exact_undo import images, label_of, logged, shape, undo
+from tests.ordering_helpers import first_position, recorded_sql
 
 PROFILES = "/api/v1/paycheck/profiles"
 
@@ -93,3 +94,19 @@ async def test_undo_restores_a_deleted_profile_exactly(auth_client, db, me):
     assert await images(db, PaycheckProfile) == before
     listed = (await auth_client.get(PROFILES)).json()
     assert [(profile["id"], profile["in_force"]) for profile in listed] == [(profile_id, True)]
+
+
+async def test_the_undo_of_a_profile_takes_the_review_input_locks_first(auth_client, db, me):
+    """paycheck_profiles is a month-review input (services.month_review.REVIEW_INPUT_TABLES), so
+    its Undo takes the review tables' SHARE ROW EXCLUSIVE locks — the month save's own — before
+    it reads whether the batch may still be undone, and before it writes."""
+    profile_id = (await auth_client.post(PROFILES, json=PROFILE)).json()["id"]
+    deleted = await auth_client.delete(f"{PROFILES}/{profile_id}")
+    with recorded_sql(db) as statements:
+        resp = await undo(auth_client, deleted)
+    assert resp.status_code == 200, resp.text
+    lock = first_position(statements, "LOCK TABLE")
+    assert "paycheck_profiles" in statements[lock][0]
+    assert statements[lock][0].endswith("IN SHARE ROW EXCLUSIVE MODE")
+    assert lock < first_position(statements, "FROM lifecycle_runs")  # the eligibility reads
+    assert lock < first_position(statements, "INSERT INTO paycheck_profiles")

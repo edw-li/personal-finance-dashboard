@@ -11,11 +11,18 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.models import CardCredit, CreditCard, CreditLimitEvent, RewardCategory, RewardRate
+from app.models import (
+    CardCredit,
+    ChangeLog,
+    CreditCard,
+    CreditLimitEvent,
+    RewardCategory,
+    RewardRate,
+)
 from app.services.changelog import (
     DEPENDENT_REFUSAL,
     OVERLAP_REFUSAL,
@@ -58,6 +65,104 @@ def cell(card_id: int, category_id: int, multiplier: str | None, cap: str | None
     }
 
 
+CARD_TABLES = (CreditCard, CardCredit, RewardRate, CreditLimitEvent, RewardCategory)
+
+
+async def seed_matrix(db) -> tuple[int, int, int]:
+    """Groceries with two cells (one with a note, one with a cap) and Dining with one, on two
+    cards. Returns the ids of Venture X, Groceries and Dining."""
+    venture, savor = card("Venture X"), card("SavorOne", 1)
+    groceries, dining = category("Groceries"), category("Dining", 1)
+    db.add_all([venture, savor, groceries, dining])
+    await db.flush()
+    db.add_all(
+        [
+            RewardRate(
+                card_id=venture.id,
+                category_id=groceries.id,
+                multiplier=Decimal("2.00"),
+                note="Amex offer",
+            ),
+            RewardRate(
+                card_id=savor.id,
+                category_id=groceries.id,
+                multiplier=Decimal("3.00"),
+                monthly_cap=Decimal("500.00"),
+            ),
+            RewardRate(card_id=venture.id, category_id=dining.id, multiplier=Decimal("4.00")),
+        ]
+    )
+    await db.commit()
+    return venture.id, groceries.id, dining.id
+
+
+async def seed_card_graph(db) -> tuple[int, int, int]:
+    """Venture X with two credits, two cells, two limit events and the Travel category pinned to
+    it, beside SavorOne with a credit, a cell, a limit and the Dining pin of its own. Returns the
+    ids of Venture X, SavorOne and Travel."""
+    venture = card("Capital One Venture X", annual_fee=Decimal("395.00"), rewards_currency="miles")
+    savor = card("SavorOne", 1)
+    db.add_all([venture, savor])
+    await db.flush()
+    travel = category("Travel", pinned_card_id=venture.id)
+    dining = category("Dining", 1, pinned_card_id=savor.id)
+    groceries = category("Groceries", 2)
+    db.add_all([travel, dining, groceries])
+    await db.flush()
+    db.add_all(
+        [
+            CardCredit(card_id=venture.id, label="Travel", annual_value=Decimal("300.00")),
+            CardCredit(
+                card_id=venture.id,
+                label="Global Entry",
+                annual_value=Decimal("100.00"),
+                counts=False,
+                reset_cadence="anniversary",
+            ),
+            CardCredit(card_id=savor.id, label="Streaming", annual_value=Decimal("60.00")),
+            RewardRate(
+                card_id=venture.id,
+                category_id=travel.id,
+                multiplier=Decimal("10.00"),
+                note="portal",
+            ),
+            RewardRate(card_id=venture.id, category_id=dining.id, multiplier=Decimal("2.00")),
+            RewardRate(
+                card_id=savor.id,
+                category_id=dining.id,
+                multiplier=Decimal("3.00"),
+                monthly_cap=Decimal("500.00"),
+            ),
+            CreditLimitEvent(
+                card_id=venture.id, effective_date=date(2023, 5, 12), limit_amount=Decimal("20000")
+            ),
+            CreditLimitEvent(
+                card_id=venture.id,
+                effective_date=date(2024, 6, 1),
+                limit_amount=Decimal("30000"),
+                note="CLI",
+            ),
+            CreditLimitEvent(
+                card_id=savor.id, effective_date=date(2024, 1, 1), limit_amount=Decimal("9000")
+            ),
+        ]
+    )
+    await db.commit()
+    return venture.id, savor.id, travel.id
+
+
+async def assert_round_trips(auth_client, db, deleted, tables, whole) -> None:
+    """Undo, then an Undo of that Undo (the delete again), then Undo once more: the rows land on
+    exactly `whole`, exactly what the delete left, and exactly `whole` again."""
+    gone = await table_images(db, *tables)
+    batch = deleted
+    for expected in (whole, gone, whole):
+        resp = await undo(auth_client, batch)
+        assert resp.status_code == 200, resp.text
+        assert await table_images(db, *tables) == expected
+        batch = resp.json()["batch_id"]
+
+
 # ── reward categories and the matrix ─────────────────────────────────────────────────
 
 
@@ -91,29 +196,7 @@ async def test_reward_category_create_edit_hide_show_delete_each_log_one_batch(a
 
 
 async def test_undo_restores_a_deleted_reward_category_with_its_cells(auth_client, db):
-    venture, savor = card("Venture X"), card("SavorOne", 1)
-    groceries, dining = category("Groceries"), category("Dining", 1)
-    db.add_all([venture, savor, groceries, dining])
-    await db.flush()
-    db.add_all(
-        [
-            RewardRate(
-                card_id=venture.id,
-                category_id=groceries.id,
-                multiplier=Decimal("2.00"),
-                note="Amex offer",
-            ),
-            RewardRate(
-                card_id=savor.id,
-                category_id=groceries.id,
-                multiplier=Decimal("3.00"),
-                monthly_cap=Decimal("500.00"),
-            ),
-            RewardRate(card_id=venture.id, category_id=dining.id, multiplier=Decimal("4.00")),
-        ]
-    )
-    await db.commit()
-    venture_id, groceries_id, dining_id = venture.id, groceries.id, dining.id
+    venture_id, groceries_id, dining_id = await seed_matrix(db)
     before = await table_images(db, RewardCategory, RewardRate)
     with recorded_sql(db) as statements:
         deleted = await auth_client.delete(f"{CATEGORIES}/{groceries_id}")
@@ -164,6 +247,42 @@ async def test_a_grouped_re_insert_that_breaks_a_constraint_still_refuses_whole(
     assert await images(db, RewardRate) == []
 
 
+async def test_a_reward_category_delete_undone_redone_and_undone_again_gives_the_same_rows(
+    auth_client, db
+):
+    _, groceries_id, _ = await seed_matrix(db)
+    tables = (RewardCategory, RewardRate)
+    whole = await table_images(db, *tables)
+    deleted = await auth_client.delete(f"{CATEGORIES}/{groceries_id}")
+    assert deleted.status_code == 204
+    await assert_round_trips(auth_client, db, deleted, tables, whole)
+
+
+async def test_undoing_a_reward_category_delete_after_its_name_was_taken_again_refuses(
+    auth_client, db
+):
+    """Accepted (spec §6.1): name and slug are unique, so the replayed row cannot sit beside the
+    new category that took the name — the replay refusal, and none of its cells half-back."""
+    venture = card("Venture X")
+    db.add(venture)
+    await db.commit()
+    v = venture.id
+    created = await auth_client.post(CATEGORIES, json={"name": "Groceries"})
+    assert created.status_code == 201, created.text
+    category_id = created.json()["id"]
+    assert (await auth_client.put(RATES, json=[cell(v, category_id, "3")])).status_code == 200
+    deleted = await auth_client.delete(f"{CATEGORIES}/{category_id}")
+    assert deleted.status_code == 204
+    again = await auth_client.post(CATEGORIES, json={"name": "Groceries"})
+    assert again.status_code == 201, again.text
+    again_id = again.json()["id"]
+    refused = await undo(auth_client, deleted)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == REPLAY_REFUSAL
+    assert [row["id"] for row in await images(db, RewardCategory)] == [again_id]
+    assert await images(db, RewardRate) == []
+
+
 async def test_a_matrix_save_that_adds_changes_and_clears_is_one_batch_undone_whole(
     auth_client, db
 ):
@@ -211,6 +330,33 @@ async def test_a_one_cell_save_is_singular_and_an_unchanged_save_names_no_batch(
     again = await auth_client.put(RATES, json=[cell(v, t, "2.00")])
     assert again.status_code == 200, again.text
     assert "x-change-batch" not in again.headers
+
+
+async def test_a_matrix_save_that_fails_partway_records_nothing(auth_client, db):
+    """ATOMIC (the route's own word): the 422 on the third cell comes after the first was
+    cleared and the second changed in the session — and still no batch is named, nothing is
+    logged and no cell is written."""
+    venture = card("Venture X")
+    travel, dining, groceries = category("Travel"), category("Dining", 1), category("Groceries", 2)
+    db.add_all([venture, travel, dining, groceries])
+    await db.flush()
+    db.add_all(
+        [
+            RewardRate(card_id=venture.id, category_id=travel.id, multiplier=Decimal("2.00")),
+            RewardRate(card_id=venture.id, category_id=dining.id, multiplier=Decimal("3.00")),
+        ]
+    )
+    await db.commit()
+    v, t, d, g = venture.id, travel.id, dining.id, groceries.id
+    before = await images(db, RewardRate)
+    failed = await auth_client.put(RATES, json=[cell(v, t, None), cell(v, d, "5"), cell(v, g, "0")])
+    assert failed.status_code == 422, failed.text
+    assert failed.json()["detail"] == "multiplier must be positive"
+    assert "x-change-batch" not in failed.headers
+    assert (await db.execute(select(ChangeLog))).scalars().all() == []  # not even in the session
+    await db.rollback()  # what the request's own session does on its way out
+    assert (await db.execute(select(ChangeLog))).scalars().all() == []
+    assert await images(db, RewardRate) == before
 
 
 # ── cards, their credits and their limit history ─────────────────────────────────────
@@ -266,56 +412,8 @@ async def test_card_create_edit_archive_delete_each_log_one_batch(auth_client, d
 
 
 async def test_undo_restores_a_deleted_card_with_its_credits_cells_limits_and_pins(auth_client, db):
-    venture = card("Capital One Venture X", annual_fee=Decimal("395.00"), rewards_currency="miles")
-    savor = card("SavorOne", 1)
-    db.add_all([venture, savor])
-    await db.flush()
-    travel = category("Travel", pinned_card_id=venture.id)
-    dining = category("Dining", 1, pinned_card_id=savor.id)
-    groceries = category("Groceries", 2)
-    db.add_all([travel, dining, groceries])
-    await db.flush()
-    db.add_all(
-        [
-            CardCredit(card_id=venture.id, label="Travel", annual_value=Decimal("300.00")),
-            CardCredit(
-                card_id=venture.id,
-                label="Global Entry",
-                annual_value=Decimal("100.00"),
-                counts=False,
-                reset_cadence="anniversary",
-            ),
-            CardCredit(card_id=savor.id, label="Streaming", annual_value=Decimal("60.00")),
-            RewardRate(
-                card_id=venture.id,
-                category_id=travel.id,
-                multiplier=Decimal("10.00"),
-                note="portal",
-            ),
-            RewardRate(card_id=venture.id, category_id=dining.id, multiplier=Decimal("2.00")),
-            RewardRate(
-                card_id=savor.id,
-                category_id=dining.id,
-                multiplier=Decimal("3.00"),
-                monthly_cap=Decimal("500.00"),
-            ),
-            CreditLimitEvent(
-                card_id=venture.id, effective_date=date(2023, 5, 12), limit_amount=Decimal("20000")
-            ),
-            CreditLimitEvent(
-                card_id=venture.id,
-                effective_date=date(2024, 6, 1),
-                limit_amount=Decimal("30000"),
-                note="CLI",
-            ),
-            CreditLimitEvent(
-                card_id=savor.id, effective_date=date(2024, 1, 1), limit_amount=Decimal("9000")
-            ),
-        ]
-    )
-    await db.commit()
-    venture_id, savor_id, travel_id = venture.id, savor.id, travel.id
-    tables = (CreditCard, CardCredit, RewardRate, CreditLimitEvent, RewardCategory)
+    venture_id, savor_id, travel_id = await seed_card_graph(db)
+    tables = CARD_TABLES
     before = await table_images(db, *tables)
     with recorded_sql(db) as statements:
         deleted = await auth_client.delete(f"{CARDS}/{venture_id}")
@@ -354,6 +452,14 @@ async def test_undo_restores_a_deleted_card_with_its_credits_cells_limits_and_pi
     assert resp.status_code == 200, resp.text
     assert resp.json()["label"] == "Undid: Deleted card Capital One Venture X"
     assert await table_images(db, *tables) == before
+
+
+async def test_a_card_delete_undone_redone_and_undone_again_gives_the_same_rows(auth_client, db):
+    venture_id, _, _ = await seed_card_graph(db)
+    whole = await table_images(db, *CARD_TABLES)
+    deleted = await auth_client.delete(f"{CARDS}/{venture_id}")
+    assert deleted.status_code == 204
+    await assert_round_trips(auth_client, db, deleted, CARD_TABLES, whole)
 
 
 async def test_undoing_a_card_delete_after_its_name_was_taken_again_refuses(auth_client, db):
@@ -419,6 +525,29 @@ async def test_card_credit_writes_each_log_one_batch_and_a_delete_undoes(auth_cl
     assert label_of(rows) == "Deleted the $300 Travel credit from Venture X"
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
+    assert await images(db, CardCredit) == before
+
+
+async def test_a_credit_edit_that_fails_validation_records_nothing(auth_client, db):
+    """update_card_credit validates before it mutates: its 422 leaves the row untouched in the
+    session as well as in the log."""
+    card_id = (await auth_client.post(CARDS, json=card_body("Venture X"))).json()["id"]
+    created = await auth_client.post(
+        f"{CARDS}/{card_id}/credits", json={"label": "Travel", "annual_value": "300"}
+    )
+    assert created.status_code == 201, created.text
+    credit_id = created.json()["id"]
+    logged_before = (await db.execute(select(func.count()).select_from(ChangeLog))).scalar_one()
+    before = await images(db, CardCredit)
+    failed = await auth_client.patch(
+        f"{CARDS}/credits/{credit_id}", json={"label": "Airline", "annual_value": "-1"}
+    )
+    assert failed.status_code == 422, failed.text
+    assert failed.json()["detail"] == "annual_value must be non-negative"
+    assert "x-change-batch" not in failed.headers
+    assert not db.dirty  # not even the label moved
+    count = (await db.execute(select(func.count()).select_from(ChangeLog))).scalar_one()
+    assert count == logged_before
     assert await images(db, CardCredit) == before
 
 
