@@ -65,6 +65,10 @@
 .chart-card-has-aside { container-type: inline-size; }
 .chart-card-with-aside { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .9fr); gap: 1rem 1.5rem; align-items: start; }
 .chart-card-with-aside > .chart-card-plot, .chart-card-with-aside > .chart-card-aside { min-width: 0; }
+/* The plot sits in the middle of its row (2026-09-25 polish spec §3.6, PE-20), not at the top of a
+   column a long legend stretched — the donut floated over ~294px of nothing. The aside keeps the top.
+   Under the slot only: in the Expand dialog the plot column must stretch to the dialog's row. */
+.chart-card-slot .chart-card-with-aside > .chart-card-plot { align-self: center; }
 @container (max-width: 899px) {
   .chart-card-with-aside { grid-template-columns: minmax(0, 1fr); }
 }

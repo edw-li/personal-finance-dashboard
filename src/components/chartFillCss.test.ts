@@ -33,3 +33,11 @@ describe('chart cards fill their row (chartInteractions.css)', () => {
     expect(CHART).not.toMatch(/(^|\}) *\.chart-card-fill/)
   })
 })
+
+describe('a plot beside an aside (chartInteractions.css)', () => {
+  // PE-20: the donut floated at the top of its column beside a list up to 624px long.
+  it('centres the plot column in its row; the aside keeps the top', () => {
+    expect(CHART).toContain('.chart-card-slot .chart-card-with-aside > .chart-card-plot { align-self: center; }')
+    expect(CHART).toMatch(/\.chart-card-with-aside \{[^}]*align-items: start;/)
+  })
+})

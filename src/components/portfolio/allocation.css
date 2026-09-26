@@ -64,3 +64,26 @@
 /* The aside's ghost while the first payload is in flight (P2 review round 5) — same grid as the
    real aside, so the card is two columns from the first paint and the donut never jumps left. */
 .allocation-aside-ghost { gap: 10px; }
+
+/* The ranked list beside the donut (2026-09-25 polish spec §3.6, PE-20): no taller than the plot —
+   the card sets the chart's configured height as --chart-h — so the card keeps one height across Asset
+   class, Industry, Geography, Account and Holding type (it swung 431 → 725px). The table scrolls in its
+   TableScroll box under a pinned header; the coverage lines stay put above it. Only while the aside
+   sits BESIDE the plot: stacked under it (a card under 900px, the dock open) the box keeps TableScroll's
+   own cap, and in the Expand dialog, outside the slot, the aside is its old self. With the Missing
+   quotes list open the cap lets go: that list is the reader's own ask, and a cap would bury it. */
+@container (min-width: 900px) {
+  .chart-card-slot .allocation-aside {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .chart-card-slot .allocation-aside:not(:has(> .allocation-missing-quotes[open])) {
+    max-height: var(--chart-h);
+  }
+
+  .chart-card-slot .allocation-aside > .allocation-table-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
