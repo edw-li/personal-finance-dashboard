@@ -30,6 +30,7 @@ import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
 import { FEED_SKELETON } from '../components/skeletonMetrics'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
+import { GhostTile } from '../components/PageSkeleton'
 import { useAssistantView } from '../components/assistant/viewState'
 import { metricReceipt } from '../utils/metricReceipt'
 import type {
@@ -40,7 +41,7 @@ import type {
   PaycheckProfileOut,
 } from '../types/api'
 import { canonicalAmount, isAmount } from '../utils/amount'
-import { formatCurrency, formatDate, formatPct } from '../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatDate, formatPct } from '../utils/format'
 import { shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 import './PaycheckPage.css'
@@ -89,7 +90,7 @@ const WATERFALL: {
     { key: 'net_pay', label: 'Net pay' },
   ]
 
-function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: boolean }) {
+function BreakdownPanel({ data }: { data: PaycheckBreakdownOut }) {
   return (
     <section className="card span-6">
       {/* The panel names the profile it belongs to. That is what makes keeping a stale
@@ -104,27 +105,9 @@ function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: bo
         rounded for display out of a full-precision chain, so they can disagree with the net
         by a cent — the net is the authoritative figure.
       </p>
-      {/* The one figure the list below does NOT carry: net pay is per check, this is what
-          lands in a month. Deliberately the only tile — a second one showing `net_pay`
-          would print the same number twice on one card. */}
-      <div className="kpi-row kpi-row-lone">
-        <StatTile
-          label="Monthly net"
-          value={formatCurrency(data.monthly_net)}
-          evidence={metricReceipt({ id: 'paycheck_monthly_net', label: 'Monthly net', value: data.monthly_net,
-            definition: 'The paycheck calculator’s net per check multiplied by the profile’s annual check count and divided by twelve. This is a profile-based estimate, separate from monthly take-home entries.',
-            scope: data.profile.person_id, as_of: data.profile.effective_date, completeness: 'estimate', warnings: data.warnings,
-            source_link: `/paycheck?section=summary&profile=${data.profile.id}&owner=${data.profile.person_id}`,
-            components: [{ label: 'Net per check', value: data.net_pay, unit: 'USD' }, { label: 'Checks per year', value: data.profile.pay_periods_per_year, unit: 'count' }] })}
-          // Fresh paints only (spec §8) — `still` is the panel's cached-paint flag, the same
-          // one FlowPanel takes. A decimal-string amount, so Number() for the ease.
-          countUp={
-            !still ? { value: Number(data.monthly_net), format: formatCurrency } : undefined
-          }
-          hint="Net pay per check × checks per year ÷ 12."
-          hero
-        />
-      </div>
+      {/* No tile in here any more (2026-09-25 polish spec §4.5, TPC-01b): the monthly net and the
+          employer match stand in the Summary's tile row above the card, and this list keeps NET PAY
+          as its total. */}
       {data.warnings.length > 0 && (
         // React text nodes, so the server's sentences are escaped by construction. NOT an
         // error banner: the router raises these on a legal profile (each percentage is
@@ -143,14 +126,111 @@ function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: bo
           </div>
         ))}
       </dl>
-      {/* NOT a waterfall line: the match never passes through this check, so listing it
-          would make the eleven lines add up to something that is not the pay. */}
-      {Number(data.employer_match) !== 0 && (
-        <p className="drill-hint">
-          Employer match +{formatCurrency(data.employer_match)} per check, not part of your pay.
-        </p>
-      )}
     </section>
+  )
+}
+
+// ── The Summary's tile row ───────────────────────────────────────────────────────────────
+
+/**
+ * One strip over the breakdown (2026-09-25 polish spec §4.5; audit TPC-01): the household's take-home
+ * beside the check on screen — what it comes to a month, its net and its match — where a lone household
+ * tile sat over a hero tile nested inside the breakdown card. The household figure is the page's headline
+ * when there is a household; otherwise the monthly net is. Each slot ghosts while its own feed is in
+ * flight, so the row stands from the first paint and nothing below it moves when the answers land (the
+ * 119px of TPC-04).
+ */
+function SummaryTiles({
+  household,
+  householdPending,
+  check,
+  checkPending,
+  personName,
+  still,
+}: {
+  /** Each person's in-force monthly net; the tile shows for two or more. */
+  household: { name: string; monthlyNet: string }[] | null
+  /** A household of two or more whose legs have not answered yet. */
+  householdPending: boolean
+  /** The check on screen — it follows the WHOSE chip and any pinned row. */
+  check: PaycheckBreakdownOut | null
+  checkPending: boolean
+  /** Whose check it is, when there is more than one person to tell apart. */
+  personName: string | null
+  /** A cached paint: the monthly net shows still instead of counting up (spec §8). */
+  still: boolean
+}) {
+  const showHousehold = household !== null && household.length > 1
+  const householdSlot = showHousehold || householdPending
+  if (!householdSlot && check === null && !checkPending) return null
+  // The ONE place this page adds money up, and only because there is no server figure for it: each
+  // leg is an AUTHORITATIVE per-person `monthly_net`, not a display-rounded view of a longer chain.
+  // Two 2dp figures added in float and re-rounded to cents, so the tile never prints a float artefact.
+  const householdTotal = showHousehold
+    ? Math.round(household.reduce((acc, leg) => acc + Number(leg.monthlyNet), 0) * 100) / 100
+    : null
+  return (
+    <div className="kpi-row paycheck-tiles">
+      {showHousehold ? (
+        <StatTile
+          label="Household take-home"
+          hero
+          value={formatCurrency(householdTotal)}
+          // The legs under the total, in the tile's own delta line (2026-09-13 polish spec §10), whole
+          // dollars (2026-09-25 §4.3). Neutral: a level, not a movement.
+          delta={household.map((leg) => `${leg.name} ${formatCurrencyWhole(leg.monthlyNet)}`).join(' · ')}
+          tone="neutral"
+          evidence={metricReceipt({ id: 'household_take_home', label: 'Household take-home', value: householdTotal,
+            definition: 'Sum of monthly net estimates for the paycheck profile currently in force for each person. A person without an in-force profile is omitted.',
+            completeness: 'estimate', source_link: '/paycheck?section=summary',
+            components: household.map(leg => ({ label: leg.name, value: leg.monthlyNet, unit: 'USD' })) })}
+          hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted. Each person has their own profile timeline. The waterfall, the flow beside it and the history in Profiles all follow the chip; the household figure does not — it is always both of you."
+        />
+      ) : householdPending ? (
+        <GhostTile hero />
+      ) : null}
+      {check !== null ? (
+        <>
+          <StatTile
+            label="Monthly net"
+            hero={!householdSlot}
+            value={formatCurrency(check.monthly_net)}
+            delta={`${personName === null ? '' : `${personName} · `}${check.profile.pay_periods_per_year} checks a year`}
+            tone="neutral"
+            evidence={metricReceipt({ id: 'paycheck_monthly_net', label: 'Monthly net', value: check.monthly_net,
+              definition: 'The paycheck calculator’s net per check multiplied by the profile’s annual check count and divided by twelve. This is a profile-based estimate, separate from monthly take-home entries.',
+              scope: check.profile.person_id, as_of: check.profile.effective_date, completeness: 'estimate', warnings: check.warnings,
+              source_link: `/paycheck?section=summary&profile=${check.profile.id}&owner=${check.profile.person_id}`,
+              components: [{ label: 'Net per check', value: check.net_pay, unit: 'USD' }, { label: 'Checks per year', value: check.profile.pay_periods_per_year, unit: 'count' }] })}
+            // Fresh paints only (spec §8). A decimal-string amount, so Number() for the ease.
+            countUp={!still ? { value: Number(check.monthly_net), format: formatCurrency } : undefined}
+            hint="Net pay per check × checks per year ÷ 12."
+          />
+          <StatTile
+            label="Net pay per check"
+            value={formatCurrency(check.net_pay)}
+            delta={`of ${formatCurrencyWhole(check.gross)} gross`}
+            tone="neutral"
+            hint="What lands in the account from one check — the breakdown's authoritative last line."
+          />
+          <StatTile
+            label="Employer match per check"
+            value={formatCurrency(check.employer_match)}
+            // NOT a waterfall line: the match never passes through the check, so the eleven lines
+            // do not add it up — the tile says so.
+            delta={Number(check.employer_match) === 0 ? 'no employer match' : 'not part of your pay'}
+            tone="neutral"
+            hint="The employer's 401(k) match on one check. It never passes through the check, so the breakdown's lines do not add it."
+          />
+        </>
+      ) : checkPending ? (
+        <>
+          <GhostTile hero={!householdSlot} />
+          <GhostTile />
+          <GhostTile />
+        </>
+      ) : null}
+    </div>
   )
 }
 
@@ -176,7 +256,10 @@ function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
       empty="This profile's deductions exceed pay — see the table."
       exportName="paycheck-flow"
       csv={() => paycheckSankeyCsv(data)}
-      height={320}
+      // The plot's FLOOR, under the breakdown's own height (2026-09-25 polish review): the pair's row is
+      // then the list's, and the plot fills what is left (283px at 1440) instead of the list's card
+      // standing a blank band under NET PAY beside a taller flow.
+      height={280}
       // Half the summary grid, beside the waterfall it draws (2026-09-13 polish spec §12).
       span={6}
       // The legend describes the CHART, so it goes when the chart does: under the empty
@@ -1405,16 +1488,9 @@ export default function PaycheckPage() {
   const profilesKey = `${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`
   const seedForPanel = applySeed?.forKey === profilesKey ? applySeed : null
 
-  // The ONE place this page adds money up, and only because there is no server figure for
-  // it in this batch. Legal here where the waterfall's lines are not (rule 9): each leg is
-  // an AUTHORITATIVE per-person `monthly_net`, not a display-rounded view of a longer
-  // chain. Two 2dp figures added in float and re-rounded to cents (spendingSankey's
-  // `cents` idiom), so the tile can never print a float artefact.
-  const householdTotal =
-    householdNets === null
-      ? null
-      : Math.round(householdNets.reduce((acc, leg) => acc + Number(leg.monthlyNet), 0) * 100) /
-      100
+  // The check the Summary shows — the Feed's data and busy, read once for the tile row as well.
+  const summaryCheck = breakdownMissing || profileArrival !== null ? null : breakdown
+  const summaryBusy = profileArrival !== null || (breakdownBusy && !breakdownMissing)
 
   // A profile write moves BOTH halves of the page: the list, and the waterfall (a deleted
   // profile takes its own breakdown with it, so the selection falls back to the server's
@@ -1466,34 +1542,21 @@ export default function PaycheckPage() {
         {profileArrivalNote && <p className="hint" role="status">{profileArrivalNote}</p>}
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
         <div hidden={views.section !== 'summary'}>
-          {householdNets !== null && householdNets.length > 1 && (
-            <section className="paycheck-household">
-              <div className="kpi-row kpi-row-lone">
-                <StatTile
-                  label="Household take-home"
-                  value={formatCurrency(householdTotal)}
-                  // The legs under the total (2026-09-13 polish spec §10; audit T1): the caption
-                  // "Edward + Grace — the profile in force for each person." that floated under
-                  // this tile on the page background is gone, and the per-person figures it
-                  // alluded to are printed in the tile's own delta slot, the way ESPP prints
-                  // "6 lots". Neutral: a level, not a movement.
-                  delta={householdNets
-                    .map((leg) => `${leg.name} ${formatCurrency(leg.monthlyNet)}`)
-                    .join(' · ')}
-                  tone="neutral"
-                  evidence={metricReceipt({ id: 'household_take_home', label: 'Household take-home', value: householdTotal,
-                    definition: 'Sum of monthly net estimates for the paycheck profile currently in force for each person. A person without an in-force profile is omitted.',
-                    completeness: 'estimate', source_link: '/paycheck?section=summary',
-                    components: householdNets.map(leg => ({ label: leg.name, value: leg.monthlyNet, unit: 'USD' })) })}
-                  hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted. Each person has their own profile timeline. The waterfall, the flow beside it and the history in Profiles all follow the chip; the household figure does not — it is always both of you."
-                />
-              </div>
-            </section>
-          )}
+          {/* Dimmed while a reload runs over figures already on screen (the ESPP strip's rule). */}
+          <div className={`loading-dim${summaryCheck !== null && summaryBusy ? ' is-loading' : ''}`}>
+            <SummaryTiles
+              household={householdNets}
+              householdPending={orderedPeople.length > 1 && householdNets === null}
+              check={summaryCheck}
+              checkPending={summaryCheck === null && summaryBusy}
+              personName={switchable ? (orderedPeople.find((person) => person.id === summaryCheck?.profile.person_id)?.name ?? null) : null}
+              still={fromCache}
+            />
+          </div>
         </div>
         <Feed
-          data={breakdownMissing || profileArrival !== null ? null : breakdown}
-          busy={profileArrival !== null || (breakdownBusy && !breakdownMissing)}
+          data={summaryCheck}
+          busy={summaryBusy}
           staleNoun="this breakdown"
           skeleton={{ height: FEED_SKELETON.paycheckBreakdown, label: 'Loading the breakdown…' }}
           empty={
@@ -1525,7 +1588,7 @@ export default function PaycheckPage() {
                     the sankey that draws them are one story, read side by side; the pace strip
                     keeps the full width beneath. .card-grid collapses to one column under 1000px. */}
                 <div className="card-grid paycheck-summary-grid">
-                  <BreakdownPanel data={data} still={fromCache} />
+                  <BreakdownPanel data={data} />
                   <FlowPanel data={data} />
                 </div>
                 <PacePanel items={data.pace} />

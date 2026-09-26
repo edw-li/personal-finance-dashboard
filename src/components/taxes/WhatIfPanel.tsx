@@ -32,7 +32,7 @@ import type {
   TaxSummaryOut,
   WhatIfOut,
 } from '../../types/api'
-import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatDate, formatPct, formatShares } from '../../utils/format'
 import { toneOf } from '../../utils/tone'
 import type { Tone } from '../../utils/tone'
 import AmountInput from '../AmountInput'
@@ -410,6 +410,17 @@ export default function WhatIfPanel({
     // be drawn is exactly what CompareTable's error face is for.
     return (r as Partial<WhatIfOut>).scenario ?? { error: 'Preview unavailable' }
   }
+  // The sale row's and the Δ row's bare tiles, given lines from the payload (2026-09-25 polish spec
+  // §4.4): how many sales, the tax as a share of the gain, the cash kept of the proceeds, and the
+  // rate's move — display-only ratios and differences of the server's own figures.
+  const salesCount = saleDetails.length + esppSaleDetails.length
+  const ratio = (part: string, whole: string) => Math.abs(Number(part)) / Math.abs(Number(whole))
+  // The move between the two DISPLAYED rates (formatPct's own rounding), so the line agrees with the
+  // "a% → b%" beside it; nothing to say when either rate is unknown (the engine refused).
+  const shownPct = (rate: string) => Number((Number(rate) * 100).toFixed(1))
+  const baselineRate = result === null || previewUnusable ? null : result.baseline.totals.effective_rate
+  const scenarioRate = result === null || previewUnusable ? null : result.scenario.totals.effective_rate
+  const rateMove = baselineRate == null || scenarioRate == null ? null : shownPct(scenarioRate) - shownPct(baselineRate)
   const overrideCount = overrideKeys.length
   const applyHintId = useId()
   // Apply is enabled only for COMPLETE rows (spec §B7): a row still outside the scenario would
@@ -471,11 +482,19 @@ export default function WhatIfPanel({
                   <StatTile
                     label="Proceeds"
                     value={formatCurrency(saleSummary.proceeds)}
+                    delta={`${salesCount} ${salesCount === 1 ? 'sale' : 'sales'}`}
+                    tone="neutral"
                     hint="What the shares in this scenario sell for, before tax."
                   />
                   <StatTile
                     label={taxWord}
                     value={formatCurrency(Math.abs(Number(saleSummary.tax_due)))}
+                    delta={
+                      Number(saleSummary.gain) === 0
+                        ? 'no gain to tax'
+                        : `${formatPct(ratio(saleSummary.tax_due, saleSummary.gain), { signed: false })} of the ${lossBeforeTax ? 'loss' : 'gain'}`
+                    }
+                    tone="neutral"
                     hint={
                       taxSaved
                         ? `The tax the sales take off ${year} as stored — the loss offsets other income.`
@@ -485,12 +504,18 @@ export default function WhatIfPanel({
                   <StatTile
                     label="Net cash"
                     value={formatCurrency(saleSummary.net_cash)}
+                    delta={
+                      Number(saleSummary.proceeds) === 0
+                        ? 'no proceeds'
+                        : `${formatPct(ratio(saleSummary.net_cash, saleSummary.proceeds), { signed: false })} of proceeds`
+                    }
+                    tone="neutral"
                     hint={`Proceeds ${taxSaved ? 'plus the tax saved' : 'minus tax due'} — the cash the sales leave you.`}
                   />
                   <StatTile
                     label={afterTaxLoss ? 'After-tax loss' : 'After-tax gain'}
                     value={formatCurrency(Math.abs(Number(saleSummary.after_tax_gain)))}
-                    delta={`${formatCurrency(Math.abs(Number(saleSummary.gain)))} ${
+                    delta={`${formatCurrencyWhole(Math.abs(Number(saleSummary.gain)))} ${
                       lossBeforeTax ? 'loss' : 'gain'
                     } before tax`}
                     tone={toneOf(saleSummary.after_tax_gain)}
@@ -522,18 +547,27 @@ export default function WhatIfPanel({
                 <StatTile
                   label="Δ take-home"
                   value={formatCurrency(result.delta.take_home)}
-                  delta={`${formatCurrency(result.baseline.totals.take_home)} → ${formatCurrency(
+                  delta={`${formatCurrencyWhole(result.baseline.totals.take_home)} → ${formatCurrencyWhole(
                     result.scenario.totals.take_home,
                   )}`}
                   tone={takeHomeTone}
                   hint="Scenario take-home minus baseline."
                 />
-                {/* A rate is a level, not a movement: both sides, no arrow. */}
+                {/* A rate is a level, not a movement: both sides, no arrow — and its second line says
+                    by how many points, still without one (spec §4.4). */}
                 <StatTile
                   label="Effective rate"
                   value={`${formatPct(result.baseline.totals.effective_rate, {
                     signed: false,
                   })} → ${formatPct(result.scenario.totals.effective_rate, { signed: false })}`}
+                  delta={
+                    rateMove === null
+                      ? undefined
+                      : Math.abs(rateMove) < 0.05
+                        ? 'no change'
+                        : `${Math.abs(rateMove).toFixed(1)} pts ${rateMove > 0 ? 'higher' : 'lower'}`
+                  }
+                  tone="neutral"
                   hint="Overall effective rate, baseline → scenario."
                 />
               </div>

@@ -11,11 +11,10 @@ export const CARD_CHROME = 60
 export const HINT_LINE = 18
 export const TABLE_ROW = 33
 export const FORM_ROW = 51
-/** The real .stat-tile (the audit measured 115 against the ghost's 76): 0.9 + 1rem padding + 2
- *  border + label 11 + 7.2 + value 26 + delta 13 + 5.6. */
-export const STAT_TILE = 115
-/** A .kpi-row's tile plus the row's own 1rem bottom margin. */
-export const TILE_ROW = STAT_TILE + 16
+/** The real .stat-tile with one delta line, measured at 1440 in Edge (2026-09-25 polish §4.6): 14.4 +
+ *  1 border + 15.3 label + 7.2 + 23.8 figure + 5.6 + 17 delta + 16 + 1. Ghost TILES need no number —
+ *  they stand in the real lines — so this is only for a CARD ghost standing in for a tile row. */
+export const STAT_TILE = 101
 /** The .networth-owner-strip BOX only — dt 15 + dd (2 margin + 24 line) = 41. Its 1rem margin is
  *  .skeleton-strip's `margin`, not part of this number: counting it twice stood the ghost 16px
  *  taller than the strip and pushed both charts down when the summary landed. */
@@ -68,8 +67,14 @@ export function chartCardBox(
 /** Feed ghosts per call site (spec §7), each a BODY height — a block that is NOT a card (comp's bare
  *  tile row) takes the chrome SkeletonCard adds back off. */
 export const FEED_SKELETON = {
-  paycheckBreakdown: 3 * HINT_LINE + TILE_ROW + 12 * TABLE_ROW, // 3-line hint, net-pay tile, 11 waterfall lines + total
-  compVesting: ghostCardBody(TILE_ROW), // VestingTiles is a bare .kpi-row, not a card
+  // The breakdown card, measured at 1440 in Edge (2026-09-25 polish review): its header's 7px over the ghost
+  // label CARD_CHROME counts, a two-line hint (32) + 8, and the list — ten 30.2px lines and NET PAY's 46.8
+  // (349). The tile row stands outside the feed now (§4.5), and the flow beside the list fills to its height
+  // (PaycheckPage's FlowPanel), so this is the pair's box too. It was 3 × 18 + 12 × 33 — 54px tall.
+  paycheckBreakdown: 7 + 32 + 8 + 349,
+  // VestingTiles is a bare .kpi-row, not a card: the ghost card's own margin is the 1rem the row leaves
+  // under its tiles, so the box is the tile alone (counting the 1rem as well stood the ghost 16px tall).
+  compVesting: ghostCardBody(STAT_TILE),
   compEvents: 5 * HINT_LINE + 2 * FORM_ROW + 5 * TABLE_ROW, // 5-line hint, the auto-fit form's two rows, header + 4 focal years
   esppLots: HINT_LINE + 9 * TABLE_ROW, // hint, the add-row form, table header + 5 rows + the held totals row
   esppOfferings: HINT_LINE + 6 * TABLE_ROW, // hint, add form, header + 3 rows

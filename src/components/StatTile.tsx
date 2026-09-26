@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import InfoHint from './InfoHint'
 import { MetricInfoButton } from './details/MetricInspector'
@@ -63,8 +63,9 @@ export default function StatTile({
   hint?: string
   hero?: boolean
   evidence?: MetricEvidence
-  /** A small status pill after the label ("Not yet reviewed") — the review state that used to
-   *  float under the tile row as an orphan line (2026-09-13 polish §10). */
+  /** A small status pill on the badge line under the label ("Not yet reviewed") — the review state
+   *  that used to float under the tile row as an orphan line (2026-09-13 polish §10); its own line
+   *  since 2026-09-25 (polish spec §4.1). */
   badge?: ReactNode
   /** Settle the value from 0 over ~450ms on a FRESH first paint (2026-08-27 spec §8).
    *  Callers gate it themselves (never on cached paints); the final frame renders
@@ -116,29 +117,71 @@ export default function StatTile({
             : tone === 'negative'
               ? '▼'
               : ''
+  const clauses = delta === undefined ? [] : clausesOf(delta)
+  const glyphSpan = glyph ? <span className="stat-delta-glyph" aria-hidden="true">{glyph} </span> : null
   return (
     <div className={hero ? 'stat-tile stat-tile-hero' : 'stat-tile'}>
+      {/* Four lines, always, in this order (2026-09-25 polish spec §4.1, contract C4). Inside a row
+          each is a track the row shares — label · badge · value · delta — so a line's figures sit on
+          one baseline and its deltas start on one line whatever each tile carries. */}
       <div className="stat-label">
         {/* One nowrap unit for the words and their (i): an atomic inline may break before it,
-            and the icon kept landing alone on a second line (audit P-11). The badge stays
-            outside the unit so IT may wrap under the label when the tile is narrow. */}
+            and the icon kept landing alone on a second line (audit P-11). */}
         <span className="stat-label-text">
           {label}
           {hint !== undefined && evidence === undefined && <InfoHint text={hint} />}
           {evidence !== undefined && <MetricInfoButton evidence={evidence} />}
         </span>
-        {badge !== undefined && <span className="stat-badge">{badge}</span>}
       </div>
+      {/* The badge's own line: beside the label it wrapped under it in a narrow tile and pushed that
+          one value off the row's baseline (OU-03). Empty without a badge. */}
+      <div className="stat-badge-row">{badge !== undefined && <span className="stat-badge">{badge}</span>}</div>
       <div className="stat-value">
-        {display ?? value}
+        {/* The figure is what .stat-value's container width sizes (panels.css). */}
+        <span className="stat-value-figure">{display ?? value}</span>
         {unit !== undefined && <span className="stat-value-unit"> {unit}</span>}
       </div>
-      {delta !== undefined && (
-        <div className={`stat-delta stat-delta-${tone ?? 'neutral'}`}>
-          {glyph && <span aria-hidden="true">{glyph} </span>}
-          {delta}
-        </div>
-      )}
+      {/* Always present, empty without a delta: the line is the row's, not this tile's. */}
+      <div className={`stat-delta stat-delta-${tone ?? 'neutral'}`}>
+        {clauses.length === 1 && (
+          <>
+            {glyphSpan}
+            {delta}
+          </>
+        )}
+        {clauses.length > 1 &&
+          clauses.map((clause, i) => (
+            <Fragment key={i}>
+              {i > 0 && ' '}
+              {/* One unbreakable clause (spec §4.3): the line breaks between "…since Sep 1" and
+                  "· 21 days", never inside "Sep 1" or "21 days". */}
+              <span className="stat-delta-clause">
+                {i === 0 ? glyphSpan : '· '}
+                {clause}
+              </span>
+            </Fragment>
+          ))}
+      </div>
     </div>
   )
+}
+
+/** A delta's clauses: its top-level " · " splits it ("…since Sep 1" | "21 days"); one inside
+ *  parentheses never does ("(Sep 1 → Sep 22 · provisional)" stays whole). */
+function clausesOf(delta: string): string[] {
+  const clauses: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < delta.length; i++) {
+    const char = delta[i]
+    if (char === '(') depth++
+    else if (char === ')') depth = Math.max(0, depth - 1)
+    else if (depth === 0 && delta.startsWith(' · ', i)) {
+      clauses.push(delta.slice(start, i))
+      start = i + 3
+      i += 2
+    }
+  }
+  clauses.push(delta.slice(start))
+  return clauses
 }

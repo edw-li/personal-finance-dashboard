@@ -93,13 +93,13 @@ describe('KPI grammar (2026-09-13 polish §12)', () => {
     // `grid-column-end: -1` placed a lone last tile IN the last column — a right-hand orphan with
     // a hole beside it — instead of stretching it.
     expect(PANELS).not.toContain('.kpi-row > :last-child { grid-column-end: -1; }')
-    expect(PANELS).toContain('.kpi-row-5 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }')
-    expect(PANELS).toContain('.kpi-row-dense { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }')
-    expect(PANELS).toContain('@container page (min-width: 1000px) { .kpi-row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }')
+    // Five-tile rows: five across, 3 + 2 on six tracks under 1000px (2026-09-25 polish §4.2 —
+    // tileRowCss.test.ts pins the bands).
+    expect(PANELS).toContain('.kpi-row-5, .kpi-row-dense { grid-template-columns: repeat(5, minmax(0, 1fr)); }')
     // The odd-last-tile span is pinned INSIDE the two-column block — the one band where the
     // column count is known, so the span is arithmetic rather than a guess.
     expect(PANELS).toContain(
-      '@container page (max-width: 980px) { .kpi-row:not(.kpi-row-5) { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi-row:not(.kpi-row-5) > :last-child:nth-child(odd) { grid-column: 1 / -1; } }',
+      '@container page (max-width: 980px) { .kpi-row:not(.kpi-row-5, .kpi-row-dense) { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi-row:not(.kpi-row-5, .kpi-row-dense) > :last-child:nth-child(odd) { grid-column: 1 / -1; } }',
     )
   })
 })

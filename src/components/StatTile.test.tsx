@@ -107,7 +107,7 @@ describe('StatTile delta glyph', () => {
     expect(delta()?.className).toContain('stat-delta-positive')
   })
 
-  it('hides the glyph from assistive tech and drops the whole row with no delta', () => {
+  it('hides the glyph from assistive tech, and keeps an EMPTY delta line with no delta', () => {
     render(<StatTile label="Net worth" value="$1.00" delta="$10.00 MoM" tone="positive" />)
     // ▲/▼ are decoration: the colour is redundant with the caller's words, and a screen
     // reader announcing "black up-pointing triangle" adds nothing the text does not say.
@@ -117,10 +117,54 @@ describe('StatTile delta glyph', () => {
     expect(delta()?.textContent).toBe('▲ $10.00 MoM')
 
     cleanup()
-    // A rate is a level, not a movement: no delta prop, no delta node — not an empty one.
+    // A rate is a level, not a movement: no delta prop — and the delta LINE stays, empty, because
+    // it is the row's track, not the tile's (2026-09-25 polish spec §4.1).
     render(<StatTile label="Effective tax" value="24.7%" tone="positive" />)
-    expect(delta()).toBeNull()
+    expect(delta()?.textContent).toBe('')
+    expect(delta()?.childNodes.length).toBe(0)
     expect(screen.getByText('24.7%')).toBeTruthy()
+  })
+})
+
+// Contract C4 (2026-09-25 polish spec §4.1): four children, always, in this order — each is a line
+// the row shares, so a line's labels, badges, values and deltas can sit on shared tracks.
+describe('StatTile four lines', () => {
+  it('renders label, badge row, value and delta in that order, all four every time', () => {
+    render(<StatTile label="Net worth" value="$1.00" />)
+    const tile = document.querySelector('.stat-tile') as HTMLElement
+    expect([...tile.children].map((child) => child.className)).toEqual([
+      'stat-label',
+      'stat-badge-row',
+      'stat-value',
+      'stat-delta stat-delta-neutral',
+    ])
+    // Empty lines are EMPTY — no whitespace node — so CSS `:empty` can size them to nothing.
+    expect(tile.querySelector('.stat-badge-row')?.childNodes.length).toBe(0)
+    expect(tile.querySelector('.stat-delta')?.childNodes.length).toBe(0)
+  })
+
+  it('sets the figure in its own span, the unit after it', () => {
+    render(<StatTile label="Money lasts" value="92.4%" unit="of paths through 2075" />)
+    const value = document.querySelector('.stat-value') as HTMLElement
+    expect(value.querySelector('.stat-value-figure')?.textContent).toBe('92.4%')
+    expect(value.textContent).toBe('92.4% of paths through 2075')
+  })
+
+  it('splits a delta into clauses at its top-level dots, the glyph riding the first', () => {
+    render(<StatTile label="Net worth" value="$1.00" delta="$126,583 (+15.7%) since Sep 1 · 21 days" tone="positive" />)
+    const clauses = [...document.querySelectorAll('.stat-delta > .stat-delta-clause')].map((c) => c.textContent)
+    expect(clauses).toEqual(['▲ $126,583 (+15.7%) since Sep 1', '· 21 days'])
+    // The words read exactly as before: the clauses add no text.
+    expect(document.querySelector('.stat-delta')?.textContent).toBe('▲ $126,583 (+15.7%) since Sep 1 · 21 days')
+    expect(document.querySelector('.stat-delta-clause span[aria-hidden="true"]')?.textContent).toBe('▲ ')
+    // Its own class, so its trailing space can close a hair (panels.css) without touching the words.
+    expect(document.querySelector('.stat-delta-clause span[aria-hidden="true"]')?.className).toBe('stat-delta-glyph')
+  })
+
+  it('never splits inside parentheses, and leaves a one-clause delta as plain text', () => {
+    render(<StatTile label="Sep 1 balances" value="$1.00" delta="September's change: ▲ $1 (Sep 1 → Sep 22 · provisional)" />)
+    expect(document.querySelector('.stat-delta-clause')).toBeNull()
+    expect(screen.getByText("September's change: ▲ $1 (Sep 1 → Sep 22 · provisional)")).toBeTruthy()
   })
 })
 
@@ -209,30 +253,35 @@ describe('countUp', () => {
 // orphan hint line and onto the tile it describes; the nowrap unit is why the (i) can no longer
 // wrap onto a line of its own.
 describe('StatTile badge and label unit', () => {
-  it('renders the badge as a pill after the label and keeps the label text queryable', () => {
+  it('renders the badge as a pill on its own line, never inside the label', () => {
     render(<StatTile label="Living spending" value="$4,932.87" badge="Not yet reviewed" hint="Cash outflow this month." />)
-    const badge = document.querySelector('.stat-label .stat-badge')
+    const badge = document.querySelector('.stat-badge-row > .stat-badge')
     expect(badge?.textContent).toBe('Not yet reviewed')
+    // The label line holds the label alone: a badge there wrapped under it at 1440 and dropped that
+    // one value 17–19px below its neighbours (OU-03).
+    expect(document.querySelector('.stat-label .stat-badge')).toBeNull()
+    expect(document.querySelector('.stat-label')?.textContent).toBe('Living spending')
     // Every page test that finds a tile by its label keeps working: the text is one node.
     expect(screen.getByText('Living spending')).toBeTruthy()
     // Text and (i) share one nowrap span, so the icon can never wrap alone.
     const unit = document.querySelector('.stat-label-text') as HTMLElement
     expect(unit.textContent).toBe('Living spending')
     expect(unit.querySelector('button.info-hint')).toBeTruthy()
-    expect(unit.nextElementSibling).toBe(badge)
   })
 
-  it('renders no badge node without the prop', () => {
+  it('renders no badge node without the prop — the badge line stays, empty', () => {
     render(<StatTile label="Net worth" value="$1.00" />)
     expect(document.querySelector('.stat-badge')).toBeNull()
+    expect(document.querySelector('.stat-badge-row')?.childNodes.length).toBe(0)
     expect(document.querySelector('.stat-label')?.textContent).toBe('Net worth')
   })
 
-  it('pins the CSS: the unit is nowrap and the pill wears --fill at .7rem in the caller’s casing', () => {
+  it('pins the CSS: the unit is nowrap and the pill wears --fill in the caller’s casing', () => {
     const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\s+/g, ' ')
     expect(css).toContain('.stat-label-text { white-space: nowrap; }')
-    expect(css).toMatch(/\.stat-badge \{[^}]*background: var\(--fill\);[^}]*font-size: 0\.7rem;[^}]*text-transform: none;/)
+    // The box (0.7rem, its padding) is shared with the steady row's reserve — tileRowCss.test.ts.
+    expect(css).toMatch(/\.stat-badge \{[^}]*background: var\(--fill\);[^}]*text-transform: none;/)
   })
 })

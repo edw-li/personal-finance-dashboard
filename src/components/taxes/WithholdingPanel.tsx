@@ -15,7 +15,7 @@ import type {
   WithholdingOut,
   WithholdingSafeHarbor,
 } from '../../types/api'
-import { formatCurrency, formatPct } from '../../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatPct } from '../../utils/format'
 import {
   dayLabel,
   differenceText,
@@ -343,6 +343,7 @@ export default function WithholdingPanel({
   onVestApplied,
   goTo,
   refreshKey = 0,
+  effectiveRate,
 }: {
   year: number
   /** The inputs form below holds unsaved edits: Apply asks before the page remounts it. */
@@ -360,6 +361,9 @@ export default function WithholdingPanel({
    *  views are open, so without this the strip would go on showing a line the user had just
    *  fixed in Inputs (2026-09-23 spec §W4). */
   refreshKey?: number
+  /** The year's effective rate (the Summary's totals), for Projected tax's second line (2026-09-25
+   *  polish spec §4.4); null when the engine refused the year. */
+  effectiveRate?: string | null
 }) {
   // null = the feed has not answered yet (never a zeroed payload — "not loaded" and "nothing
   // withheld" say very different things under this heading).
@@ -602,12 +606,22 @@ export default function WithholdingPanel({
               <StatTile
                 label="Projected tax"
                 value={formatCurrency(withholding.liability_total)}
+                // Its second line (2026-09-25 polish spec §4.4): the year's effective rate, the page's
+                // own figure; nothing to say when the engine refused the year.
+                delta={
+                  effectiveRate === undefined
+                    ? undefined
+                    : effectiveRate === null || withholding.liability_total === null
+                      ? 'not computed'
+                      : `${formatPct(effectiveRate, { signed: false })} effective`
+                }
+                tone="neutral"
                 hint="The tax engine’s total on your typed inputs — enter full-year figures, including paychecks and vests still to come."
               />
               <StatTile
                 label="Projected withholding"
                 value={formatCurrency(withholding.total.projected)}
-                delta={`${formatCurrency(withholding.total.ytd)} so far`}
+                delta={`${formatCurrencyWhole(withholding.total.ytd)} so far`}
                 // A level with its own progress under it, not a movement: no glyph, no colour.
                 tone="neutral"
                 hint="Salary checks at your all-in withholding %, RSU vests at 22% federal + 10.23% CA and W-2 bonuses at 22% + 6.6%, plus the FICA on both."
@@ -641,7 +655,7 @@ export default function WithholdingPanel({
               <StatTile
                 label="Payroll taxes"
                 value={formatCurrency(split.payroll.withheld_projected)}
-                delta={`${formatCurrency(split.payroll.liability)} owed`}
+                delta={`${formatCurrencyWhole(split.payroll.liability)} owed`}
                 tone="neutral"
                 hint="Medicare, Social Security and CA SDI, withheld by payroll at statutory rates — informational: there is no form to change."
               />

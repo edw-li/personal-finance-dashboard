@@ -78,57 +78,95 @@
 
 /* ── Stat tiles ────────────────────────────────────────────────────── */
 
+/* One strip, four lines (2026-09-25 polish spec §4.1, contract C4). The row is the grid and every tile
+   a four-row SUBGRID of it — label · badge · value · delta — so a line's labels, badges, values and
+   deltas share tracks: the figures sit on one baseline and the deltas start on one line whatever each
+   tile carries. The row has NO row gap on purpose: a subgrid's tracks absorb half the parent's gutter
+   on each side, so a row gap opened inside every tile (an empty badge line measured 16px in Edge).
+   Lines of tiles are spaced by each tile's bottom margin instead, and the row's own margin gives that
+   back: the space under a row is --kpi-row-after either way (a page that wants more sets the variable).
+   The tiles' margins sit INSIDE the grid, so they no longer collapse with the top margin of whatever
+   follows the row: a follower with its own margin-top would add it to the gap (16px more under the Taxes
+   totals and the Review tiles). Such a follower keeps only what exceeds the grid gap (taxes.css,
+   .tax-jurisdiction-detail) or leaves the space to the row's --kpi-row-after (MonthlyUpdatePage.css,
+   .review-changes-head). */
 .kpi-row {
+  --kpi-row-after: 1rem;
   display: grid;
-  gap: var(--density-grid-gap);
+  column-gap: var(--density-grid-gap);
+  row-gap: 0;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  margin-bottom: 1rem;
+  margin-bottom: calc(var(--kpi-row-after) - var(--density-grid-gap));
 }
 
-/* A LONE tile in the auto-fit grid would stretch the full content column — single-tile
-   rows wear this modifier instead of each page keeping a private 320px copy
-   (2026-08-31 review round; retires .paycheck-page .kpi-row and .espp-limit-row). */
-.kpi-row-lone {
-  max-width: 320px;
+.kpi-row > * {
+  margin-bottom: var(--density-grid-gap);
 }
 
-/* Balanced rows (2026-09-13 polish §12). A five-tile row — ESPP's strip, Projection's outcomes —
-   is five columns wherever 1000px of container allow it and auto-fits below; every other row goes
-   2×2 once a dock has narrowed the page under 980px, where four columns read as 3+1. .kpi-row-dense
-   is Portfolio's five dense tiles (it replaces that page's private .tiles-row). Container queries,
-   not media queries: the dock is the thing that changes the width.
+.kpi-row > .stat-tile,
+.kpi-row > .stat-tile-slot,
+.stat-tile-slot > .stat-tile {
+  grid-row: span 4;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+}
 
-   There is NO CSS-only fill for the auto-fit band, and the rule that claimed to be one is gone
-   (2026-09-13 review round). `.kpi-row > :last-child { grid-column-end: -1 }` does not stretch a
-   lone last tile: the start line stays auto, so the pair resolves to a ONE-track item placed in the
-   LAST column — a 4+1 wrap became a right-hand orphan with a hole beside it, worse than the
-   left-hand orphan it meant to cure. A span needs a known start line, and auto-fit's column count
-   is not known until layout; filling that band would mean JS measuring the row. The fixed 2-column
-   band below is where the arithmetic IS known, so that is where the span lives. */
-.kpi-row-5 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+/* A wrapper that labels its tile (CashflowStrip's role="group") takes part in the row's four lines
+   too: a subgrid of the row whose one child is a subgrid of it — the wrappers were stretched while
+   the tiles inside kept their content height, a 22px ragged bottom (PCC-17). */
+.stat-tile-slot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
 
-.kpi-row-dense { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+/* Balanced rows (2026-09-13 polish §12; 2026-09-25 polish spec §4.2). Container queries on the page, not
+   media queries: the dock is the thing that changes the width. A default row — four tiles or fewer —
+   auto-fits, then goes two columns under 980px, where four read as 3 + 1. A FIVE-tile row (.kpi-row-5:
+   ESPP's strip, the Projection's outcomes, the calendar's cash flow; .kpi-row-dense: Portfolio's) is
+   five across from 1000px; from 660 to 999px a balanced 3 + 2 on six tracks — each tile spans two, the
+   fourth and fifth span three, so both lines fill the width (the Projection's own rule, generalised);
+   under 660px two columns. Never 4 + 1 or 2 + 2 + 1, dock open or closed (PE-02).
 
-@container page (min-width: 1000px) {
-  .kpi-row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+   There is NO CSS-only fill for an auto-fit band: `.kpi-row > :last-child { grid-column-end: -1 }`
+   resolved to a one-track item in the LAST column (2026-09-13 review round). A span needs a known start
+   line, so the spans live only where the arithmetic IS known — the fixed six- and two-column bands. */
+.kpi-row-5,
+.kpi-row-dense {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@container page (660px <= width < 1000px) {
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) > * { grid-column: span 2; }
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) > :nth-child(n + 4) { grid-column: span 3; }
+}
+
+@container page (width < 660px) {
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi-row:is(.kpi-row-5, .kpi-row-dense) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 }
 
 @container page (max-width: 980px) {
-  .kpi-row:not(.kpi-row-5) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi-row:not(.kpi-row-5, .kpi-row-dense) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   /* Exactly two columns here, so "starts a new line" IS knowable: :nth-child(odd) is the last tile
-     of an odd count, and it spans the pair instead of sitting half-width beside a hole. Both the
-     start and the end line are named — the thing the deleted auto-fit rule could not do. */
-  .kpi-row:not(.kpi-row-5) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+     of an odd count, and it spans the pair instead of sitting half-width beside a hole. */
+  .kpi-row:not(.kpi-row-5, .kpi-row-dense) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 }
 
 .stat-tile {
+  display: grid;
+  /* One track exactly the tile's width: an auto column would widen to a nowrap label and wrap the
+     delta past the tile's edge. */
+  grid-template-columns: minmax(0, 1fr);
+  /* A tile outside a row (Card detail's verdict) has four rows of its own, packed at the top. */
+  align-content: start;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.9rem 1.1rem 1rem;
-  /* The query container .stat-value sizes against — see its comment. */
-  container-type: inline-size;
+  /* NOT a size container: a container establishes an independent formatting context, and that turns
+     the subgrid off — four tiles' lines drifted apart in Edge. .stat-value is the container now. */
 }
 
 .stat-label {
@@ -147,19 +185,58 @@
   white-space: nowrap;
 }
 
-/* A small status pill after the label, in the caller's own casing — a state, not an eyebrow. */
-.stat-badge {
-  display: inline-block;
-  margin-left: 0.5rem;
+/* The evidence (i) never grows its label line: its 24px target is pulled back to its 13px glyph, as the
+   eyebrow's InfoHint is (panels.css .info-hint). Pulled back only 4px (details.css) it made the label
+   line 17.1px against a text line's 15 — every row with a receipt stood 2px taller than its ghost. */
+.stat-label .metric-info-button {
+  margin-top: -5.5px;
+  margin-bottom: -5.5px;
+}
+
+/* Line 2, the badge's own line: beside the label a badge wrapped under it in a narrow tile and dropped
+   that one value off the row's baseline (OU-03). Empty, it is 0px — a line where no tile has a badge
+   costs nothing. A flex row, so the line is the badge's own height and not a text strut's. */
+.stat-badge-row {
+  display: flex;
+  align-items: center;
+}
+
+.stat-badge-row:not(:empty) {
+  margin-bottom: 0.35rem;
+}
+
+/* The badge's box — shared with a steady row's reserve (below), so a reserved line is exactly a badge
+   tall. */
+.stat-badge,
+.kpi-row-steady .stat-badge-row:empty::before {
   padding: 0.05rem 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+/* A small status pill in the caller's own casing — a state, not an eyebrow. */
+.stat-badge {
   border-radius: 999px;
   background: var(--fill);
   color: var(--muted);
-  font-size: 0.7rem;
-  font-weight: 500;
   letter-spacing: normal;
   text-transform: none;
-  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* Line 3. The size container its figure scales against — the tile cannot be one (see .stat-tile), and
+   this box is the tile's content width, what cqi read when the tile was the container. Values share
+   the line's FIRST baseline, a hero's included; a unit line hangs below its figure (Money lasts) rather
+   than lifting it off the row, which is what `last baseline` did (measured 16px in Edge). */
+.stat-value {
+  container-type: inline-size;
+  align-self: baseline;
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  /* Small on purpose: the figure sets the line, this only sizes the line's strut. */
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -170,13 +247,8 @@
    number would no longer fit, the font shrinks with its own tile. The number itself never
    breaks — nowrap forbids it, so a too-long value overflows visibly rather than lying about
    its digits; tabular numerals keep count-ups steady. */
-.stat-value {
-  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+.stat-value-figure {
   font-size: min(clamp(1.1rem, 0.9rem + 0.5vw, 1.45rem), 10.5cqi);
-  font-weight: 600;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 /* The hero's cqi cap is LOOSER than the normal tile's 10.5cqi on purpose. cqi resolves
@@ -190,7 +262,7 @@
    padding rather than the card edge. That is the deliberate trade — `white-space: nowrap`
    plus visible overflow keeps the digits whole instead of wrapping or lying. The normal
    .stat-value keeps 10.5cqi: it has no headroom to give. */
-.stat-tile-hero .stat-value {
+.stat-tile-hero .stat-value-figure {
   font-size: min(clamp(1.5rem, 1rem + 1.1vw, 2.4rem), 12cqi);
 }
 
@@ -206,9 +278,54 @@
   white-space: normal;
 }
 
+/* Line 4. Empty, it costs nothing: a line whose tiles carry no delta ends at its values. */
 .stat-delta {
   margin-top: 0.35rem;
   font-size: 0.8rem;
+}
+
+.stat-delta:empty {
+  margin-top: 0;
+}
+
+/* A delta's clauses are atomic (spec §4.3): the line breaks between "…since Sep 1" and "· 21 days",
+   never inside "Sep 1" or "21 days". inline-block rather than nowrap, so a clause wider than its whole
+   tile still wraps inside itself instead of running out of the tile. */
+.stat-delta-clause {
+  display: inline-block;
+}
+
+/* The ▲/▼ binds to its figure: its own space closes by 0.1em (1.3px). The hero's "▲ $126,583 (+15.7%)
+   since Sep 1 · 21 days" measured 239.14px against a 238.56px delta box at 1440 in Edge — the spec's
+   own example, a hair over its one line. The words are unchanged. */
+.stat-delta-glyph {
+  word-spacing: -0.1em;
+}
+
+/* A steady row keeps one height as its month changes (the Overview, Net worth, Spending; spec §4.3):
+   its badge line and one delta line stand whether or not the month on show fills them. The reserve is
+   an invisible no-break space in the badge's own box and in the delta's own type, so a reserved line is
+   exactly as tall as the line it stands in for. */
+.kpi-row-steady .stat-badge-row {
+  margin-bottom: 0.35rem;
+}
+
+.kpi-row-steady .stat-badge-row:empty::before,
+.kpi-row-steady .stat-delta:empty::before {
+  content: '\a0';
+  visibility: hidden;
+}
+
+.kpi-row-steady .stat-delta:empty {
+  margin-top: 0.35rem;
+}
+
+/* …and TWO delta lines on a steady row with a hero, in the four-across band where the hero's words can
+   wrap: its longest across every month ("▲ $126,583 (+15.7%) since Sep 1 · 21 days", 237.9px in Edge)
+   needs a 1148px row, so narrower a long month went to two lines and the row 142 ↔ 159px at 1280. A
+   ghost row wears the same classes, so it reserves the same (the Projection band's 2lh, ProjectionPage.css). */
+@container page (980px < width < 1150px) {
+  .kpi-row-steady:has(> .stat-tile-hero) .stat-delta { min-height: 2lh; }
 }
 
 .stat-delta-positive { color: var(--positive); }
@@ -698,37 +815,35 @@
 
 .skeleton-value {
   width: 65%;
-  height: 1.45rem;
+  height: 0.8em;
 }
 
-/* The boxes the real layout occupies: a 76px tile ghost under a 115px tile moved every page's
-   first paint by 39px a row (motion spec §7). One variable per row, read by the REAL row and by
-   the empty twin the skeleton leaves in its place — parity by construction, not two numbers that
-   happen to agree; src/components/skeletonMetrics.ts mirrors them and its test pins the pair. */
+/* The owner strip's box (motion spec §7): one variable, read by the REAL strip and by the empty
+   twin the skeleton leaves in its place — parity by construction; src/components/skeletonMetrics.ts
+   mirrors it and its test pins the pair. */
 .page-skeleton,
 .loading-fallback {
-  --m-stat-tile: 115px;
-  /* The delta-less tile (2026-09-13 polish §9): 115 minus the .stat-delta line — 0.8rem type at
-     the system-ui line height (≈17px) plus its 0.35rem top margin (5.6px) — rounded like every
-     twin here. Lane V's CLS smoke on Credit cards and Portfolio is the check on the number. */
-  --m-stat-tile-bare: 93px;
   --m-owner-strip: 41px;
 }
 
-/* Parity with the loaded blocks (motion spec §7): a ghost tile must stand as tall as the real
-   .stat-tile it is replaced by, delta line and all — the --m-* variables above hold the numbers. */
-.skeleton-tile {
-  min-height: var(--m-stat-tile);
+/* A ghost tile draws its blocks INSIDE the real tile's lines (2026-09-25 polish spec §4.6): each block
+   is an inline-block in the line box of the real .stat-label, .stat-value-figure and .stat-delta, so
+   the ghost stands exactly as tall as the tile that replaces it — the same type sets every line, in
+   every row variant, at every width. The fixed ghost heights that stood in for this (115px, the bare
+   93px) were right at one width only: OU-01 measured a 76px ghost under a 145px tile, PE-09 115
+   against 103. Middle-aligned blocks shorter than their line never set its height. */
+.skeleton-tile .skeleton {
+  display: inline-block;
+  vertical-align: middle;
 }
 
-.skeleton-tile-bare {
-  min-height: var(--m-stat-tile-bare);
+.skeleton-tile .skeleton-label {
+  margin: 0;
 }
 
 .skeleton-delta {
   width: 50%;
-  height: 0.8rem;
-  margin-top: 0.35rem;
+  height: 0.75em;
 }
 
 .skeleton-strip {

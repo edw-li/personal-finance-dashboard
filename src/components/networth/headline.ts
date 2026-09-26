@@ -1,15 +1,21 @@
 import type { FlowsPartOut, NetWorthSummary } from '../../types/api'
 import { changePhrase, formatAsOf, isMonthStory, storyNote } from '../../utils/asOf'
-import { formatCurrency, formatPct } from '../../utils/format'
+import { formatCurrencyWhole, formatMonth, formatPct } from '../../utils/format'
 import { dayName } from '../../utils/timeWords'
 import { summaryState } from './snapshotStates'
 
 // The net-worth headline's words (2026-09-23 spec §T1, §T7): the Overview's hero tile and the Net
 // worth page's name the balances by the day they describe and the change by what it spans —
-// "Net worth — as of Sep 22" · Provisional · "$126,583.02 (+15.7%) since Sep 1 · 21 days", or
-// "· September: Sep 1 → Oct 1" between two final 1sts. No "MoM" and no month key: an early
-// snapshot's 21 days are not a month, and the change into Oct 1 is September's story, not
-// October's. Pure; the figures are the server's, verbatim.
+// "Net worth — as of Sep 22" · Provisional · "$126,583 (+15.7%) since Sep 1 · 21 days", or
+// "· Sep 1 → Oct 1" between two final 1sts (a tile's line: whole dollars, the two 1sts without their
+// years — 2026-09-25 polish spec §4.3). No "MoM" and no month key: an early snapshot's 21 days are
+// not a month, and the change into Oct 1 is September's story, not October's. Pure; the figures are
+// the server's, verbatim but for the whole-dollar rounding.
+
+/** "Sep 1" — a day without its year: the label above the tile's line names the year. */
+function shortDay(iso: string): string {
+  return `${formatMonth(iso).slice(0, 3)} ${Number(iso.slice(8, 10))}`
+}
 
 export interface NetWorthHeadline {
   label: string
@@ -31,9 +37,15 @@ export function netWorthHeadline(summary: Summary, flowsDue?: readonly FlowsPart
       : `Net worth — as of ${formatAsOf(current)}`
   const previous = summary.previous ?? null
   const period = { period: summary.period ?? 'month' }
-  const phrase = changePhrase(previous, current, period)
   // A month's own story stands apart after a dot; "since …" reads on from the figures.
   const monthStory = isMonthStory(previous, current, period)
+  // A tile's line is a quarter of the row (2026-09-25 polish spec §4.3): a month's story is its two
+  // 1sts alone — "Sep 1 → Oct 1" — where changePhrase's "September: Sep 1, 2025 → Oct 1, 2025" ran to
+  // two lines and moved the row between 111 and 128px as months were picked. Charts keep changePhrase.
+  const phrase =
+    monthStory && previous !== null
+      ? `${shortDay(previous.as_of ?? previous.month)} → ${shortDay(current.as_of ?? current.month)}`
+      : changePhrase(previous, current, period)
   const span = phrase === null ? '' : monthStory ? ` · ${phrase}` : ` ${phrase}`
   // The month the change covers is the previous snapshot's: Sep 1 → Oct 1 is September's story,
   // incomplete while September's spending is listed as due (§0.4(d) storyNote). Only a month's
@@ -41,9 +53,10 @@ export function netWorthHeadline(summary: Summary, flowsDue?: readonly FlowsPart
   // previous snapshot that stayed provisional — is not one month's story.
   const story =
     previous !== null && monthStory ? storyNote(flowsDue?.find((flows) => flows.month === previous.month)) : ''
+  // Whole dollars (spec §4.3): the tile's value keeps the cents.
   const delta =
     summary.mom_delta != null && summary.mom_pct != null
-      ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)})${span}${story}`
+      ? `${formatCurrencyWhole(summary.mom_delta)} (${formatPct(summary.mom_pct)})${span}${story}`
       : undefined
   return { label, badge: current.provisional ? 'Provisional' : undefined, delta }
 }

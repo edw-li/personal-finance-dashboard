@@ -796,13 +796,13 @@ describe('SpendingPage — reviewed-month metrics', () => {
     expect(tileValue('Living spending — Jun 2026')).toBe('$2,750.00')
     const june = screen.getByText('Living spending — Jun 2026').closest('.stat-tile') as HTMLElement
     expect(june.querySelector('.stat-badge')).toBeNull() // a closed month wears no badge
-    expect(june.querySelector('.stat-delta')?.textContent).toBe('Cash outflow $2,750.00 · tax $0.00 · transfers $0.00')
+    expect(june.querySelector('.stat-delta')?.textContent).toBe('No tax or transfers')
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
     expect(await screen.findByText('Where Jul 2026 went')).toBeTruthy()
     expect(tileValue('Living spending — Jul 2026')).toBe('$2,580.00')
     const july = screen.getByText('Living spending — Jul 2026').closest('.stat-tile') as HTMLElement
     expect(july.querySelector('.stat-badge')?.textContent).toBe(REVIEW_LABELS.in_progress)
-    expect(july.querySelector('.stat-delta')?.textContent).toBe('Cash outflow $2,580.00 · tax $0.00 · transfers $0.00')
+    expect(july.querySelector('.stat-delta')?.textContent).toBe('No tax or transfers')
     // T3/L4: no bare line under the tiles and no third door into the wizard.
     expect(document.querySelector('.spending-metric-context')).toBeNull()
     expect(screen.queryByRole('link', { name: 'Review month' })).toBeNull()
@@ -819,12 +819,102 @@ describe('SpendingPage — reviewed-month metrics', () => {
     expect(await screen.findByText('Living spending — Jun 2026')).toBeTruthy()
   })
 
+  // 2026-09-25 polish spec §4.4: the two bare tiles get a real second line — the month before, from the
+  // matrix (up is good for both) — and the row reserves its badge and delta lines (§4.3).
+  it('compares savings and net pay with the month before, and keeps the row steady', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture())
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')
+    // 57.0% against June's 54.2%: 2.8 points up, green.
+    expect(delta('Savings rate — cash')?.textContent).toBe('▲ 2.8 pts vs Jun')
+    expect(delta('Savings rate — cash')?.className).toContain('stat-delta-positive')
+    // $6,000.00 both months.
+    expect(delta('Net pay')?.textContent).toBe('same as Jun')
+    expect(delta('Net pay')?.className).toContain('stat-delta-neutral')
+    expect(screen.getByText('Savings rate — cash').closest('.kpi-row')?.className).toBe('kpi-row kpi-row-steady')
+  })
+
+  it('says a month with nothing before it has nothing to compare', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: '2026-06-01', review_state: ['closed', 'in_progress'] }))
+    renderPage()
+    await screen.findByText('Where Jun 2026 went')
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')
+    expect(delta('Savings rate — cash')?.textContent).toBe('No May to compare')
+    expect(delta('Net pay')?.textContent).toBe('No May to compare')
+  })
+
+  // The glyph carries the direction and the tone the judgement, so the figure is unsigned — "▼ -$859"
+  // said it twice (2026-09-25 polish review).
+  it('prints the net-pay change in whole dollars, unsigned beside its glyph, and toned', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ net_pay: ['6000.00', '5141.25'], savings_rate: ['0.541666667', '0.5'] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')
+    expect(delta('Net pay')?.textContent).toBe('▼ $859 vs Jun')
+    expect(delta('Net pay')?.className).toContain('stat-delta-negative')
+    expect(delta('Savings rate — cash')?.textContent).toBe('▼ 4.2 pts vs Jun')
+  })
+
+  // The server's comparability (matrix.eligible_savings): a month the review has not closed, or a
+  // pay-only month's 100%, is not a savings rate to measure against (2026-09-25 polish review).
+  it('does not compare the savings rate with a month the server calls ineligible', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ eligible_savings: [false, true] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')
+    expect(delta('Savings rate — cash')?.textContent).toBe('No Jun to compare')
+    expect(delta('Savings rate — cash')?.className).toContain('stat-delta-neutral')
+    // Take-home is a figure either way: June's is still the one to compare with.
+    expect(delta('Net pay')?.textContent).toBe('same as Jun')
+  })
+
+  it('says what is missing when this month has no rate of its own — none entered, or a $0 take-home', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ net_pay: ['6000.00', null], savings_rate: ['0.541666667', null] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')
+    expect(delta('Savings rate — cash')?.textContent).toBe('no take-home entered')
+    expect(delta('Net pay')?.textContent).toBe('no take-home entered')
+    cleanup()
+    clearSnapshots()
+    // An ENTERED $0 is a figure, not an absence: the rate is undefined on it, the pay compares.
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ net_pay: ['6000.00', '0.00'], savings_rate: ['0.541666667', null] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(delta('Savings rate — cash')?.textContent).toBe('$0 take-home')
+    expect(delta('Net pay')?.textContent).toBe('▼ $6,000 vs Jun')
+  })
+
+  // Tax and transfers only when there were any (2026-09-25 polish review: "tax $0 · transfers $0" in
+  // every month read as noise); whole dollars.
+  it('names only the outflows the month had', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ tax_total: ['0.00', '5044.00'], transfer_total: ['1200.00', '0.00'] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const living = () => screen.getByText(/^Living spending — /).closest('.stat-tile')?.querySelector('.stat-delta')?.textContent
+    expect(living()).toBe('tax $5,044')
+    cleanup()
+    clearSnapshots()
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ tax_total: ['0.00', '5044.00'], transfer_total: ['0.00', '1200.00'] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(living()).toBe('tax $5,044 · transfers $1,200')
+  })
+
   it('uses the server comparison window and counts eligible months instead of averaging the displayed history', async () => {
     vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ comparison_average: [null, '1234.56'], comparison_count: [0, 4] }))
     renderPage()
     await screen.findByText('Where Jul 2026 went')
     expect(tileValue('Previous 12 months')).toBe('$1,234.56')
     expect(screen.getByText('4 eligible months')).toBeTruthy()
+    cleanup()
+    clearSnapshots()
+    // One is a month, not "1 eligible months" (the first month of the history reads so).
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ comparison_average: [null, '1234.56'], comparison_count: [0, 1] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(screen.getByText('1 eligible month')).toBeTruthy()
   })
 
   it('keeps a measured zero visible and does not substitute all-category totals for unavailable living spending', async () => {

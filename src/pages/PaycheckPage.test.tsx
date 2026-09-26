@@ -312,6 +312,10 @@ function line(label: string): string {
   return term?.nextElementSibling?.textContent ?? ''
 }
 
+// The waterfall's own NET PAY line — the figure also stands in the tile row now (2026-09-25 polish §4.5).
+const netPayShows = (figure: string) => waitFor(() => expect(line('Net pay')).toBe(figure))
+const netPayLanded = () => netPayShows('$3,384.16')
+
 const confirmSpy = vi.spyOn(window, 'confirm')
 
 beforeEach(() => {
@@ -390,7 +394,7 @@ describe('PaycheckPage — the waterfall', () => {
     setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
 
-    expect(await screen.findByText('$3,384.16')).toBeTruthy()
+    await netPayLanded()
     expect(line('Gross')).toBe('$7,872.08')
     expect(line('Traditional 401(k)')).toBe('$1,023.37')
     expect(line('Dental & vision')).toBe('$12.50')
@@ -414,25 +418,32 @@ describe('PaycheckPage — the waterfall', () => {
     expect(vi.mocked(fetchBreakdown).mock.calls[0][0]).toBeUndefined()
   })
 
-  it('names the employer match under the waterfall, outside the pay it adds up', async () => {
+  // 2026-09-25 polish spec §4.5: the match is the Summary row's fourth tile — outside the pay the
+  // waterfall adds up — where a line under the waterfall said it before.
+  it('names the employer match in its own tile, outside the pay it adds up', async () => {
     vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026, { employer_match: '479.17' }))
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    expect(await screen.findByText('Employer match +$479.17 per check, not part of your pay.')).toBeTruthy()
+    const match = (await screen.findByText('Employer match per check')).closest('.stat-tile') as HTMLElement
+    await waitFor(() => expect(match.querySelector('.stat-value')?.textContent).toBe('$479.17'))
+    expect(match.querySelector('.stat-delta')?.textContent).toBe('not part of your pay')
+    // The line under the waterfall said the same thing twice over; the tile says it once.
+    expect(screen.queryByText(/per check, not part of your pay/)).toBeNull()
     cleanup()
     // The second render must start cold: the first render's snapshot still carries the $479.17
-    // match and the same net pay, so awaiting '$3,384.16' could resolve on that cached paint
-    // before the fresh answer lands (a load-sensitive flake, 2026-09-23 integration).
+    // match, so the tile could resolve on that cached paint before the fresh answer lands (a
+    // load-sensitive flake, 2026-09-23 integration).
     clearSnapshots()
-    // No policy, no line — "+$0.00" would be a deduction-shaped nothing.
+    // No policy: the tile says so rather than printing a deduction-shaped "+$0.00".
     vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026, { employer_match: '0.00' }))
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
-    expect(screen.queryByText(/Employer match/)).toBeNull()
+    const none = (await screen.findByText('Employer match per check')).closest('.stat-tile') as HTMLElement
+    await waitFor(() => expect(none.querySelector('.stat-value')?.textContent).toBe('$0.00'))
+    expect(none.querySelector('.stat-delta')?.textContent).toBe('no employer match')
   })
 
   it('marks the net-pay line as the one that counts', async () => {
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
+    await netPayLanded()
 
     const net = screen.getAllByText('Net pay').find((el) => el.tagName === 'DT')
     expect(net?.parentElement?.className).toContain('is-net')
@@ -466,7 +477,7 @@ describe('PaycheckPage — the waterfall', () => {
     await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(2))
     // The id the client turns into ?profile_id= (src/api/paycheck.ts owns the query string).
     expect(vi.mocked(fetchBreakdown).mock.calls[1][0]).toBe(2)
-    expect(await screen.findByText('$2,984.91')).toBeTruthy()
+    await netPayShows('$2,984.91')
     expect(screen.getByText('Per-check breakdown — effective Jan 1, 2025')).toBeTruthy()
     // The profiles list is a separate load: choosing a profile never refetches it.
     expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
@@ -490,7 +501,7 @@ describe('PaycheckPage — the waterfall', () => {
     // (it would light nothing up, or light up the wrong row after a delete).
     vi.mocked(fetchBreakdown).mockResolvedValue(breakdown2025)
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$2,984.91')
+    await netPayShows('$2,984.91')
 
     expect(vi.mocked(fetchBreakdown).mock.calls[0][0]).toBeUndefined()
     fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
@@ -544,7 +555,7 @@ describe('PaycheckPage — the waterfall', () => {
       .mockResolvedValueOnce(breakdownOf(profile2026))
       .mockRejectedValueOnce(new ApiError('breakdown unavailable', 503))
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
+    await netPayLanded()
 
     fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
@@ -557,7 +568,7 @@ describe('PaycheckPage — the waterfall', () => {
       ),
     ).toBeTruthy()
     // Kept, and still named — which is what makes keeping it honest.
-    expect(screen.getByText('$3,384.16')).toBeTruthy()
+    expect(line('Net pay')).toBe('$3,384.16')
     expect(screen.getByText('Per-check breakdown — effective Jan 1, 2026')).toBeTruthy()
   })
 })
@@ -1278,7 +1289,7 @@ describe('PaycheckPage — loading', () => {
     // The write refetches the selection as it is NOW, not the one it closed over when it
     // was submitted — otherwise the resolving promise silently undoes the row press.
     expect(vi.mocked(fetchBreakdown).mock.calls[2][0]).toBe(2)
-    expect(await screen.findByText('$2,984.91')).toBeTruthy()
+    await netPayShows('$2,984.91')
   })
 
   it('lets only the NEWEST of two overlapping breakdowns land', async () => {
@@ -1298,7 +1309,7 @@ describe('PaycheckPage — loading', () => {
     await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(3))
 
     fast.resolve(breakdownOf(profile2026, { net_pay: '2222.22' }))
-    expect(await screen.findByText('$2,222.22')).toBeTruthy()
+    await netPayShows('$2,222.22')
 
     await act(async () => {
       slow.resolve(breakdown2025)
@@ -1306,14 +1317,14 @@ describe('PaycheckPage — loading', () => {
     // The older request answers LAST and must not replace the waterfall the user is
     // looking at — the seq ref, not the network, decides which one is on screen.
     expect(screen.queryByText('$2,984.91')).toBeNull()
-    expect(screen.getByText('$2,222.22')).toBeTruthy()
+    expect(line('Net pay')).toBe('$2,222.22')
   })
 })
 
 describe('PaycheckPage — the flow card', () => {
   it('draws the flow beside the waterfall from the same payload, zero branches omitted', async () => {
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
+    await netPayLanded()
 
     expect(screen.getByText('Where each check goes')).toBeTruthy()
     const marker = screen.getByTestId('echart')
@@ -1337,7 +1348,7 @@ describe('PaycheckPage — the flow card', () => {
       breakdownOf(profile2026, { net_pay: '-120.00' }),
     )
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('-$120.00')
+    await netPayShows('-$120.00')
 
     // The table (which handles negatives fine) stays; the sankey steps aside (spec §4).
     expect(screen.getByText(/deductions exceed pay — see the table/)).toBeTruthy()
@@ -1376,7 +1387,7 @@ describe('PaycheckPage — the flow card', () => {
       }),
     )
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
+    await netPayLanded()
 
     // 2026-09-13 polish spec §12 (audit W1: the waterfall used 41% of a full-width card).
     const grid = document.querySelector('.paycheck-summary-grid') as HTMLElement
@@ -1389,6 +1400,12 @@ describe('PaycheckPage — the flow card', () => {
     // ChartCard mounts through ChartSurface: the grid child is its span-6 slot, the card inside.
     expect(children[1].classList.contains('span-6')).toBe(true)
     expect(children[1].querySelector('.chart-card')?.textContent).toContain('Where each check goes')
+    // The flow's plot FLOOR sits under the breakdown (2026-09-25 polish review): the list is 456px at
+    // 1440 and the flow card 173px of chrome plus its plot, so at 320 the pair stood at the flow's 493
+    // and left a 37px blank band under NET PAY. At 280 (453) the breakdown sets the row and the plot
+    // fills what is left (spec §3.1's fill).
+    expect((children[1].querySelector('.chart-card') as HTMLElement).style.getPropertyValue('--chart-h')).toBe('280px')
+    expect(children[1].querySelector('.chart-card')?.classList.contains('chart-card-fill')).toBe(true)
     // The pace strip is NOT in the grid: it keeps the full width under the pair.
     const pace = screen.getByRole('region', { name: 'Contribution pace' })
     expect(grid.contains(pace)).toBe(false)
@@ -1573,7 +1590,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
 
   it('shows no switcher at all for a one-person household', async () => {
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
+    await netPayLanded()
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
     // Nothing to switch between: a one-option control is not an affordance, it is noise.
     expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
@@ -1602,7 +1619,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     // would ask for one person's profile id under another person's scope.
     fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
-    await screen.findByText('$2,984.91')
+    await netPayShows('$2,984.91')
 
     vi.mocked(fetchBreakdown).mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
@@ -1660,7 +1677,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     vi.mocked(fetchHousehold).mockRejectedValue(new ApiError('household down', 503))
     vi.mocked(fetchProfiles).mockResolvedValue(TWO_PERSON_PROFILES)
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
+    await netPayLanded()
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
 
     // The switcher is an affordance; losing it must cost the chips and nothing else.
@@ -1684,8 +1701,8 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     expect(screen.getByText('$11,999.67')).toBeTruthy()
     // The copy says exactly what was added, so the tile can never be read as a forecast — in
     // the tile's own delta slot now, never a caption on the page background (spec §10).
-    expect(document.querySelector('.paycheck-household .stat-delta')?.textContent).toBe(
-      'Me $6,768.33 · Sam $5,231.34',
+    expect(screen.getByText('Household take-home').closest('.stat-tile')?.querySelector('.stat-delta')?.textContent).toBe(
+      'Me $6,768 · Sam $5,231',
     )
     // Both legs ask for the IN-FORCE profile, so neither carries a profile_id.
     expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id])
@@ -1706,13 +1723,13 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     expect(screen.queryByText('Household take-home')).toBeNull()
     // ...and the failure costs the TILE only — my own waterfall is untouched and no
     // banner is raised, because nothing the page promised has failed.
-    expect(screen.getByText('$3,384.16')).toBeTruthy()
+    expect(line('Net pay')).toBe('$3,384.16')
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('leaves the tile out for a one-person household', async () => {
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
+    await netPayLanded()
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
     expect(screen.queryByText('Household take-home')).toBeNull()
     // The partner legs never fire, so the single-earner page costs exactly one breakdown
@@ -1741,7 +1758,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     // test above is the pre-batch page, unedited. This one states the invariant outright so
     // a future change to the chips cannot leak into the single-earner page unnoticed.
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
-    await screen.findByText('$3,384.16')
+    await netPayLanded()
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
 
     // 1. No switcher, no household tile — nothing to switch between, and one person's net
@@ -1769,10 +1786,10 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     // The legs are the profiles in force: mine at $6,768.33 a month, Sam's at $5,231.34.
     const tile = (await screen.findByText('Household take-home')).closest('.stat-tile') as HTMLElement
     expect(tile.textContent).toContain('$11,999.67')
-    expect(tile.querySelector('.stat-delta')?.textContent).toBe('Me $6,768.33 · Sam $5,231.34')
+    expect(tile.querySelector('.stat-delta')?.textContent).toBe('Me $6,768 · Sam $5,231')
     // The caption that floated under the tile on the page background is gone (spec §10, audit T1).
     expect(screen.queryByText(/the profile in force for each person/)).toBeNull()
-    expect(document.querySelector('.paycheck-household .drill-hint')).toBeNull()
+    expect(document.querySelector('.paycheck-tiles')?.parentElement?.querySelector('.drill-hint')).toBeNull()
   })
 })
 
@@ -1876,5 +1893,44 @@ describe('person switching keeps the rendered check truthful', () => {
     // Sam’s check, never Me’s under Sam’s chip.
     expect(await screen.findByText('Per-check breakdown — effective Mar 1, 2026')).toBeTruthy()
     expect(screen.queryByText('Per-check breakdown — effective Jan 1, 2026')).toBeNull()
+  })
+})
+
+describe('PaycheckPage — the Summary tile row (2026-09-25 polish spec §4.5)', () => {
+  it('lays one row: household take-home, monthly net, net pay and match per check — no tile in the card', async () => {
+    twoEarners()
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByText('Household take-home')
+    const row = document.querySelector('.kpi-row.paycheck-tiles') as HTMLElement
+    await waitFor(() =>
+      expect([...row.querySelectorAll('.stat-label-text')].map((label) => label.textContent)).toEqual([
+        'Household take-home', 'Monthly net', 'Net pay per check', 'Employer match per check',
+      ]),
+    )
+    // The page's headline is the biggest figure (TPC-01): the household, not one person's net.
+    expect(row.querySelector('.stat-tile-hero .stat-label-text')?.textContent).toBe('Household take-home')
+    const monthly = screen.getByText('Monthly net').closest('.stat-tile') as HTMLElement
+    expect(monthly.querySelector('.stat-delta')?.textContent).toBe('Me · 24 checks a year')
+    expect(screen.getByText('Net pay per check').closest('.stat-tile')?.querySelector('.stat-delta')?.textContent).toBe('of $7,872 gross')
+    // No box in a box: the breakdown card holds its list and nothing tile-shaped.
+    expect(screen.getByText(/^Per-check breakdown/).closest('.card')?.querySelector('.stat-tile')).toBeNull()
+  })
+
+  it('makes the monthly net the hero for one person, and names nobody', async () => {
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
+    await netPayLanded()
+    const row = document.querySelector('.kpi-row.paycheck-tiles') as HTMLElement
+    expect(row.querySelectorAll('.stat-tile')).toHaveLength(3)
+    expect(row.querySelector('.stat-tile-hero .stat-label-text')?.textContent).toBe('Monthly net')
+    expect(screen.getByText('Monthly net').closest('.stat-tile')?.querySelector('.stat-delta')?.textContent).toBe('24 checks a year')
+  })
+
+  it('stands the row as ghosts while the check loads, so nothing below moves when it lands (TPC-04)', () => {
+    vi.mocked(fetchBreakdown).mockReturnValue(new Promise(() => {}))
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
+    const row = document.querySelector('.kpi-row.paycheck-tiles') as HTMLElement
+    const ghosts = row.querySelectorAll('.stat-tile.skeleton-tile')
+    expect(ghosts).toHaveLength(3)
+    expect(ghosts[0].classList.contains('stat-tile-hero')).toBe(true)
   })
 })

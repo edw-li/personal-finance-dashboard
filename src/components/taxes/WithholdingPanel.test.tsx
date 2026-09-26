@@ -197,10 +197,21 @@ describe('WithholdingPanel', () => {
     // Every figure is the server's, formatted and never re-derived (global rule 9).
     expect(tile('Projected tax').textContent).toContain('$123,456.78')
     expect(tile('Projected withholding').textContent).toContain('$104,586.58')
-    expect(deltaOf('Projected withholding').textContent).toContain('$69,275.87 so far')
+    expect(deltaOf('Projected withholding').textContent).toContain('$69,276 so far')
     // The withholding tile is a LEVEL with its progress under it: no glyph, no colour.
     expect(deltaOf('Projected withholding').className).toContain('stat-delta-neutral')
     expect(deltaOf('Projected withholding').textContent).not.toContain('▲')
+  })
+
+  // 2026-09-25 polish spec §4.4 (TPC-18): Projected tax was the one tile of three with no second line.
+  it('puts the effective rate under Projected tax', async () => {
+    render(<WithholdingPanel year={2026} effectiveRate="0.273" />)
+    await screen.findByText('$123,456.78')
+    expect(deltaOf('Projected tax').textContent).toBe('27.3% effective')
+    cleanup()
+    render(<WithholdingPanel year={2026} effectiveRate={null} />)
+    await screen.findByText('$123,456.78')
+    expect(deltaOf('Projected tax').textContent).toBe('not computed')
   })
 
   it('nudges toward the paystub rates while the split is unavailable', async () => {
@@ -234,7 +245,7 @@ describe('WithholdingPanel', () => {
     // Payroll is informational: what will be withheld against what is owed, no balance
     // words and nothing to act on.
     expect(tile('Payroll taxes').textContent).toContain('$11,143.50')
-    expect(deltaOf('Payroll taxes').textContent).toContain('$25,753.20 owed')
+    expect(deltaOf('Payroll taxes').textContent).toContain('$25,753 owed')
     // The three combined tiles give way to them; the combined figures keep one line.
     expect(screen.queryByText('Projected balance')).toBeNull()
     expect(

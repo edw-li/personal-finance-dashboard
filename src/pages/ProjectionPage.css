@@ -17,9 +17,21 @@
 }
 
 /* The same declaration panels.css puts on .page, on the same element: NAMED, so the queries below
-   cannot bind to a nearer container (.stat-tile is one) if this sheet ever outlives that rule. */
+   cannot bind to a nearer container (.stat-value is one) if this sheet ever outlives that rule. */
 .projection-page { container: page / inline-size; }
 .projection-outcomes { position: sticky; top: var(--sticky-inset, 0px); z-index: 6; background: var(--bg); padding-block: 8px; }
+/* Pinned (one line of tiles, ≥1000px) the band's own 8px padding is its bottom space: the row spaces
+   its lines with each tile's 16px bottom margin (panels.css, 2026-09-25 polish §4.1), which would stand
+   inside the pinned band and grow it 16px. So there the tiles keep 8px and the band its 1rem below —
+   the band is as tall as before. Unpinned (<1000px, 3 + 2) the shared spacing stands. */
+@container page (width >= 1000px) {
+  .projection-outcomes.kpi-row { padding-bottom: 0; margin-bottom: 1rem; }
+  .projection-outcomes.kpi-row > * { margin-bottom: 8px; }
+  /* Five across, the deltas run two lines (the FI date's two clauses, Money lasts' sentence), so two
+     are reserved: the ghost band (PageSkeleton, same class) stands as tall as the band that lands,
+     and a scenario whose words run shorter does not shrink the pinned band under the chart. */
+  .projection-outcomes .stat-delta { min-height: 2lh; }
+}
 
 .projection-workspace { display: grid; grid-template-columns: minmax(480px, 1fr) 350px; align-items: start; gap: 18px; }
 /* The chart stays in view while every knob is reachable (spec §12, audit P-2: the old inner
@@ -46,18 +58,8 @@
   .projection-outcomes { position: static; }
   .projection-chart-area { top: calc(var(--sticky-inset, 0px) + 8px); }
 }
-/* …and in that band the five tiles are a balanced 3 + 2, not 4 + 1 (batch 2 final verification D5):
-   a 1280 window gives the page ~990px, where the shared auto-fit takes four 200px tracks and left
-   "Money lasts" alone on a second row. Five across does not fit there — "Investable balance ⓘ"
-   runs past a 185px tile and every value shrinks to ~15px. Six tracks: each tile spans two, the
-   last two span three, so both rows fill the width. From 660px, where a two-track tile still holds
-   that label; below it the shared auto-fit takes over. The compound selector outranks panels.css's
-   .kpi-row-5 wherever either is written. */
-@container page (min-width: 660px) and (max-width: 999px) {
-  .projection-outcomes.kpi-row-5 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .projection-outcomes > * { grid-column: span 2; }
-  .projection-outcomes > :nth-child(n + 4) { grid-column: span 3; }
-}
+/* …and in that band the five tiles are a balanced 3 + 2 — panels.css's rule for every five-tile row
+   now (2026-09-25 polish spec §4.2), the one this sheet used to keep for itself. */
 .projection-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
 .projection-assumptions { min-width: 0; }
 .projection-assumptions .sandbox-card { padding: 16px; }

@@ -42,18 +42,23 @@ describe('ProjectionPage.css — the sticky chart column', () => {
   })
 })
 
-describe('ProjectionPage.css — the outcomes band on a laptop (batch 2 final verification D5)', () => {
-  // A 1280 window gives this page ~990px, where the shared .kpi-row-5 auto-fits four 200px tracks
-  // and left "Money lasts" alone on a second row. Five across does not fit there — "Investable
-  // balance ⓘ" runs past a 185px tile and every value shrinks to ~15px — so from 660px (where a
-  // two-track tile still holds that label) to 999px the band is a balanced 3 + 2 on six tracks: each
-  // tile spans two, the last two span three. jsdom resolves no container query, so the rules are
-  // what can be pinned.
-  it('lays the five outcomes out 3 + 2 on six tracks between 660 and 999px of page', () => {
-    const block = at(/@container page \(min-width: 660px\) and \(max-width: 999px\) \{/, '660-999px container block')
+describe('ProjectionPage.css — the outcomes band (2026-09-25 polish spec §4.2)', () => {
+  // The 3 + 2 rule this sheet kept for itself (batch 2 final verification D5) lives in panels.css for
+  // every five-tile row now — tileRowCss.test.ts pins it there.
+  it('keeps no local copy of the five-tile layout', () => {
+    expect(css).not.toContain('repeat(6, minmax(0, 1fr))')
+    expect(css).not.toMatch(/\.projection-outcomes > :nth-child/)
+  })
+
+  // Pinned, the band's own 8px padding is its bottom space: the tiles' 16px line margin (panels.css)
+  // would stand inside the pinned band and grow it, so there the tiles keep 8px and the band 1rem.
+  it('keeps the pinned band as tall as its one line plus 8px each side', () => {
+    const block = at(/@container page \(width >= 1000px\) \{/, '>=1000px container block')
     const body = css.slice(block, css.indexOf('\n}', block))
-    expect(body).toMatch(/\.projection-outcomes\.kpi-row-5 \{[^}]*grid-template-columns: repeat\(6, minmax\(0, 1fr\)\);/)
-    expect(body).toMatch(/\.projection-outcomes > \* \{[^}]*grid-column: span 2;/)
-    expect(body).toMatch(/\.projection-outcomes > :nth-child\(n \+ 4\) \{[^}]*grid-column: span 3;/)
+    expect(body).toMatch(/\.projection-outcomes\.kpi-row \{[^}]*padding-bottom: 0;[^}]*margin-bottom: 1rem;/)
+    expect(body).toMatch(/\.projection-outcomes\.kpi-row > \* \{[^}]*margin-bottom: 8px;/)
+    // Pinned, its deltas run two lines (the FI date's two clauses, Money lasts' sentence): two are
+    // reserved, so the ghost band stands as tall as the band that lands (19px short before).
+    expect(body).toMatch(/\.projection-outcomes \.stat-delta \{[^}]*min-height: 2lh;/)
   })
 })

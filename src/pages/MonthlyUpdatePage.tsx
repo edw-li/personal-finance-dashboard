@@ -94,7 +94,7 @@ import type {
 } from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import { canonicalAmount, isAmount } from '../utils/amount'
-import { formatCurrency, formatMonth, formatPct } from '../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatMonth, formatPct, outflowsLine } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import { useProductToday } from '../utils/productToday'
 import { classifyPaste, matchLabel } from '../utils/paste'
@@ -2295,19 +2295,23 @@ function MonthlyUpdateWizard() {
               <StatTile
                 label="Living spending"
                 value={formatCurrency(preview.livingSpend)}
+                // Its second line (2026-09-25 polish spec §4.4): living as a share of take-home.
+                delta={preview.netPay !== null && preview.netPay > 0 ? `${formatPct(preview.livingSpend / preview.netPay, { signed: false })} of take-home` : 'enter household take-home to compare'}
+                tone="neutral"
                 hint="Living categories only — tax paid from take-home and transfers are counted apart."
               />
               <StatTile
                 label="Cash outflow"
                 value={formatCurrency(preview.cashSpend)}
-                delta={`tax ${formatCurrency(preview.taxSpend)} · transfers ${formatCurrency(preview.transfers)}`}
+                // The month's other outflows, as Spending's Living tile words them (utils/format outflowsLine).
+                delta={outflowsLine(preview.taxSpend, preview.transfers)}
                 tone="neutral"
                 hint="Living spending plus tax paid from take-home. Transfers to your own accounts stayed yours and are listed, not counted."
               />
               <StatTile
                 label="Cash saved"
                 value={preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
-                delta={preview.netPay === null || preview.cashSaved === null ? 'enter household take-home to measure' : `${formatCurrency(preview.cashSaved)} of ${formatCurrency(preview.netPay)} take-home`}
+                delta={preview.netPay === null || preview.cashSaved === null ? 'enter household take-home to measure' : `${formatCurrencyWhole(preview.cashSaved)} of ${formatCurrencyWhole(preview.netPay)} take-home`}
                 tone="neutral"
                 hint="(take-home − living − tax) ÷ take-home — the cash rate the Spending page reports for the month."
               />

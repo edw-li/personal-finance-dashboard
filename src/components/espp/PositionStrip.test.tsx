@@ -43,7 +43,7 @@ describe('PositionStrip', () => {
     render(<PositionStrip lots={null} lotsBusy modeler={null} modelerBusy modelerDirty={false} />)
     expect(screen.getByRole('status').textContent).toBe(STRIP_LABEL)
     expect(ghosts().length).toBe(5)
-    expect(document.querySelector('.kpi-row-lone')).toBeNull()
+    expect(document.querySelector('.kpi-row')?.classList.contains('kpi-row-5')).toBe(true)
   })
 
   it('paints the four lot tiles and ghosts the $25k slot until the modeler lands', () => {
@@ -68,7 +68,7 @@ describe('PositionStrip', () => {
     expect(document.querySelector('.is-loading')).toBeNull()
     const tile = screen.getByText('$25k limit used — 2024').closest('.stat-tile') as HTMLElement
     expect(tile.textContent).toContain('$18,917.13')
-    expect(tile.textContent).toContain('$6,082.87 left')
+    expect(tile.textContent).toContain('$6,083 left')
     // Five tiles, one row at 1440 (2026-09-13 polish spec §12; audit W2 — the fifth wrapped alone).
     expect(document.querySelector('.kpi-row')?.classList.contains('kpi-row-5')).toBe(true)
   })
@@ -108,7 +108,7 @@ describe('PositionStrip', () => {
     for (const label of ['Market value', 'Cost basis', 'Unrealized gain', 'Shares held']) {
       const tile = screen.getByText(label).closest('.stat-tile') as HTMLElement
       expect(tile.querySelector('.stat-value')?.textContent).toBe('—')
-      expect(tile.querySelector('.stat-delta')).toBeNull()
+      expect(tile.querySelector('.stat-delta')?.textContent).toBe('')
     }
     expect(screen.getByText('$25k limit used — 2024').closest('.stat-tile')?.textContent).toContain('$18,917.13')
   })
@@ -120,7 +120,7 @@ describe('PositionStrip', () => {
     // No payload, so no year to name it by.
     const tile = screen.getByText('$25k limit used').closest('.stat-tile') as HTMLElement
     expect(tile.querySelector('.stat-value')?.textContent).toBe('—')
-    expect(tile.querySelector('.stat-delta')).toBeNull()
+    expect(tile.querySelector('.stat-delta')?.textContent).toBe('')
     expect(screen.getByText('Market value').closest('.stat-tile')?.textContent).toContain('$85,826.31')
   })
 
@@ -128,5 +128,21 @@ describe('PositionStrip', () => {
     render(<PositionStrip lots={lots} lotsBusy modeler={modeler} modelerBusy={false} modelerDirty />)
     expect(document.querySelector('.loading-dim.is-loading')).not.toBeNull()
     expect(screen.getByText(/Unsaved period edits below/).className).toBe('drill-hint')
+  })
+
+  // 2026-09-25 polish spec §4.4: the quote the strip is priced at, and what a held share cost — the two
+  // tiles that stood bare beside three with second lines.
+  it('puts the quote under Market value and the average cost under Cost basis', () => {
+    render(<PositionStrip lots={lots} lotsBusy={false} modeler={modeler} modelerBusy={false} modelerDirty={false} />)
+    const delta = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-delta')?.textContent
+    expect(delta('Market value')).toBe('NVDA $171.31')
+    expect(delta('Cost basis')).toBe('avg $41.23 / sh')
+    // Whole dollars in a tile's delta (§4.3); the value keeps its cents.
+    expect(delta('$25k limit used — 2024')).toBe('$6,083 left')
+  })
+
+  it('ghosts the strip as its own five-tile row', () => {
+    render(<PositionStrip lots={null} lotsBusy modeler={null} modelerBusy modelerDirty={false} />)
+    expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row kpi-row-5')
   })
 })

@@ -35,25 +35,25 @@ describe('netWorthHeadline — the tile names its balances by date (2026-09-23 s
     expect(netWorthHeadline(PROVISIONAL)).toEqual({
       label: 'Net worth — as of Sep 22',
       badge: 'Provisional',
-      delta: '$126,583.02 (+15.7%) since Sep 1 · 21 days',
+      delta: '$126,583 (+15.7%) since Sep 1 · 21 days',
     })
   })
 
-  it('a final snapshot, consecutive: the month the change covers, in the user’s own words', () => {
+  it('a final snapshot, consecutive: the change and its two 1sts, a tile’s line long', () => {
     expect(netWorthHeadline(FINAL)).toEqual({
       label: 'Net worth — as of Oct 1',
       badge: undefined,
-      delta: '$126,583.02 (+15.7%) · September: Sep 1 → Oct 1',
+      delta: '$126,583 (+15.7%) · Sep 1 → Oct 1',
     })
   })
 
   it('adds the month’s story while its spending is listed as due', () => {
     expect(netWorthHeadline(FINAL, [flowsPart('2026-09-01', { spending: 'partial' })]).delta).toBe(
-      '$126,583.02 (+15.7%) · September: Sep 1 → Oct 1 · spending not complete yet',
+      '$126,583 (+15.7%) · Sep 1 → Oct 1 · spending not complete yet',
     )
     expect(netWorthHeadline(FINAL, [flowsPart('2026-09-01')]).delta).toMatch(/ · spending not entered yet$/)
     expect(netWorthHeadline(FINAL, [flowsPart('2026-08-01')]).delta).toBe(
-      '$126,583.02 (+15.7%) · September: Sep 1 → Oct 1',
+      '$126,583 (+15.7%) · Sep 1 → Oct 1',
     )
   })
 
@@ -64,14 +64,14 @@ describe('netWorthHeadline — the tile names its balances by date (2026-09-23 s
   it('rides only a month’s story — never a "since …" span', () => {
     setServerToday('2026-10-03')
     const septemberPartial = [flowsPart('2026-09-01', { spending: 'partial' })]
-    expect(netWorthHeadline(PROVISIONAL, septemberPartial).delta).toBe('$126,583.02 (+15.7%) since Sep 1 · 21 days')
+    expect(netWorthHeadline(PROVISIONAL, septemberPartial).delta).toBe('$126,583 (+15.7%) since Sep 1 · 21 days')
     const gap = { ...FINAL, previous: { ...SEP1, month: '2026-08-01', as_of: '2026-08-01' } }
-    expect(netWorthHeadline(gap, [flowsPart('2026-08-01')]).delta).toBe('$126,583.02 (+15.7%) since Aug 1 · 2 months')
+    expect(netWorthHeadline(gap, [flowsPart('2026-08-01')]).delta).toBe('$126,583 (+15.7%) since Aug 1 · 2 months')
   })
 
   it('names a gap in months, and a change from balances that stayed provisional', () => {
     const gap = { ...FINAL, previous: { ...SEP1, month: '2026-08-01', as_of: '2026-08-01' } }
-    expect(netWorthHeadline(gap).delta).toBe('$126,583.02 (+15.7%) since Aug 1 · 2 months')
+    expect(netWorthHeadline(gap).delta).toBe('$126,583 (+15.7%) since Aug 1 · 2 months')
     setServerToday('2026-11-05')
     const stayed = {
       ...FINAL,
@@ -81,13 +81,13 @@ describe('netWorthHeadline — the tile names its balances by date (2026-09-23 s
       previous: OCT1_EARLY,
     }
     expect(netWorthHeadline(stayed).delta).toBe(
-      '$126,583.02 (+15.7%) since Sep 22 · 40 days (Oct 1 balances stayed provisional)',
+      '$126,583 (+15.7%) since Sep 22 · 40 days (Oct 1 balances stayed provisional)',
     )
   })
 
   it('reads "since Jul 1" at the quarterly grain', () => {
     const quarter = { ...FINAL, month: '2026-09-01', as_of: '2026-09-01', period: 'quarter' as const, previous: { ...SEP1, month: '2026-06-01', as_of: '2026-06-01' } }
-    expect(netWorthHeadline(quarter).delta).toBe('$126,583.02 (+15.7%) since Jun 1')
+    expect(netWorthHeadline(quarter).delta).toBe('$126,583 (+15.7%) since Jun 1')
   })
 
   it('drops the delta whole when either half is missing, and says nothing more on an empty book', () => {
@@ -101,12 +101,32 @@ describe('netWorthHeadline — the tile names its balances by date (2026-09-23 s
 
   it('reads a summary without the date fields as final, as of its 1st (a replayed cache)', () => {
     const older: NetWorthSummary = { month: '2026-08-01', net_worth: '1.00', mom_delta: '1.00', mom_pct: '0.5', groups: [], owner_totals: [] }
-    expect(netWorthHeadline(older)).toEqual({ label: 'Net worth — as of Aug 1', badge: undefined, delta: '$1.00 (+50.0%)' })
+    expect(netWorthHeadline(older)).toEqual({ label: 'Net worth — as of Aug 1', badge: undefined, delta: '$1 (+50.0%)' })
   })
 
   it('says a snapshot’s date is unknown rather than inventing one', () => {
     const ahead = { ...PROVISIONAL, month: '2026-10-01', as_of: null, recorded_on: null }
     expect(netWorthHeadline(ahead).label).toBe('Net worth — Oct 1 balances, date unknown')
+  })
+
+  // A quarter of the row at 1440 is 239px (2026-09-25 polish spec §4.3): "· September: Sep 1, 2023 → Oct 1,
+  // 2023" measured 324px and moved the Net worth row between 111 and 128px as months were picked. The
+  // label above names the year; the tile's line names the two 1sts.
+  it('drops the month name and the years from a past month’s story — the label carries the year', () => {
+    const past: NetWorthSummary = {
+      ...FINAL,
+      month: '2023-10-01',
+      as_of: '2023-10-01',
+      recorded_on: '2023-10-01',
+      mom_delta: '5309.08',
+      mom_pct: '0.063',
+      previous: { month: '2023-09-01', as_of: '2023-09-01', recorded_on: '2023-09-01', provisional: false },
+    }
+    expect(netWorthHeadline(past)).toEqual({
+      label: 'Net worth — as of Oct 1, 2023',
+      badge: undefined,
+      delta: '$5,309 (+6.3%) · Sep 1 → Oct 1',
+    })
   })
 })
 

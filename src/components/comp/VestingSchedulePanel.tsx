@@ -3,7 +3,7 @@ import ChartCard from '../ChartCard'
 import StatTile from '../StatTile'
 import { useChartDecals } from '../useChartDecals'
 import type { VestDayOut, VestingScheduleOut, VestOut } from '../../types/api'
-import { formatCurrency, formatDate, formatShares } from '../../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatDate, formatShares } from '../../utils/format'
 import { todayIso } from '../../utils/months'
 import { vestingChartOption, vestingCsv, vestingTotals } from './vestingChartOptions'
 
@@ -124,14 +124,14 @@ export function VestingTiles({ schedule }: { schedule: VestingScheduleOut }) {
         delta={
           nextVest === null
             ? undefined
-            : `${formatShares(nextVest.shares)} sh · ${formatCurrency(nextVest.est_value)}`
+            : `${formatShares(nextVest.shares)} sh · ${formatCurrencyWhole(nextVest.est_value)}`
         }
         hint={`The next vest date across every grant, all of its tranches summed and valued at ${quoteSource} — the same row the table badges.`}
       />
       <StatTile
         label="Unvested"
         value={`${formatShares(tiles.unvested_shares)} sh`}
-        delta={formatCurrency(tiles.unvested_value)}
+        delta={formatCurrencyWhole(tiles.unvested_value)}
         hint={`Every share not yet vested, valued at ${quoteSource}.`}
       />
       <StatTile
@@ -142,7 +142,7 @@ export function VestingTiles({ schedule }: { schedule: VestingScheduleOut }) {
         delta={
           tiles.vested_this_year_income === null
             ? undefined
-            : formatCurrency(tiles.vested_this_year_income)
+            : formatCurrencyWhole(tiles.vested_this_year_income)
         }
         hint="This year's vests, each valued at its own vest-date close — the priced subset only."
       />

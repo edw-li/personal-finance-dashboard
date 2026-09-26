@@ -3,6 +3,8 @@ import {
   escapeHtml,
   formatCurrency,
   formatCurrencyCompact,
+  formatCurrencyWhole,
+  outflowsLine,
   formatBytes,
   formatDate,
   formatDateTime,
@@ -159,5 +161,51 @@ describe('localDateKey / formatInstantDate', () => {
     expect(localDateKey('not a date')).toBeNull()
     expect(formatInstantDate(null)).toBe('—')
     expect(formatInstantDate('not a date')).toBe('—')
+  })
+})
+
+// A stat tile's delta amount (2026-09-25 polish spec §4.3): whole dollars, while the tile's value
+// keeps its cents.
+describe('formatCurrencyWhole', () => {
+  it('rounds a server decimal string to whole dollars, signed the way formatCurrency signs', () => {
+    expect(formatCurrencyWhole('126583.02')).toBe('$126,583')
+    expect(formatCurrencyWhole('-2911.11')).toBe('-$2,911')
+    expect(formatCurrencyWhole(1234.5)).toBe('$1,235')
+    expect(formatCurrencyWhole('-1.5')).toBe('-$2')
+  })
+
+  // A tile's glyph and colour are read from the unrounded figure (utils/tone.ts), so a rounded "$0"
+  // under a green ▲ would claim a movement and print none. Under a dollar the round is a lie
+  // (formatCurrencyCompact's precedent): the cents stay; exact zero keeps its bare "$0".
+  it('keeps the cents under a dollar, and prints exact zero as "$0"', () => {
+    expect(formatCurrencyWhole('-0.49')).toBe('-$0.49')
+    expect(formatCurrencyWhole('0.49')).toBe('$0.49')
+    expect(formatCurrencyWhole('-0.5')).toBe('-$0.50')
+    expect(formatCurrencyWhole(0.999)).toBe('$1.00')
+    expect(formatCurrencyWhole(0)).toBe('$0')
+    expect(formatCurrencyWhole('-0.00')).toBe('$0')
+  })
+
+  it('dashes a missing figure, like formatCurrency', () => {
+    expect(formatCurrencyWhole(null)).toBe('—')
+    expect(formatCurrencyWhole(undefined)).toBe('—')
+    expect(formatCurrencyWhole('')).toBe('—')
+  })
+})
+
+// A month's other outflows under a tile (2026-09-25 polish review): Spending's Living spending and the
+// Review's Cash outflow say the same thing the same way — each named only when the month had it.
+describe('outflowsLine', () => {
+  it('names only the outflows a month had, in whole dollars', () => {
+    expect(outflowsLine('5044.00', '0.00')).toBe('tax $5,044')
+    expect(outflowsLine(0, 1200)).toBe('transfers $1,200')
+    expect(outflowsLine('5044.00', '1200.40')).toBe('tax $5,044 · transfers $1,200')
+    expect(outflowsLine('-12.00', 0)).toBe('tax -$12') // a refund is still a figure the month had
+  })
+
+  it('says so when there was neither, and counts a missing figure as none', () => {
+    expect(outflowsLine('0.00', '0.00')).toBe('No tax or transfers')
+    expect(outflowsLine(0, 0)).toBe('No tax or transfers')
+    expect(outflowsLine(null, undefined)).toBe('No tax or transfers')
   })
 })

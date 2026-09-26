@@ -753,6 +753,12 @@
   margin-top: 1.1rem;
 }
 
+/* Under the totals' tile row, whose tiles already leave the grid gap below them and no longer collapse
+   with this margin (panels.css .kpi-row): only the rest of the 1.1rem. */
+.kpi-row + .tax-jurisdiction-detail {
+  margin-top: calc(1.1rem - var(--density-grid-gap));
+}
+
 /* --- the year menu (TaxYearMenu, in the frame's actions slot) --- */
 
 /* The create row that used to be TaxesPage.css's .new-year-form, moved here WITH the form: the

@@ -1424,6 +1424,16 @@ describe('PortfolioPage — card vocabulary', () => {
 
 // ── Tiles per view (2026-09-13 polish §12, S1/S7) ────────────────────────────────────────
 describe('PortfolioPage — tiles per view', () => {
+  // 2026-09-25 polish spec §4.3/§4.4: Cost basis says how many holdings it covers; deltas are whole dollars.
+  it('counts the holdings under Cost basis and prints tile deltas in whole dollars', async () => {
+    renderPage()
+    await screen.findByText('Portfolio value')
+    const delta = (label: string) => screen.getByText(label, { selector: '.stat-label-text' }).closest('.stat-tile')?.querySelector('.stat-delta')?.textContent
+    expect(delta('Cost basis')).toBe('1 holding')
+    expect(delta('Portfolio value')).toMatch(/^▲ \$10 today \(/)
+    expect(delta('Dividend entries')).toBe('$60/yr expected')
+  })
+
   it('shows the five tiles on Overview, Holdings and Allocation, and none on Income or Manage', async () => {
     renderPage()
     await screen.findByText('Portfolio value')

@@ -24,7 +24,7 @@ const ready = (s: NetWorthSummary) => ({ status: 'ready' as const, summary: s, b
 describe("monthStory (2026-09-23 spec §M5)", () => {
   it('a final next 1st: the change from this 1st to the next', () => {
     const story = monthStory('2026-09-01', ready(summary({})))
-    expect(story.text).toBe("September's change: ▲ $126,583.02 (Sep 1 → Oct 1)")
+    expect(story.text).toBe("September's change: ▲ $126,583 (Sep 1 → Oct 1)")
     expect(story.tone).toBe('positive')
     expect(story.title).toBe('Largest balance changes · Sep 1 → Oct 1')
     expect(story.to).toEqual({ 1: '10.00' })
@@ -33,17 +33,25 @@ describe("monthStory (2026-09-23 spec §M5)", () => {
 
   it('a provisional next 1st reads to its as-of day', () => {
     expect(monthStory('2026-09-01', ready(summary({ as_of: '2026-09-22', provisional: true }))).text).toBe(
-      "September's change: ▲ $126,583.02 (Sep 1 → Sep 22 · provisional)",
+      "September's change: ▲ $126,583 (Sep 1 → Sep 22 · provisional)",
     )
   })
 
   it('a fall reads ▼ with its sign; no change reads a clean zero', () => {
     const fall = monthStory('2026-09-01', ready(summary({ mom_delta: '-1000.00' })))
-    expect(fall.text).toBe("September's change: ▼ -$1,000.00 (Sep 1 → Oct 1)")
+    expect(fall.text).toBe("September's change: ▼ -$1,000 (Sep 1 → Oct 1)")
     expect(fall.tone).toBe('negative')
     const flat = monthStory('2026-09-01', ready(summary({ mom_delta: '-0.001' })))
-    expect(flat.text).toBe("September's change: ▲ $0.00 (Sep 1 → Oct 1)")
+    expect(flat.text).toBe("September's change: ▲ $0 (Sep 1 → Oct 1)")
     expect(flat.tone).toBeNull()
+  })
+
+  // Whole dollars, but never a coloured "▼ $0" (2026-09-25 polish review): a move under a dollar keeps
+  // its cents, so the glyph and the tone never point at a figure that reads as nothing.
+  it('keeps the cents of a move under a dollar', () => {
+    const small = monthStory('2026-09-01', ready(summary({ mom_delta: '-0.40' })))
+    expect(small.text).toBe("September's change: ▼ -$0.40 (Sep 1 → Oct 1)")
+    expect(small.tone).toBe('negative')
   })
 
   it('no next 1st yet', () => {

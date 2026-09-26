@@ -694,6 +694,20 @@ afterEach(() => {
 })
 
 describe('OverviewPage tiles', () => {
+  // 2026-09-25 polish spec §4.3/§4.6 (OU-01): the row reserves its badge and delta lines, and while a
+  // group loads its slot is a ghost set in the real lines — the hero's in the hero's size — so the
+  // row stands at its landed height from the first paint (76px ghosts under 145px tiles before).
+  it('stands a steady row of ghosts at the landed geometry while the groups load', () => {
+    serve()
+    vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
+    renderPage()
+    const row = document.querySelector('.kpi-row') as HTMLElement
+    expect(row.className).toBe('kpi-row kpi-row-steady')
+    const ghost = row.querySelector('.stat-tile.skeleton-tile') as HTMLElement
+    expect(ghost.classList.contains('stat-tile-hero')).toBe(true)
+    expect(ghost.querySelector('.skeleton-delta')).not.toBeNull()
+  })
+
   it('renders the four tiles from one snapshot', async () => {
     // Seeded so the paint is a CACHED one: the hero's count-up (spec §8) runs on fresh
     // paints only, and a settling number is not a string this test can pin. The revalidation
@@ -709,7 +723,7 @@ describe('OverviewPage tiles', () => {
     // the tone class carry direction, and formatPct signs the percent.
     // What the change spans, in the user's own words — never "MoM" (2026-09-23 spec §T1).
     expect(deltaOf(hero)?.textContent).toBe(
-      `▲ $10,000.00 (+0.8%) · July: ${dayName('2026-07-01')} → ${dayName('2026-08-01')}`,
+      '▲ $10,000 (+0.8%) · Jul 1 → Aug 1',
     )
     expect(deltaOf(hero)?.className).toContain('stat-delta-positive')
     expect(hero.className).toContain('stat-tile-hero')
@@ -721,7 +735,7 @@ describe('OverviewPage tiles', () => {
     const portfolio = tileFor('Portfolio')
     expect(valueOf(portfolio)).toBe('$812,345.67')
     expect(deltaOf(portfolio)?.textContent).toBe(
-      `▼ -$2,500.00 (-0.3%) on ${formatDate(daysAgo(1))}`,
+      `▼ -$2,500 (-0.3%) on ${formatDate(daysAgo(1))}`,
     )
     expect(deltaOf(portfolio)?.className).toContain('stat-delta-negative')
 
@@ -731,7 +745,7 @@ describe('OverviewPage tiles', () => {
     // rose. Direction × whether-up-is-good is the caller's job — StatTile.
     const spending = tileFor('Living spending')
     expect(valueOf(spending)).toBe('$6,000.00')
-    expect(deltaOf(spending)?.textContent).toBe('▲ over $5,000.00 previous 12-mo average · Jul 2026')
+    expect(deltaOf(spending)?.textContent).toBe('▲ over $5,000 12-mo avg · Jul 2026')
     expect(deltaOf(spending)?.className).toContain('stat-delta-negative')
 
     const tax = tileFor(`Estimated tax — ${CURRENT_YEAR} (est.)`)
@@ -753,7 +767,7 @@ describe('OverviewPage tiles', () => {
 
     const hero = tileFor(HERO)
     expect(valueOf(hero)).toBe('$1,234,567.00')
-    expect(deltaOf(hero)).toBeNull()
+    expect(deltaOf(hero)?.textContent).toBe('')
     // Not the amount alone, either — the whole delta node is gone.
     expect(screen.queryByText(/\$100\.00/)).toBeNull()
   })
@@ -764,7 +778,7 @@ describe('OverviewPage tiles', () => {
     serve({ holdings: holdingsOut({ as_of: fresh, latest_quote_at: fresh }) })
     renderPage()
     await screen.findByText(HERO)
-    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500.00 (-0.3%) today')
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500 (-0.3%) today')
   })
 
   it('dates the portfolio delta from the NEWEST quote, not the oldest', async () => {
@@ -774,7 +788,7 @@ describe('OverviewPage tiles', () => {
     renderPage()
     await screen.findByText(HERO)
     expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe(
-      `▼ -$2,500.00 (-0.3%) on ${formatDate(daysAgo(3))}`,
+      `▼ -$2,500 (-0.3%) on ${formatDate(daysAgo(3))}`,
     )
   })
 
@@ -784,7 +798,7 @@ describe('OverviewPage tiles', () => {
     await screen.findByText(HERO)
     // Not "today": with nothing quoted there is no day to name, so the word is omitted
     // rather than guessed (review round).
-    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500.00 (-0.3%)')
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500 (-0.3%)')
   })
 
   it('drops the portfolio delta when the day change has an amount but no rate', async () => {
@@ -795,7 +809,7 @@ describe('OverviewPage tiles', () => {
 
     const portfolio = tileFor('Portfolio')
     expect(valueOf(portfolio)).toBe('$812,345.67')
-    expect(deltaOf(portfolio)).toBeNull()
+    expect(deltaOf(portfolio)?.textContent).toBe('')
     expect(screen.queryByText(/today/)).toBeNull()
   })
 
@@ -806,7 +820,7 @@ describe('OverviewPage tiles', () => {
     const tile = await spendingTileShowing('$4,000.00')
     // The mirror of the case above: the number went DOWN (▼) and that is GOOD (green,
     // "under"). Same decoupling, opposite signs — here glyph and tone happen to agree.
-    expect(deltaOf(tile)?.textContent).toBe('▼ under $5,000.00 previous 12-mo average · Jul 2026')
+    expect(deltaOf(tile)?.textContent).toBe('▼ under $5,000 12-mo avg · Jul 2026')
     expect(deltaOf(tile)?.className).toContain('stat-delta-positive')
   })
 
@@ -825,7 +839,7 @@ describe('OverviewPage tiles', () => {
     const tile = await spendingTileShowing('$6,000.00')
     // Counted at full weight the eleven priors average $4,545.45; with June out they are
     // the ten real months, and the comparison is the $5,000.00 the household actually spends.
-    expect(deltaOf(tile)?.textContent).toBe('▲ over $5,000.00 previous 12-mo average · Jul 2026')
+    expect(deltaOf(tile)?.textContent).toBe('▲ over $5,000 12-mo avg · Jul 2026')
   })
 
   it('says nothing about a cashflow-only trailing month', async () => {
@@ -841,7 +855,7 @@ describe('OverviewPage tiles', () => {
 
     const tile = tileFor('Living spending')
     expect(valueOf(tile)).toBe('—')
-    expect(deltaOf(tile)).toBeNull()
+    expect(deltaOf(tile)?.textContent).toBe('')
     expect(screen.queryByText(/12-mo avg/)).toBeNull()
   })
 
@@ -864,7 +878,7 @@ describe('OverviewPage tiles', () => {
     serve({ matrix: matrixOut({ totals: Array<string>(12).fill('0.00'), comparison_average: Array<string>(12).fill('0.00') }) })
     renderPage()
     const tile = await spendingTileShowing('$0.00')
-    expect(deltaOf(tile)?.textContent).toBe('at $0.00 previous 12-mo average · Jul 2026')
+    expect(deltaOf(tile)?.textContent).toBe('at $0 12-mo avg · Jul 2026')
     expect(deltaOf(tile)?.className).toContain('stat-delta-neutral')
   })
 
@@ -1209,7 +1223,7 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     await screen.findByText('Net worth — as of Sep 22')
     const hero = tileFor('Net worth — as of Sep 22')
     expect(hero.textContent).toContain('Provisional')
-    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583.02 (+15.7%) since Sep 1 · 21 days')
+    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583 (+15.7%) since Sep 1 · 21 days')
     expect(screen.queryByText(/MoM/)).toBeNull()
   })
 
@@ -1226,7 +1240,7 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     expect(hero.textContent).not.toContain('Provisional')
     await waitFor(() =>
       expect(deltaOf(hero)?.textContent).toBe(
-        '▲ $126,583.02 (+15.7%) · September: Sep 1 → Oct 1 · spending not complete yet',
+        '▲ $126,583 (+15.7%) · Sep 1 → Oct 1 · spending not complete yet',
       ),
     )
   })
@@ -1248,7 +1262,7 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     await screen.findByText('Net worth — as of Oct 1')
     const hero = tileFor('Net worth — as of Oct 1')
     expect(hero.textContent).not.toContain('Provisional')
-    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583.02 (+15.7%) since Aug 1 · 2 months')
+    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583 (+15.7%) since Aug 1 · 2 months')
   })
 
   it('carries the as-of date, the provisional completeness and the reason on its receipt', async () => {
@@ -1274,7 +1288,7 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     seedOverview(snapshotOf(serve({ summary: EARLY })), 1)
     renderPage('/?owner=1')
     await screen.findByText('Net worth — as of Sep 22')
-    expect(deltaOf(tileFor('Net worth — as of Sep 22'))?.textContent).toBe('▲ $126,583.02 (+15.7%) since Sep 1 · 21 days')
+    expect(deltaOf(tileFor('Net worth — as of Sep 22'))?.textContent).toBe('▲ $126,583 (+15.7%) since Sep 1 · 21 days')
   })
 })
 
@@ -1453,9 +1467,9 @@ describe('OverviewPage on an empty database', () => {
     await screen.findByText(/No tax inputs are stored for 2031/)
     const hero = within(document.querySelector('.kpi-row') as HTMLElement).getByText('Net worth')
     expect(valueOf(hero.closest('.stat-tile') as HTMLElement)).toBe('—')
-    expect(deltaOf(hero.closest('.stat-tile') as HTMLElement)).toBeNull()
+    expect(deltaOf(hero.closest('.stat-tile') as HTMLElement)?.textContent).toBe('')
     // Pre-first-refresh: a price has never been fetched, so there is no day change to show.
-    expect(deltaOf(tileFor('Portfolio'))).toBeNull()
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('')
     expect(valueOf(tileFor('Living spending'))).toBe('—')
     expect(valueOf(tileFor('Estimated tax'))).toBe('—')
 
@@ -1927,7 +1941,10 @@ describe('OverviewPage — skeleton first paint (2026-08-27 spec §3)', () => {
     // ghost form — four tiles and four cards — not a centered line of text.
     expect(container.querySelector('.page-skeleton')).toBeNull()
     expect(container.querySelectorAll('.kpi-row .stat-tile')).toHaveLength(4)
-    expect(Array.from(container.querySelectorAll('.kpi-row .stat-value')).every(value => value.textContent === '—')).toBe(true)
+    // Every tile is a ghost set in the real lines (2026-09-25 polish §4.6) — no figure at all — or an
+    // honest dash: never a fabricated $0.00.
+    expect(Array.from(container.querySelectorAll('.kpi-row .stat-tile:not(.skeleton-tile) .stat-value')).every(value => value.textContent === '—')).toBe(true)
+    expect(Array.from(container.querySelectorAll('.kpi-row .skeleton-tile .stat-value')).every(value => value.textContent === '')).toBe(true)
     expect(screen.getByRole('heading', { name: 'Net worth trend' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: /Up next/ })).toBeTruthy()
     expect(screen.getAllByRole('status').length).toBeGreaterThan(0)
@@ -2106,7 +2123,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     // repeat the sentence its neighbour already carries.
     const portfolio = tileFor('Portfolio')
     expect(valueOf(portfolio)).toBe('—')
-    expect(deltaOf(portfolio)).toBeNull()
+    expect(deltaOf(portfolio)?.textContent).toBe('')
   })
 
   it('keeps the household view whole when the book itself is empty', async () => {
@@ -2307,7 +2324,7 @@ describe('OverviewPage independent groups and preferences', () => {
     serve({ matrix: matrixOut({ months: ['2026-06-01', '2026-07-01'], totals: ['9000.00', '15000.00'], living_total: ['3000.00', '4000.00'], comparison_average: ['1234.56', '3000.00'], default_month: '2026-06-01' }) })
     renderPage()
     const tile = await spendingTileShowing('$3,000.00')
-    expect(deltaOf(tile)?.textContent).toContain('$1,234.56 previous 12-mo average · Jun 2026')
+    expect(deltaOf(tile)?.textContent).toContain('$1,235 12-mo avg · Jun 2026')
     await waitFor(() => expect(fetchSpendingEvidence).toHaveBeenLastCalledWith('2026-06-01'))
   })
 

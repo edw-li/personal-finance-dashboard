@@ -813,8 +813,8 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
     )
     // A quarter is not a month's story: the tiles say only what the change is since (§T7).
     const hero = tileFor(await screen.findByText('Net worth — as of Jun 1'))
-    expect(deltaOf(hero)).toBe('▲ $60.00 (+35.3%) since Mar 1')
-    expect(deltaOf(tileFor(screen.getByText('Taxable')))).toBe('▲ $15.00 since Mar 1')
+    expect(deltaOf(hero)).toBe('▲ $60 (+35.3%) since Mar 1')
+    expect(deltaOf(tileFor(screen.getByText('Taxable')))).toBe('▲ $15 since Mar 1')
     expect(screen.queryByText(/vs prior/)).toBeNull()
   })
 
@@ -863,6 +863,16 @@ describe('NetWorthPage — tiles per view', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
     expect(screen.getByText('Net worth — as of Aug 1')).toBeTruthy()
   })
+
+  // 2026-09-25 polish spec §4.3: the row keeps one height across every month the ribbon offers — its
+  // badge line and one delta line are reserved (.kpi-row-steady), and the hero is the first tile.
+  it('keeps a steady tile row with the hero first', async () => {
+    renderPage()
+    const hero = await screen.findByText('Net worth — as of Aug 1', { selector: '.stat-label-text' })
+    const row = hero.closest('.kpi-row') as HTMLElement
+    expect(row.className).toBe('kpi-row kpi-row-steady')
+    expect(row.firstElementChild?.className).toContain('stat-tile-hero')
+  })
 })
 
 // The tiles are addressed through their labels, like the Overview's (a tile is a label, a value
@@ -884,10 +894,10 @@ describe('NetWorthPage — the snapshot named by its date (2026-09-23 spec §T7)
     )
     renderPage()
     const hero = tileFor(await screen.findByText('Net worth — as of Aug 1'))
-    expect(deltaOf(hero)).toBe('▲ $60.00 (+35.3%) · July: Jul 1 → Aug 1')
+    expect(deltaOf(hero)).toBe('▲ $60 (+35.3%) · Jul 1 → Aug 1')
     expect(hero.textContent).not.toContain('Provisional')
     // The group tiles say what their change is since.
-    expect(deltaOf(tileFor(screen.getByText('Liabilities')))).toBe('▼ -$5.00 since Jul 1')
+    expect(deltaOf(tileFor(screen.getByText('Liabilities')))).toBe('▼ -$5 since Jul 1')
     expect(screen.queryByText(/vs prior|MoM/)).toBeNull()
   })
 
@@ -898,7 +908,7 @@ describe('NetWorthPage — the snapshot named by its date (2026-09-23 spec §T7)
     vi.mocked(fetchSummary).mockResolvedValue(older)
     renderPage()
     const hero = tileFor(await screen.findByText('Net worth — as of Aug 1'))
-    expect(deltaOf(hero)).toBe('▲ $60.00 (+35.3%)')
+    expect(deltaOf(hero)).toBe('▲ $60 (+35.3%)')
   })
 
   it('heads the accounts table with the snapshot’s date and the change column with the one before', async () => {
@@ -978,7 +988,7 @@ describe('NetWorthPage — the snapshot named by its date (2026-09-23 spec §T7)
     renderPage()
     const hero = tileFor(await screen.findByText('Net worth — as of Oct 1'))
     await waitFor(() =>
-      expect(deltaOf(hero)).toBe('▲ $126,583.02 (+15.7%) · September: Sep 1 → Oct 1 · spending not complete yet'),
+      expect(deltaOf(hero)).toBe('▲ $126,583 (+15.7%) · Sep 1 → Oct 1 · spending not complete yet'),
     )
   })
 
@@ -1040,7 +1050,7 @@ describe('NetWorthPage — the snapshot named by its date (2026-09-23 spec §T7)
       renderPage()
       const hero = tileFor(await screen.findByText('Net worth — as of Sep 22'))
       expect(hero.textContent).toContain('Provisional')
-      expect(deltaOf(hero)).toBe('▲ $126,583.02 (+15.7%) since Sep 1 · 21 days')
+      expect(deltaOf(hero)).toBe('▲ $126,583 (+15.7%) since Sep 1 · 21 days')
       expect(screen.getByText('What moved — since Sep 1 · 21 days (provisional)')).toBeTruthy()
       const movers = screen.getByText('What moved — since Sep 1 · 21 days (provisional)').closest('.chart-card') as HTMLElement
       expect(movers.querySelector('.chart-lede')?.textContent).toContain('Sep 1 $806,667.88 → Sep 22 (provisional) $933,250.90')

@@ -49,7 +49,7 @@ import type {
 } from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import { asOfPhrase, changePhrase, formatAsOf } from '../utils/asOf'
-import { formatCurrency, formatMonth, formatPct } from '../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatMonth, formatPct } from '../utils/format'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './NetWorthPage.css'
@@ -680,7 +680,7 @@ export default function NetWorthPage() {
         // with a footer). The owner strip that used to sit between the tiles and the first chart
         // is that lede now, so there is no strip to ghost.
         skeleton={{
-          tiles: 4,
+          tiles: { count: 4, hero: true, steady: true },
           cards: [
             { span: 12, height: ghostCardBody(chartCardBox(360, { controls: true, zoomable: true }) + LEDE_ROW) },
             { span: 12, height: ghostCardBody(chartCardBox(255, { controls: true })) },
@@ -714,9 +714,11 @@ export default function NetWorthPage() {
         ) : (
           <>
             {/* Tiles belong to a view's summary (2026-09-13 polish §12): Overview only — the
-                Accounts table carries its own month column. */}
+                Accounts table carries its own month column. Steady (2026-09-25 polish spec §4.3):
+                the badge line and one delta line are reserved, so the row keeps one height across
+                every month the ribbon offers (88 → 145px before). */}
             {views.section === 'overview' && summary && summary.month && (
-              <div className="kpi-row">
+              <div className="kpi-row kpi-row-steady">
                 <StatTile
                   hero
                   // Named by the day its balances describe, the change by what it covers, and a
@@ -760,7 +762,7 @@ export default function NetWorthPage() {
                         source_link: `/net-worth?section=accounts&month=${summary.month}${owner === null ? '' : `&owner=${owner}`}`,
                         components: [{ label: 'Change from preceding snapshot', value: entry.mom_delta, unit: 'USD' }] })}
                       // "since Jul 1": the day the balances it compares with describe (§T7).
-                      delta={delta === null ? undefined : `${formatCurrency(delta)} ${groupSince}`}
+                      delta={delta === null ? undefined : `${formatCurrencyWhole(delta)} ${groupSince}`}
                       tone={toneOf(delta)}
                       hint={GROUP_TILE_HINT}
                     />

@@ -371,7 +371,7 @@ describe('EsppPage — frame', () => {
 
     expect(await screen.findByText('Loading the ESPP headline…')).toBeTruthy()
     expect(document.querySelectorAll('.kpi-row .stat-tile.skeleton-tile').length).toBe(5)
-    expect(document.querySelector('.kpi-row-lone')).toBeNull()
+    expect(document.querySelector('.kpi-row')?.classList.contains('kpi-row-5')).toBe(true)
 
     // The lots land first: four real tiles, the $25k slot still a ghost — same row, same box.
     // 'Unrealized gain', not 'Market value': that one also heads a column of the lots table.
@@ -1004,12 +1004,12 @@ describe('EsppPage — modeler', () => {
     const tile = await screen.findByText(/\$25k limit used — 2024/)
     expectInDocumentOrder(tile, screen.getByRole('heading', { name: /Lots/ }))
 
-    // The modeler payload's own figures, verbatim — used and remaining. Scoped to the
-    // strip's own tile: the gauge in the card below says "$6,082.87 left" too, and the
-    // whole point is that the two never disagree.
+    // The modeler payload's own figures — used and remaining. Scoped to the strip's own tile: the
+    // gauge in the card below says "$6,082.87 left" too, and the whole point is that the two never
+    // disagree; the tile's delta rounds the same figure to whole dollars (2026-09-25 polish §4.3).
     const strip = within(tile.closest('.stat-tile') as HTMLElement)
     expect(strip.getByText('$18,917.13')).toBeTruthy()
-    expect(strip.getByText('$6,082.87 left')).toBeTruthy()
+    expect(strip.getByText('$6,083 left')).toBeTruthy()
 
     // …and the four position tiles stand beside it, from the lots feed's totals block.
     const row = tile.closest('.kpi-row') as HTMLElement

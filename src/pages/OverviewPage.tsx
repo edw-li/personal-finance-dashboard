@@ -85,7 +85,7 @@ import type {
   TaxSummariesOut,
   TaxYearOut,
 } from '../types/api'
-import { formatCurrency, formatDate, formatMonth, formatPct } from '../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatDate, formatMonth, formatPct } from '../utils/format'
 import { currentYear, todayIso } from '../utils/months'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
@@ -477,12 +477,13 @@ export default function OverviewPage() {
   // — but both are named so the narrowing is the compiler's job, not a reader's memory.)
   // The MONTH rides the delta line too (W2, 2026-09-13 audit): the label is "Living spending"
   // at every width, and a month with no comparison still says which month it is — neutral,
-  // no glyph.
+  // no glyph. One tile line at 1440 (2026-09-25 polish spec §4.3): whole dollars and "12-mo avg" —
+  // "under $5,417.48 previous 12-mo average · Aug 2026" ran to three lines.
   const spendMonth = stats?.month ? formatMonth(stats.month) : null
   const spendDelta =
     stats && stats.avg12 !== null && stats.aboveAvg !== null && !cashflowOnly
       ? {
-          text: `${Number(stats.total) === stats.avg12 ? 'at' : stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} previous 12-mo average${spendMonth ? ` · ${spendMonth}` : ''}`,
+          text: `${Number(stats.total) === stats.avg12 ? 'at' : stats.aboveAvg ? 'over' : 'under'} ${formatCurrencyWhole(stats.avg12)} 12-mo avg${spendMonth ? ` · ${spendMonth}` : ''}`,
           tone: Number(stats.total) === stats.avg12 ? ('neutral' as const) : stats.aboveAvg ? ('negative' as const) : ('positive' as const),
           direction: Number(stats.total) === stats.avg12 ? undefined : stats.aboveAvg ? ('up' as const) : ('down' as const),
         }
@@ -515,7 +516,7 @@ export default function OverviewPage() {
         }`
 
   const tileElements = {
-    net_worth: wealth.busy && data.summary === undefined ? <GhostTile delta={false} /> : (
+    net_worth: wealth.busy && data.summary === undefined ? <GhostTile hero /> : (
               <StatTile
                 hero
                 // Named by the day the balances describe, with what the change spans (2026-09-23
@@ -544,7 +545,7 @@ export default function OverviewPage() {
                 evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: `Sum of non-component account balances, including signed liabilities, in your latest balances.${recordedSentence(summary)}`, scope: owner ?? 'Household', as_of: receiptAsOf(summary), ...(summary.provisional ? { completeness: 'provisional' } : {}), source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: netWorthComponents(summary.groups) }) : undefined}
               />
     ),
-    portfolio: investments.busy && data.holdings === undefined ? <GhostTile delta={false} /> : (
+    portfolio: investments.busy && data.holdings === undefined ? <GhostTile /> : (
               <StatTile
                 label="Portfolio"
                 // Holdings hang off accounts, so the scope with none has no portfolio
@@ -556,7 +557,7 @@ export default function OverviewPage() {
                   emptyScopeNote === null &&
                   totals?.day_change_amount != null &&
                   totals.day_change_pct != null
-                    ? `${formatCurrency(totals.day_change_amount)} (${formatPct(
+                    ? `${formatCurrencyWhole(totals.day_change_amount)} (${formatPct(
                         totals.day_change_pct,
                       )})${dayChangeWhen}`
                     : undefined
@@ -566,7 +567,7 @@ export default function OverviewPage() {
                 evidence={data.holdings ? metricReceipt({ id: 'portfolio_value', label: 'Portfolio value', value: totals?.market_value ?? null, definition: 'Shares held multiplied by available prices. Missing quotes are excluded from priced value; quote dates can differ from refresh time.', scope: owner ?? 'Household', as_of: asOf, source_link: `/portfolio${owner === null ? '' : `?owner=${owner}`}`, completeness: (totals?.unpriced_count ?? 0) > 0 ? 'mixed' : 'complete', warnings: (totals?.unpriced_count ?? 0) > 0 ? [`${totals!.unpriced_count} holdings have no price.`] : [], components: [{ label: 'Unpriced holdings', value: totals?.unpriced_count ?? 0, unit: 'count' }] }) : undefined}
               />
     ),
-    living_spending: spending.busy && data.matrix === undefined ? <GhostTile delta={false} /> : (
+    living_spending: spending.busy && data.matrix === undefined ? <GhostTile /> : (
               <StatTile
                 label="Living spending"
                 badge={reviewState !== undefined && reviewState !== 'closed' ? REVIEW_LABELS[reviewState] : undefined}
@@ -578,7 +579,7 @@ export default function OverviewPage() {
                 evidence={spendingEvidence.metric('living_spending')}
               />
     ),
-    tax: planning.busy && data.taxes === undefined ? <GhostTile delta={false} /> : (
+    tax: planning.busy && data.taxes === undefined ? <GhostTile /> : (
               <StatTile
                 label={taxLabel}
                 value={tax === null ? '—' : formatCurrency(tax.totals.total_tax)}
@@ -802,7 +803,7 @@ export default function OverviewPage() {
         scopeRow={<ScopeBar owner />}
         resource={{ status: 'ready', fromCache }}
         skeleton={{
-          tiles: 4,
+          tiles: { count: 4, hero: true, steady: true },
           cards: [
             { span: 12, height: 220 },
             { span: 12, height: 280 },
@@ -816,7 +817,9 @@ export default function OverviewPage() {
         </div>
         {data !== null && (
           <>
-            <div className="kpi-row">{layout.tiles.map(id => <Fragment key={id}>{tileElements[id]}</Fragment>)}</div>
+            {/* Steady (2026-09-25 polish spec §4.3): the badge line and one delta line are reserved, so a
+                ghost row stands at the landed height and a scope switch never resizes the strip. */}
+            <div className="kpi-row kpi-row-steady">{layout.tiles.map(id => <Fragment key={id}>{tileElements[id]}</Fragment>)}</div>
             <div className="overview-primary">
               <div className="overview-wealth-column">
               <ChartCard

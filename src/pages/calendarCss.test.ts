@@ -29,7 +29,7 @@ describe('CalendarPage.css — the five-tile cash-flow strip (2026-09-23 spec §
   // gives this page ~990px, which laid the strip out as four tiles and a lone Vesting. jsdom
   // resolves no container query, so the rule itself is what can be pinned.
   it('holds five columns from 880px of the PAGE container, asked for by name', () => {
-    const block = /@container page \(min-width: 880px\) \{\s*\.cal-strip\.kpi-row-5 \{([^}]*)\}/.exec(css)
+    const block = /@container page \(min-width: 880px\) \{\s*\.cal-strip\.kpi-row\.kpi-row-5 \{([^}]*)\}/.exec(css)
     expect(block).not.toBeNull()
     expect(block?.[1]).toContain('grid-template-columns: repeat(5, minmax(0, 1fr));')
   })
