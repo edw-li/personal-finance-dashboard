@@ -1,5 +1,10 @@
 # Polish batch (items 4, 5, 11, 12, 13) — Implementation Plan: overview and shared contracts
 
+**Status (2026-09-26):** implementation lanes complete and merged to local main; final browser verification accepted
+product `d1766fdf`, including the user's footer and badge amendments. See the
+[final verification record](2026-09-25-polish-V-verify.md) for coverage and precise test attribution. Nothing pushed or
+deployed. The user's preview remains available at `http://127.0.0.1:5281` on the private local data copy.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement the lane plans task by task. Steps in the lane plans use checkbox (`- [ ]`)
 > syntax for tracking.
@@ -346,9 +351,18 @@ Screenshot review also identified ESPP's year-bearing limit title extending past
 10.41px at 1440. A page-scoped wrapping rule keeps the text and info control inside the five-tile row. All ten final
 viewport/theme measurements fit with clean logs; root visually reviewed the before/after 1366 light and final 1440
 dark captures. Evidence is in `scratchpad/codex-cosmetic-final/espp-title-{bounds,final}/report.json`. The affected
-Net worth, Portfolio and ESPP cold-load cases are being rerun; the original matrix remains a retained failed attempt.
+Net worth, Portfolio and ESPP cold-load rerun passed all 90 cases / 1,368 checks at `d1766fdf`; the original matrix
+remains a retained failed attempt. The runner now drains asynchronous route handlers before taking its final log
+snapshot, resolving three original ESPP cases whose nine teardown errors had arrived after their check was computed.
 
-Gate logs and interrupted/failed attempts are preserved in ignored `scratchpad/codex-takeover-*` files. Lane V's
-fresh-copy browser acceptance and final report remain the last step; its plan records source provenance, measured
-before/after results, corrected probe attempts, cleanup and the precise product commit for each run. Nothing has
-been pushed or deployed.
+The independently reviewed composite validator accepted exactly 500 cases / 6,764 checks: 410 unaffected cases from
+the full run and 90 final-product replacements. All effective checks and error logs are clean. Its 450 cold-load CLS
+values have maximum 0.068610; all 760 settled month observations stay within a 1px row-height spread, and all 40 badge
+top observations have zero offset. The raw CLS failure, three original teardown-error cases and every recovered retry
+remain disclosed. The final result is `scratchpad/codex-cosmetic-final/audit-composite-final-d1766fdf-result.json`;
+`final-fixes.json` in that directory hashes the focused browser proof and all four passing ordinary-preview checks.
+
+Gate logs and interrupted/failed attempts are preserved in ignored scratch storage. Lane V's final record includes
+fresh-copy provenance, exact mutation restoration, before/after measurements, code-gate limits and cleanup. Its
+temporary servers on 5279/5280/8089 are stopped; the requested preview on 5281/8091 remains running. Nothing has been
+pushed or deployed.

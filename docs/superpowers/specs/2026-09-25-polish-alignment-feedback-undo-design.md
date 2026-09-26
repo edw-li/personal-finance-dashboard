@@ -1,8 +1,10 @@
 # Polish: layouts that end together, tile rows, feedback where you act, exact undo, a sidebar that fits (2026-09-25) — design record
 
-**Status:** designed and approved 2026-09-25; implementation merged, final browser verification in progress. Includes the
-user's 2026-09-26 footer and badge amendments below. Stop at LOCAL main — no push, no deploy (the user
-pushes and deploys). Backend AND frontend change; no migration (the `change_log` table already exists).
+**Status:** implementation and agreed verification complete on LOCAL main, 2026-09-26, including the user's footer
+and badge amendments. Final product `d1766fdf` is accepted through the complete matrix plus 90 affected reruns; exact
+coverage, retained failed attempts and focused code-gate attribution are in
+[the final verification record](../plans/2026-09-25-polish-V-verify.md). No push or deploy; the user handles those.
+Backend AND frontend change; no migration (the `change_log` table already exists).
 
 **The ask, verbatim:** after the 2026-09-24 polish audit (archived in `docs/reviews/2026-09-24-polish-audit/` —
 `00-REPORT.md` plus eight lane files whose IDs this record cites: OU, NWSP, PE, TPC, PCC, SGS, MOTION, WF), the user
