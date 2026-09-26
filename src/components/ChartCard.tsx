@@ -70,6 +70,9 @@ export interface ChartCardProps {
    *  every half-width card has a partner — and passed explicitly by the Overview's Net worth trend.
    *  Never with an `aside`: that plot sits inside the aside wrapper, which does not grow. */
   fill?: boolean
+  /** Reserve the header's controls row with nothing in it, so this card's plot starts on the same
+   *  line as a paired card whose header carries controls (Spending › Trends, spec §3.1). */
+  reserveControls?: boolean
   // Pass-through to EChart.
   onClick?: (params: EChartEventParams) => void
   onHover?: (params: EChartEventParams) => void
@@ -94,7 +97,7 @@ export interface ChartCardProps {
 
 export default function ChartCard({
   title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede, aside,
-  zoomable = false, group, busy = false, error = null, span = 12, fill,
+  zoomable = false, group, busy = false, error = null, span = 12, fill, reserveControls = false,
   onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, onWidth, zoomWindow,
   selectionAdapter, rowSelection, selection, onSelectionChange, renderSelection, selectionScopeKey = '', independentRangeLabel, allowExpand = true,
 }: ChartCardProps) {
@@ -264,7 +267,7 @@ export default function ChartCard({
           {title}
           <InfoHint text={hint} />
         </h2>
-        {(controls !== undefined || actions !== undefined) && (
+        {(controls !== undefined || actions !== undefined || reserveControls) && (
           <div className="chart-card-controls">
             {controls}
             {actions}

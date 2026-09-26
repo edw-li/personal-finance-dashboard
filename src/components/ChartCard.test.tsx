@@ -422,3 +422,19 @@ describe('ChartCard fill (spec §3.1, contract C5)', () => {
     expect(card().classList.contains('chart-card-fill')).toBe(true)
   })
 })
+
+// Spending › Trends (spec §3.1): the card without controls reserves the controls row, so its plot
+// starts on the same line as its partner's, whose header carries a Segmented.
+describe('ChartCard reserveControls (spec §3.1)', () => {
+  it('reserves an empty controls row in a header with nothing to put there', () => {
+    render(<ChartCard {...base} option={OPTION} reserveControls />)
+    const controls = document.querySelector('.chart-card-header .chart-card-controls') as HTMLElement
+    expect(controls).toBeTruthy()
+    expect(controls.childElementCount).toBe(0)
+  })
+
+  it('draws no controls row by default', () => {
+    render(<ChartCard {...base} option={OPTION} />)
+    expect(document.querySelector('.chart-card-controls')).toBeNull()
+  })
+})

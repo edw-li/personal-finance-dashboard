@@ -424,6 +424,37 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
     expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(2)
   })
 
+  // 2026-09-25 polish spec §3.1 (NWSP-08): one configured height for the pair, and the card without
+  // controls reserves the controls row, so the two month axes start on one line; both fill the row.
+  it('pairs the two Trends charts at one height, the card without controls reserving that row', async () => {
+    renderPage()
+    await openView('Trends')
+    await screen.findByText(/Category trends/)
+    const card = (name: RegExp) => screen.getByRole('heading', { name }).closest('section.chart-card') as HTMLElement
+    const savings = card(/^Savings rate$/)
+    const trends = card(/Category trends/)
+    for (const section of [savings, trends]) {
+      expect(section.classList.contains('span-6')).toBe(true)
+      expect(section.classList.contains('chart-card-fill')).toBe(true)
+      expect(section.style.getPropertyValue('--chart-h')).toBe('260px')
+    }
+    expect(savings.querySelector('.chart-card-header .chart-card-controls')?.childElementCount).toBe(0)
+    expect(trends.querySelector('.chart-card-header .chart-card-controls')).not.toBeNull()
+  })
+
+  // NWSP-08/10: "All categories" leaves no half-row hole — the small multiples take the full row, and
+  // the Savings rate card, which would otherwise sit alone beside ~570px of nothing, does too.
+  it('spans both Trends cards across the row in All categories', async () => {
+    renderPage()
+    await openView('Trends')
+    await screen.findByText(/Category trends/)
+    fireEvent.click(screen.getByRole('button', { name: 'All categories' }))
+    const card = (name: RegExp) => screen.getByRole('heading', { name }).closest('section.chart-card') as HTMLElement
+    expect(card(/^Savings rate$/).classList.contains('span-12')).toBe(true)
+    expect(card(/Category trends/).classList.contains('span-12')).toBe(true)
+    expect(card(/Category trends/).classList.contains('chart-card-fill')).toBe(false)
+  })
+
   it('the hero tiles follow the VIEWED month, not the latest one', async () => {
     renderPage()
     await screen.findByText(/Monthly entries vs take-home/)

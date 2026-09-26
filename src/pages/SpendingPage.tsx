@@ -58,6 +58,10 @@ import '../components/panels.css'
 import './SpendingPage.css'
 
 const MAX_TREND = 3
+// The Trends pair's one plot height (2026-09-25 polish spec §3.1, NWSP-08): 260 and 220 put the two
+// month axes 14px apart and ended the cards 36–84px apart. Both cards fill their row as well; this
+// is the floor.
+const TREND_HEIGHT = 260
 const MOVERS_TOP = 5
 const SECTIONS = [{ id: 'overview', label: 'Overview' }, { id: 'trends', label: 'Trends' }, { id: 'budgets', label: 'Budgets' }, { id: 'history', label: 'History' }] as const
 
@@ -740,7 +744,7 @@ export default function SpendingPage() {
               pair reads right after the budgets that feed the trends chart's step lines;
               the never-windowed full-history pair (heatmap, yearly) closes the page. */}
           <ChartCard
-            span={6}
+            span={trendView === 'all' ? 12 : 6}
             title="Savings rate"
             hint="Two readings of the same month. Total counts the payroll deductions — 401(k), ESPP, HSA — that never reach your take-home; Cash is what was left of the paycheck: (net pay − living spend − tax paid) ÷ net pay. Above the zero line you saved, below it you overspent."
             ariaLabel="Line chart of the monthly total and cash savings rates around a zero baseline"
@@ -748,7 +752,10 @@ export default function SpendingPage() {
             empty="No months entered yet."
             exportName="savings-rate"
             csv={matrix === null ? undefined : () => savingsRateCsv(matrix)}
-            height={260}
+            height={TREND_HEIGHT}
+            // Its partner's header carries the Compare / All categories toggle; the empty row keeps
+            // the two plots — and their month axes — starting on one line.
+            reserveControls={trendView === 'compare'}
             zoomable
             group="spending"
             onDataZoom={onZoomWindow}
@@ -765,7 +772,9 @@ export default function SpendingPage() {
           />
 
           <ChartCard
-            span={6}
+            // All categories spans the row (NWSP-08/10): the small multiples need the width, and the
+            // Savings rate card above takes the full row with it rather than sit beside a hole.
+            span={trendView === 'all' ? 12 : 6}
             title="Category trends"
             hint="Single-category history — pick up to 3 to compare; a picked category's budget rides along as a dashed step. All categories draws every one as its own tiny line, each on its own scale: the reading is shape, not size."
             ariaLabel={
@@ -790,7 +799,7 @@ export default function SpendingPage() {
                       )
                   : () => categoryTrendCsv(matrix, trend, nameById)
             }
-            height={trendView === 'all' ? smallMultiplesHeight(heatmapOrder.length) : 220}
+            height={trendView === 'all' ? smallMultiplesHeight(heatmapOrder.length) : TREND_HEIGHT}
             // Small multiples carry no dataZoom and no shared axis: the window controls and
             // the sibling group belong to the single-axis reading only.
             zoomable={trendView === 'compare'}
