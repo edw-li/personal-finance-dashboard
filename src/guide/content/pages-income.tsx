@@ -130,7 +130,7 @@ export const INCOME_CARDS: GuideCard[] = [
         where: 'Paycheck → Summary → Per-check breakdown',
         steps: [
           'Gross, each deduction and the net, in the order payroll applies them.',
-          'The employer match is printed apart — it never passes through the check.',
+          'The employer match is not a line here — it has its own tile in the row above, because it never passes through the check.',
         ],
         to: '/paycheck',
       },

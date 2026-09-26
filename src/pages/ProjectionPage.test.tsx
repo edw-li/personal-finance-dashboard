@@ -1094,6 +1094,35 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     expect(delta.className).toContain('stat-delta-positive')
   })
 
+  // The boundary is the target itself: a ratio of exactly one is reached, never "$0 to go".
+  it('says the target is reached at a ratio of exactly one', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_ratio: '1.000000', starting_balance: '1500000.00' }))
+    renderPage()
+    await loaded()
+    const delta = screen.getByText('FI ratio', { selector: '.stat-label-text' }).closest('.stat-tile')?.querySelector('.stat-delta') as HTMLElement
+    expect(delta.textContent).toBe('Target reached')
+    expect(delta.className).toContain('stat-delta-positive')
+  })
+
+  // No target is nothing to measure against: the line stays empty (and neutral) — no "$NaN to go".
+  it('leaves the FI ratio line empty without a target', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_target: null, fi_ratio: null }))
+    renderPage()
+    await loaded()
+    const delta = screen.getByText('FI ratio', { selector: '.stat-label-text' }).closest('.stat-tile')?.querySelector('.stat-delta') as HTMLElement
+    expect(delta.textContent).toBe('')
+    expect(delta.className).toContain('stat-delta-neutral')
+    cleanup()
+    clearSnapshots()
+    // The guard is the target's, whatever the ratio says.
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_target: null }))
+    renderPage()
+    await loaded()
+    expect(
+      screen.getByText('FI ratio', { selector: '.stat-label-text' }).closest('.stat-tile')?.querySelector('.stat-delta')?.textContent,
+    ).toBe('')
+  })
+
   it('measures the outcomes band into --projection-band-h so the chart column sticks under it', async () => {
     // jsdom has no ResizeObserver; the stub is what lets the measurement path run at all.
     class StubResizeObserver {
