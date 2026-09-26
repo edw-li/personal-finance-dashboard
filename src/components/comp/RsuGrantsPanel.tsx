@@ -160,17 +160,20 @@ export default function RsuGrantsPanel({
       // An empty string reaches the API as `""` and 422s as an opaque decimal-parse error
       // (TransactionsPanel's Task 14 review M2 lesson).
       setError('Label, shares, price and the first vest date are required')
+      feedback.reveal(!label ? '#grant-label' : !shares ? '#grant-shares' : !price ? '#grant-price' : '#grant-first-vest')
       return
     }
     if (!/^\d+$/.test(shares)) {
       // The column is a whole-share int, and the box is not a decimal one: "480.6" would
       // reach the API as a float and 422 on a type the user never typed.
       setError('Shares must be a whole number')
+      feedback.reveal('#grant-shares')
       return
     }
     if (Number(shares) < 1 || Number(shares) > SHARES_MAX) {
       // The server's own sentence — a share count is a share count on both sides.
       setError(`shares must be between 1 and ${SHARES_MAX}`)
+      feedback.reveal('#grant-shares')
       return
     }
     // Canonicalized ONCE, above the gate, and used by both the positivity check and the
@@ -187,12 +190,14 @@ export default function RsuGrantsPanel({
       // store 0.13 for an eighth. Tolerant entry still applies — "$129.57" and a grouped
       // "1,205.50" are accepted and canonicalized; only "=" is refused.
       setError('Price at grant must be a number')
+      feedback.reveal('#grant-price')
       return
     }
     if (Number(canonical) <= 0) {
       // The CANONICAL value, not the typed text: Number('$129.57') is NaN, and NaN <= 0 is
       // false — a tolerant entry would slip straight past a raw comparison.
       setError('grant_price must be positive')
+      feedback.reveal('#grant-price')
       return
     }
     const yearText = form.focal_year.trim()
@@ -201,6 +206,7 @@ export default function RsuGrantsPanel({
       // The server's own sentence: a year is a year on both sides, so quoting it keeps one
       // wording for one rule.
       setError(`focal_year must be between ${YEAR_MIN} and ${YEAR_MAX}`)
+      feedback.reveal('#grant-focal-year')
       return
     }
     const quantumText = form.vest_quantum.trim()
@@ -211,6 +217,7 @@ export default function RsuGrantsPanel({
     ) {
       // The server's own sentence — a count is a count on both sides.
       setError(`vest_quantum must be between 1 and ${VEST_QUANTUM_MAX}`)
+      feedback.reveal('#grant-vest-quantum')
       return
     }
     // The row as the SERVER has it, looked up in the current feed. A stored cliff is kept
@@ -245,7 +252,7 @@ export default function RsuGrantsPanel({
       if (editingId !== null) feedback.focusRow(editingId)
       else document.getElementById('grant-label')?.focus()
       setForm(EMPTY_GRANT)
-      feedback.saved(EMPTY_GRANT, saved?.id ?? editingId, editingId !== null)
+      feedback.saved(EMPTY_GRANT, saved?.id ?? editingId, true)
       setEditingId(null)
       return current.current.onChanged()
     })).finally(() => setBusy(false))
@@ -354,6 +361,7 @@ export default function RsuGrantsPanel({
         <label>
           Grant focal year
           <input
+            id="grant-focal-year"
             className="field-input"
             inputMode="numeric"
             value={form.focal_year}
@@ -363,6 +371,7 @@ export default function RsuGrantsPanel({
         <label>
           Shares
           <input
+            id="grant-shares"
             className="field-input"
             inputMode="numeric"
             value={form.shares}
@@ -377,11 +386,12 @@ export default function RsuGrantsPanel({
               refuses the 2dp "=" evaluator this column has no use for. Shares, the focal
               year and the vest rounding are WHOLE-number boxes and stay plain inputs with
               their own integer gates. */}
-          <AmountInput kind="plain" value={form.grant_price} onValueChange={set('grant_price')} />
+          <AmountInput id="grant-price" kind="plain" value={form.grant_price} onValueChange={set('grant_price')} />
         </label>
         <label>
           First vest
           <input
+            id="grant-first-vest"
             className="field-input"
             type="date"
             value={form.first_vest_date}
@@ -394,6 +404,7 @@ export default function RsuGrantsPanel({
               entitlement to a multiple of this, and the final vest trues up. 1 for the
               focal refreshes; the offer letter vests in tens — both broker-verified. */}
           <input
+            id="grant-vest-quantum"
             className="field-input"
             inputMode="numeric"
             value={form.vest_quantum}

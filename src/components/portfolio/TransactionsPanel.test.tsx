@@ -252,13 +252,31 @@ describe('TransactionsPanel', () => {
     expect(vi.mocked(createTransaction).mock.calls[0][0]).toMatchObject({ price: '=1200/3' })
   })
 
-  it('split without a factor is refused client-side', () => {
+  it('split without a factor is refused client-side and focuses the factor', async () => {
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={() => {}} />)
     change(screen.getByLabelText(/security/i), '1')
     change(screen.getByLabelText(/account/i), 'Robinhood')
     change(screen.getByLabelText(/type/i), 'split')
-    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    const add = screen.getByRole('button', { name: /add transaction/i })
+    add.focus()
+    fireEvent.click(add)
     expect(screen.getByText(/split factor is required/i)).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Factor')))
+    expect(createTransaction).not.toHaveBeenCalled()
+    change(screen.getByLabelText('Factor'), '2')
+    expect(screen.queryByText(/split factor is required/i)).toBeNull()
+  })
+
+  it.each(['Security', 'Account', 'Shares', 'Price'])('focuses the first missing transaction field: %s', async (missing) => {
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={() => {}} />)
+    const valid = { Security: '1', Account: 'Robinhood', Shares: '2', Price: '150' }
+    for (const [label, value] of Object.entries(valid)) {
+      if (label !== missing) change(screen.getByLabelText(label), value)
+    }
+    const add = screen.getByRole('button', { name: 'Add transaction' })
+    add.focus()
+    fireEvent.click(add)
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(missing)))
     expect(createTransaction).not.toHaveBeenCalled()
   })
 

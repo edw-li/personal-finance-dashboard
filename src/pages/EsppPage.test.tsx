@@ -322,6 +322,31 @@ vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) })
 
 const confirmSpy = vi.spyOn(window, 'confirm')
 
+it('focuses a newly created offering after its list reloads', async () => {
+  vi.mocked(fetchOfferings).mockResolvedValueOnce([]).mockResolvedValueOnce([septOffering])
+  vi.mocked(createOffering).mockResolvedValueOnce(septOffering)
+  renderPage('/espp?section=lots')
+  await screen.findByLabelText('Offering start')
+  type('Offering start', '2023-09-01')
+  type('Subscription price', '150')
+  fireEvent.click(screen.getByRole('button', { name: 'Add offering' }))
+  const edit = await screen.findByRole('button', { name: 'Edit offering from Sep 1, 2023' })
+  await waitFor(() => expect(document.activeElement).toBe(edit))
+  expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true)
+})
+
+it('focuses the missing partner of a lot sale', async () => {
+  renderPage('/espp?section=lots')
+  await screen.findByLabelText('Purchase date')
+  fillNewLot()
+  type('Sold date', '2027-01-01')
+  const add = screen.getByRole('button', { name: 'Add lot' })
+  add.focus()
+  fireEvent.click(add)
+  await waitFor(() => expect(document.activeElement).toBe(field('Sold price')))
+  expect(createLot).not.toHaveBeenCalled()
+})
+
 it('reveals a lot editor and returns Escape to the same row', async () => {
   renderPage('/espp?section=lots')
   const edit = (await screen.findAllByRole('button', { name: /^Edit lot from/ })).at(-1)!
@@ -1298,7 +1323,9 @@ describe('EsppPage — modeler', () => {
     const pct = await screen.findByLabelText('1H24 contribution percent')
 
     fireEvent.change(pct, { target: { value: '140' } }) // 14% typed as a fraction's worth
-    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+    const save = screen.getByRole('button', { name: 'Save & recalculate' })
+    save.focus()
+    fireEvent.click(save)
 
     // NOT the server's "contribution_pct must be between 0 and 1": this box holds 14 for
     // 14%, so the stored fraction's sentence would call a good 14 out of range.
@@ -1306,12 +1333,27 @@ describe('EsppPage — modeler', () => {
       await screen.findByText('1H24: contribution % must be between 0 and 100'),
     ).toBeTruthy()
     expect(vi.mocked(updatePeriod)).not.toHaveBeenCalled()
+    await waitFor(() => expect(document.activeElement).toBe(pct))
 
     // The guard is a range, not a suspicion: the whole 100 is a legal contribution.
     fireEvent.change(pct, { target: { value: '100' } })
+    expect(screen.queryByText('1H24: contribution % must be between 0 and 100')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
     await waitFor(() => expect(vi.mocked(updatePeriod)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(updatePeriod).mock.calls[0][1].contribution_pct).toBe('1')
+  })
+
+  it.each(['semi-annual base', 'additional payments', 'contribution percent'])('focuses the invalid period cell: %s', async (fieldName) => {
+    renderPage('/espp?section=purchase')
+    const input = await screen.findByLabelText(`1H24 ${fieldName}`)
+    fireEvent.change(input, { target: { value: 'invalid' } })
+    const save = screen.getByRole('button', { name: 'Save & recalculate' })
+    save.focus()
+    fireEvent.click(save)
+    await screen.findByText('1H24: base, additional and contribution % must be numbers')
+    await waitFor(() => expect(document.activeElement).toBe(input))
+    expect(updatePeriod).not.toHaveBeenCalled()
+    expect(createPeriod).not.toHaveBeenCalled()
   })
 
   it('renders a period save 409 verbatim, and keeps the edit', async () => {

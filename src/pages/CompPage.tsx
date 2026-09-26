@@ -239,6 +239,7 @@ function EventsPanel({
       // An empty string reaches the API as `""` and 422s as an opaque decimal-parse error
       // (TransactionsPanel's Task 14 review M2 lesson).
       setError('Focal year and current base are required')
+      feedback.reveal(!form.focal_year.trim() ? '#comp-focal-year' : '#comp-current-base')
       return
     }
     const year = Number(yearText)
@@ -246,6 +247,7 @@ function EventsPanel({
       // The server's own sentence: it is already in this box's vocabulary (a year is a
       // year on both sides), so quoting it keeps one wording for one rule.
       setError(`focal_year must be between ${YEAR_MIN} and ${YEAR_MAX}`)
+      feedback.reveal('#comp-focal-year')
       return
     }
     setBusy(true)
@@ -295,7 +297,7 @@ function EventsPanel({
       if (editingId !== null) feedback.focusRow(editingId)
       else document.getElementById('comp-focal-year')?.focus()
       setForm(EMPTY_EVENT)
-      feedback.saved(EMPTY_EVENT, saved?.id ?? editingId, editingId !== null)
+      feedback.saved(EMPTY_EVENT, saved?.id ?? editingId, true)
       setEditingId(null)
       return current.current.onChanged()
     })).finally(() => setBusy(false))
@@ -382,7 +384,7 @@ function EventsPanel({
             text verbatim and refuse "=" outright (submit's belts agree). */}
         <label>
           Current base
-          <AmountInput value={form.current_base} onValueChange={set('current_base')} />
+          <AmountInput id="comp-current-base" value={form.current_base} onValueChange={set('current_base')} />
         </label>
         <label>
           New base

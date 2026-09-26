@@ -231,16 +231,21 @@ describe('DividendsPanel manual entry', () => {
     expect(vi.mocked(createDividend).mock.calls[0][0]).toMatchObject({ amount: '1050' })
   })
 
-  it('refuses a whitespace-only amount client-side', () => {
+  it('refuses a whitespace-only amount client-side and focuses Amount', async () => {
     renderPanel([])
     fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
     fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '   ' } })
     // Spaces are not a number: the guard trims, matching TransactionsPanel's. Untrimmed it
     // would reach the API as "" and 422 as an opaque pydantic decimal-parse error.
-    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    const add = screen.getByRole('button', { name: /add dividend/i })
+    add.focus()
+    fireEvent.click(add)
     expect(screen.getByText('Security, pay date and amount are required')).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Amount')))
     expect(createDividend).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+    expect(screen.queryByText('Security, pay date and amount are required')).toBeNull()
   })
 })
 

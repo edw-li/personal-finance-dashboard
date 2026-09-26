@@ -1,7 +1,7 @@
 import BusyButton from '../components/feedback/BusyButton'
 import { SaveButton } from '../components/feedback/SaveButton'
 import { SaveStatus } from '../components/feedback/SaveStatus'
-import { flashElement, revealRow, useEscapeCancel } from '../components/feedback/reveal'
+import { flashElement, revealEditor, revealRow, useEscapeCancel } from '../components/feedback/reveal'
 import { undoBatch } from '../api/lifecycle'
 import { useToast } from '../components/ToastProvider'
 import { nextFrame } from '../components/reorder/reorderDom'
@@ -227,6 +227,8 @@ function LotsPanel({
       // An empty string reaches the API as `""` and 422s as an opaque decimal-parse error
       // (TransactionsPanel's Task 14 review M2 lesson).
       setError('Purchase date, qualifying date, shares, subscription and FMV are required')
+      feedback.reveal(!form.purchase_date ? '#lot-purchase-date' : !form.qualifying_date ? '#lot-qualifying-date'
+        : !shares ? '#lot-shares' : !subscription ? '#lot-subscription' : '#lot-fmv')
       return
     }
     if (form.qualifying_date < form.purchase_date) {
@@ -234,6 +236,7 @@ function LotsPanel({
       // screen. Both boxes are <input type="date">, so these are ISO strings and a string
       // compare IS the date compare (no Date parsing, no timezone to get wrong).
       setError('qualifying_date must be on or after purchase_date')
+      feedback.reveal('#lot-qualifying-date')
       return
     }
     const soldDate = form.sold_date.trim()
@@ -242,6 +245,7 @@ function LotsPanel({
       // The server's own sentence, one vocabulary — its 422 is the backstop, this is the
       // round trip saved (BracketsEditor's rule).
       setError('sold_date and sold_price must be set together')
+      feedback.reveal(soldDate === '' ? '#lot-sold-date' : '#lot-sold-price')
       return
     }
     const price = canonicalAmount(form.purchase_price.trim(), { expressions: false })
@@ -370,6 +374,7 @@ function LotsPanel({
         <label>
           Qualifying date
           <input
+            id="lot-qualifying-date"
             className="field-input"
             type="date"
             value={form.qualifying_date}
@@ -385,11 +390,12 @@ function LotsPanel({
             and refuses "=" (submit's belts agree). Shares is the 4dp count. */}
         <label>
           Shares
-          <AmountInput kind="shares" value={form.shares} onValueChange={set('shares')} />
+          <AmountInput id="lot-shares" kind="shares" value={form.shares} onValueChange={set('shares')} />
         </label>
         <label>
           Subscription
           <AmountInput
+            id="lot-subscription"
             kind="plain"
             value={form.subscription_price}
             onValueChange={set('subscription_price')}
@@ -398,6 +404,7 @@ function LotsPanel({
         <label>
           FMV
           <AmountInput
+            id="lot-fmv"
             kind="plain"
             value={form.purchase_fmv}
             onValueChange={set('purchase_fmv')}
@@ -425,6 +432,7 @@ function LotsPanel({
           <label>
             Sold date
             <input
+              id="lot-sold-date"
               className="field-input"
               type="date"
               value={form.sold_date}
@@ -433,7 +441,7 @@ function LotsPanel({
           </label>
           <label>
             Sold price
-            <AmountInput kind="plain" value={form.sold_price} onValueChange={set('sold_price')} />
+            <AmountInput id="lot-sold-price" kind="plain" value={form.sold_price} onValueChange={set('sold_price')} />
           </label>
           <span className="espp-field-note">
             Sold date and sold price travel together: set both to realize a lot, clear both to
@@ -689,6 +697,7 @@ function OfferingsPanel({
     const price = canonicalAmount(form.subscription_price.trim(), { expressions: false })
     if (!form.offering_start || !price) {
       setError('Offering start and subscription price are required')
+      feedback.reveal(!form.offering_start ? '#offering-start' : '#offering-price')
       return
     }
     setBusy(true)
@@ -704,7 +713,7 @@ function OfferingsPanel({
       if (editingId !== null) feedback.focusRow(editingId)
       else document.getElementById('offering-start')?.focus()
       setForm(EMPTY_OFFERING)
-      feedback.saved(EMPTY_OFFERING, saved?.id ?? editingId, editingId !== null)
+      feedback.saved(EMPTY_OFFERING, saved?.id ?? editingId, true)
       setEditingId(null)
       return current.current.onChanged()
     })).finally(() => setBusy(false))
@@ -774,6 +783,7 @@ function OfferingsPanel({
           {/* Numeric(14,5) like every other price on this page: kind="plain", so the stored
               5dp text stands verbatim and no 2dp "=" evaluator can coarsen it. */}
           <AmountInput
+            id="offering-price"
             kind="plain"
             value={form.subscription_price}
             onValueChange={set('subscription_price')}
@@ -955,6 +965,10 @@ function ModelerCard({
   const saveButton = useRef<HTMLButtonElement>(null)
   const periodElement = (label: string) => Array.from(scrollRef.current?.querySelectorAll<HTMLElement>('[data-period-label]') ?? [])
     .find((element) => element.dataset.periodLabel === label) ?? null
+  const focusPeriodField = (label: string, field: 'base' | 'additional' | 'pct') => queueMicrotask(() => {
+    const cell = periodElement(label)?.querySelector<HTMLElement>(`[data-period-field="${field}"]`)
+    revealEditor(cell ?? null)
+  })
   const reloadRows = async () => {
     await current.current.onRowsSaved()
     // The refreshed rows must commit before a replaced stored/derived slot takes focus.
@@ -1031,6 +1045,7 @@ function ModelerCard({
         !isAmount(pct, { expressions: false })
       ) {
         setError(`${row.label}: base, additional and contribution % must be numbers`)
+        focusPeriodField(row.label, !base || !isAmount(base) ? 'base' : !isAmount(additional) ? 'additional' : 'pct')
         return
       }
       const pctNumber = Number(pct)
@@ -1039,6 +1054,7 @@ function ModelerCard({
         // the STORED fraction's vocabulary, and this cell holds 14 for 14%. Quoting it
         // would call a perfectly good 14 out of range and wave a 0.5 through.
         setError(`${row.label}: contribution % must be between 0 and 100`)
+        focusPeriodField(row.label, 'pct')
         return
       }
     }
@@ -1288,21 +1304,21 @@ function ModelerCard({
                             : 'latest quote'}
                       </span>
                     </td>
-                    <td className="num espp-cell">
+                    <td className="num espp-cell" data-period-field="base">
                       <AmountInput
                         value={cellValue(row, 'base')}
                         onValueChange={editCell(rowKey(row), 'base')}
                         aria-label={`${row.label} semi-annual base`}
                       />
                     </td>
-                    <td className="num espp-cell">
+                    <td className="num espp-cell" data-period-field="additional">
                       <AmountInput
                         value={cellValue(row, 'additional')}
                         onValueChange={editCell(rowKey(row), 'additional')}
                         aria-label={`${row.label} additional payments`}
                       />
                     </td>
-                    <td className="num espp-cell">
+                    <td className="num espp-cell" data-period-field="pct">
                       {/* Human scale in the box ("14" = 14%, echoed "14%"); the shift to the
                           stored 9dp fraction happens at the wire, in saveAndRecalculate. */}
                       <AmountInput

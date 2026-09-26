@@ -300,6 +300,54 @@ vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) })
 
 const confirmSpy = vi.spyOn(window, 'confirm')
 
+it('focuses a newly created comp event after its list reloads', async () => {
+  vi.mocked(fetchEvents).mockResolvedValueOnce([])
+  render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
+  await screen.findByLabelText('Focal year')
+  fillNewEvent()
+  fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+  const edit = await screen.findByRole('button', { name: 'Edit the 2027 comp event' })
+  await waitFor(() => expect(document.activeElement).toBe(edit))
+  expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true)
+})
+
+it('focuses a newly created grant after its schedule reloads', async () => {
+  vi.mocked(fetchVestingSchedule).mockResolvedValueOnce(EMPTY_SCHEDULE).mockResolvedValueOnce(SCHEDULE)
+  render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
+  await screen.findByLabelText('Label')
+  fillNewGrant()
+  fireEvent.click(screen.getByRole('button', { name: 'Add grant' }))
+  const edit = await screen.findByRole('button', { name: 'Edit the FY24 new hire grant' })
+  await waitFor(() => expect(document.activeElement).toBe(edit))
+  expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true)
+})
+
+it('focuses the invalid focal year beside the event validation error', async () => {
+  render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
+  await screen.findByLabelText('Focal year')
+  fillNewEvent()
+  type('Focal year', '1800')
+  const add = screen.getByRole('button', { name: 'Add event' })
+  add.focus()
+  fireEvent.click(add)
+  await waitFor(() => expect(document.activeElement).toBe(field('Focal year')))
+  expect(createEvent).not.toHaveBeenCalled()
+})
+
+it.each([['Shares', '1.5'], ['Price at grant', '0'], ['Grant focal year', '1800'], ['Vest rounding', '0']])(
+  'focuses the named invalid grant field: %s', async (label, value) => {
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
+    await screen.findByLabelText('Label')
+    fillNewGrant()
+    type(label, value)
+    const add = screen.getByRole('button', { name: 'Add grant' })
+    add.focus()
+    fireEvent.click(add)
+    await waitFor(() => expect(document.activeElement).toBe(field(label)))
+    expect(createRsuGrant).not.toHaveBeenCalled()
+  },
+)
+
 it('reveals a comp event editor and returns Escape to its row', async () => {
   render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
   const edit = await screen.findByRole('button', { name: 'Edit the 2027 comp event' })

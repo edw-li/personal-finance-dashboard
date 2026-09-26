@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import BusyButton from '../feedback/BusyButton'
+import { revealEditor, useEscapeCancel } from '../feedback/reveal'
 import { allocationLabel, ASSET_CLASSES, displayLabel, GEOGRAPHIES, saveAllocationTargets } from '../../api/allocation'
 import type { AllocationData, AllocationTarget } from '../../api/allocation'
 import type { OwnerScope } from '../../api/netWorth'
@@ -25,6 +26,8 @@ export default function AllocationTargetEditor({ data, owner, onChanged, onClass
 }) {
   const [editing, setEditing] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
+  const focusTrigger = () => trigger.current?.focus()
+  const cancel = () => { focusTrigger(); setEditing(false) }
   const saved = data.draft_target_set ?? data.target_set
   return <section className="card allocation-targets" aria-label="Allocation targets">
     <div className="card-title-row">
@@ -37,7 +40,8 @@ export default function AllocationTargetEditor({ data, owner, onChanged, onClass
       {data.as_of ? ` · quotes from ${formatDate(data.as_of)}` : ''}. Positive drift means above target.</p>
     {data.draft_target_set && <p className="hint">An unfinished draft is saved. Current drift still uses your active targets.</p>}
     {editing && <TargetForm key={`${data.by}:${data.scope_key}:${saved?.updated_at ?? ''}`}
-      data={data} owner={owner} onSaved={() => { trigger.current?.focus(); onChanged(); setEditing(false) }} onClassify={onClassify} unclassifiedCount={unclassifiedCount} />}
+      data={data} owner={owner} onSaved={() => { focusTrigger(); onChanged(); setEditing(false) }} onCancel={cancel} onUndoFailed={focusTrigger}
+      onClassify={onClassify} unclassifiedCount={unclassifiedCount} />}
     {data.target_set ? <div className="holdings-scroll"><table className="port-table">
       <thead><tr><th scope="col">Category</th><th scope="col" className="num">Current</th><th scope="col" className="num">Target</th>
         <th scope="col" className="num">Tolerance (pp)</th><th scope="col" className="num">Drift (pp)</th><th scope="col" className="num">Dollar drift</th><th scope="col">Status</th></tr></thead>
@@ -53,9 +57,15 @@ export default function AllocationTargetEditor({ data, owner, onChanged, onClass
   </section>
 }
 
-function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
-  data: AllocationData; owner: OwnerScope; onSaved: () => void; onClassify?: () => void; unclassifiedCount: number
+function TargetForm({ data, owner, onSaved, onCancel, onUndoFailed, onClassify, unclassifiedCount }: {
+  data: AllocationData; owner: OwnerScope; onSaved: () => void; onCancel: () => void; onUndoFailed: () => void
+  onClassify?: () => void; unclassifiedCount: number
 }) {
+  const editor = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    // Reveal the first target's cell even when the complete target table is taller than the viewport.
+    revealEditor(editor.current?.querySelector('tbody input')?.closest('td') ?? editor.current)
+  }, [])
   const saved = data.draft_target_set ?? data.target_set
   const [rows, setRows] = useState<AllocationTarget[]>(() => {
     const initial = [...(saved?.targets ?? [])]
@@ -77,6 +87,7 @@ function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
   const [category, setCategory] = useState('')
   const [saving, setSaving] = useState<'draft' | 'active' | null>(null)
   const busy = saving !== null
+  useEscapeCancel(editor, onCancel, !busy)
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
   const totalUnits = rows.reduce((sum, row) => sum + (percentageUnits(row.target_pct) ?? 0), 0)
@@ -94,14 +105,15 @@ function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
       const result = await saveAllocationTargets(data.by, owner, state, rows)
       const batchId = result.headers.get('X-Change-Batch')
       toast.success(state === 'active' ? 'Allocation targets activated' : 'Target draft saved', batchId ? {
-        action: { label: 'Undo', onAction: () => {
-          void undoBatch(batchId).then(onSaved).catch((err) => toast.error(errorDetail(err)))
-        } },
+        action: { label: 'Undo', onAction: () => undoBatch(batchId).then(onSaved).catch((err) => {
+          toast.error(errorDetail(err))
+          onUndoFailed()
+        }) },
       } : undefined)
       onSaved()
     } catch (err) { setError(errorDetail(err)) } finally { setSaving(null) }
   }
-  return <div className="allocation-target-form" onChangeCapture={() => setError(null)}>
+  return <div ref={editor} className="allocation-target-form" onChangeCapture={() => setError(null)}>
     <p className="hint">Save an unfinished draft at any total. Activate at exactly 100%. Tolerance is in percentage points: a 40% target with 5 pp tolerance allows 35–45%.</p>
     {unknownShare !== null && <p className="hint allocation-classify-hint">
       <span>Unclassified holdings are {formatPct(unknownShare, { signed: false })} of the priced book — classify them first.</span>

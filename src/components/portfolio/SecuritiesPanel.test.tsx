@@ -23,6 +23,39 @@ afterEach(cleanup)
 // Call counts are per-test; clearAllMocks keeps the factory's mockResolvedValue.
 beforeEach(() => vi.clearAllMocks())
 
+it('focuses the newly created security after its list reloads', async () => {
+  vi.mocked(createSecurity).mockResolvedValueOnce(manualPriced)
+  function Host() {
+    const [rows, setRows] = useState<SecurityOut[]>([])
+    return <SecuritiesPanel securities={rows} onChanged={() => Promise.resolve().then(() => setRows([manualPriced]))} />
+  }
+  render(<Host />)
+  fireEvent.change(screen.getByLabelText('Ticker'), { target: { value: 'HOUSE' } })
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Primary home' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add security' }))
+  const edit = await screen.findByRole('button', { name: 'Edit' })
+  await waitFor(() => expect(document.activeElement).toBe(edit))
+  expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true)
+})
+
+it('focuses the missing security field and the missing manual price', async () => {
+  render(<SecuritiesPanel securities={[manualPriced]} onChanged={vi.fn()} />)
+  fireEvent.change(screen.getByLabelText('Ticker'), { target: { value: 'NEW' } })
+  const add = screen.getByRole('button', { name: 'Add security' })
+  add.focus()
+  fireEvent.click(add)
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Name')))
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New' } })
+  expect(screen.queryByText('Ticker and name are required')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Set price' }))
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Price')))
+  const savePrice = screen.getByRole('button', { name: 'Save price' })
+  savePrice.focus()
+  fireEvent.click(savePrice)
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Price')))
+  expect(screen.getByText('Price is required')).toBeTruthy()
+})
+
 it('focuses the manual price when its editor opens', async () => {
   render(<SecuritiesPanel securities={[manualPriced]} onChanged={vi.fn()} />)
   fireEvent.click(screen.getByRole('button', { name: 'Set price' }))

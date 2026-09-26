@@ -101,6 +101,7 @@ export default function SecuritiesPanel({
     if (busy) return
     if (!form.ticker.trim() || !form.name.trim()) {
       setError('Ticker and name are required')
+      feedback.reveal(!form.ticker.trim() ? '#security-ticker' : '#security-name')
       return
     }
     setBusy(true)
@@ -139,7 +140,7 @@ export default function SecuritiesPanel({
       if (editingId !== null) feedback.focusRow(editingId)
       else editorRef.current?.querySelector<HTMLInputElement>('input')?.focus()
       setForm(EMPTY)
-      feedback.saved(EMPTY, saved?.id ?? editingId, editingId !== null)
+      feedback.saved(EMPTY, saved?.id ?? editingId, true)
       setEditingId(null)
       return latest.current.onChanged()
     })).finally(() => setBusy(false))
@@ -171,6 +172,7 @@ export default function SecuritiesPanel({
     if (busy) return
     if (!price.trim()) {
       setPriceError('Price is required')
+      queueMicrotask(() => revealEditor(feedback.row(security.id)?.querySelector('form') ?? null))
       return
     }
     setBusy(true)
@@ -222,6 +224,7 @@ export default function SecuritiesPanel({
               The two checkboxes below deliberately keep their own `.entry-form
               input[type='checkbox']` sizing rule instead. */}
           <input
+            id="security-ticker"
             className="field-input"
             value={form.ticker}
             onChange={(e) => set('ticker')(e.target.value)}
@@ -230,7 +233,7 @@ export default function SecuritiesPanel({
         </label>
         <label>
           Name
-          <input className="field-input" value={form.name} onChange={(e) => set('name')(e.target.value)} />
+          <input id="security-name" className="field-input" value={form.name} onChange={(e) => set('name')(e.target.value)} />
         </label>
         <label>
           Industry

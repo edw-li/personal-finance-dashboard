@@ -358,6 +358,7 @@ export default function DividendsPanel({
     // number, and untrimmed it reaches the API as "" — an opaque pydantic decimal error.
     if (!form.security_id || !form.pay_date || !form.amount.trim()) {
       setError('Security, pay date and amount are required')
+      feedback.reveal(!form.security_id ? '#div-security' : !form.pay_date ? '#div-pay-date' : '#div-amount')
       return
     }
     setBusy(true)
@@ -510,6 +511,7 @@ export default function DividendsPanel({
           {/* disabled while editing: DividendUpdate carries no security_id, so the ticker a
               stored payment belongs to is not editable — TransactionsPanel's rule. */}
           <select
+            id="div-security"
             value={form.security_id}
             disabled={editingId !== null}
             onChange={(e) => {
@@ -550,7 +552,7 @@ export default function DividendsPanel({
         </label>
         <label>
           Pay date
-          <input className="field-input" type="date" value={form.pay_date} onChange={(e) => setForm((f) => ({ ...f, pay_date: e.target.value }))} />
+          <input id="div-pay-date" className="field-input" type="date" value={form.pay_date} onChange={(e) => setForm((f) => ({ ...f, pay_date: e.target.value }))} />
         </label>
         <label>
           Amount

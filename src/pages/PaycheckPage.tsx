@@ -774,7 +774,7 @@ function ProfilesPanel({
       else document.getElementById('paycheck-effective-date')?.focus()
       const next = newProfileForm(latestOf([...current.current.profiles.filter((p) => p.id !== echo.id), echo]))
       setForm(next)
-      feedback.saved(next, echo.id, editingId !== null)
+      feedback.saved(next, echo.id, true)
       setEditingId(null)
       return current.current.onChanged()
     }).catch((err: unknown) => { focusNamedError(errorDetail(err)); throw err }))

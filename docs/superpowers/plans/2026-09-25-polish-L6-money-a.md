@@ -149,7 +149,7 @@ Use the actual house editing token if `--accent-soft` is not defined; confirm ag
 
 - [x] Run `npx tsc -p tsconfig.app.json --noEmit` and `npx tsc -p tsconfig.node.json --noEmit`; expected exit 0. Never `tsc -b`.
 - [x] Run `npx eslint .`; expected 0 errors and at most 26 baseline warnings.
-- [ ] Coordinate with root, then run `npx vitest run --maxWorkers=4`; expected all green. No simultaneous full-suite/build lanes on the 16 GB box.
+- [x] Coordinate with root, then run `npx vitest run --maxWorkers=4`; expected all green. No simultaneous full-suite/build lanes on the 16 GB box.
 - [x] Read the existing `audit-lib.mjs` header. Start Vite on 5276 using a wrapper config with private `cacheDir`, `VITE_API_PROXY=http://127.0.0.1:8086`, hidden background process and logs in `work-L6/`.
 - [x] Browser probes with `APP_BASE=http://127.0.0.1:5276` and `open(browser, { writes: true })`: each surface's last row Edit has its field wholly visible; add reveals/flashes; save focus never body; delete row disappears before its toast; Undo restores the original API id and transaction order; pressed action alone has busy state and its width stays held; no native dialog; both themes and reduced motion.
 - [x] Use only records created in the copied local database, remove them after checks, and close every browser and Vite process. Record any production-copy preexisting rows temporarily changed and restore them through batch Undo.
@@ -161,16 +161,18 @@ PortfolioPage's reload promise is the one additional file named beyond the recov
 
 ## As built — 2026-09-26
 
-All assigned product changes and browser checks are complete. The final full Vitest rerun is queued behind L5's gate; the results below distinguish that pending gate from the completed checks.
+All assigned product changes and the coordinator's bounded review fixes are complete. The pre-review full Vitest run passed on implementation commit `c7af2ef6` after L5 released the shared test slot. The review fixes passed the affected suites and static checks below; the coordinator owns the final combined full gate and lane V browser verification after merging.
+
+Implementation history: `ad07be10` (plan), `57a414bf` (Portfolio records), `9fcce918` (allocation action ownership), and `c7af2ef6` (remaining money editors, Portfolio follow-ups, fence and browser record). The follow-up `fix(money): complete create and validation focus` closes the three review findings recorded below.
 
 ### Changes
 
 - Transactions, manual and automatic dividends, securities, ESPP lots and offerings, compensation events and grants, and paycheck profiles now delete through their logged batch. Each list owns its hook, supplies its original row identity, and returns its current reload promise. Undo no longer creates an approximate replacement transaction, dividend or grant. Transaction reorder Undo keeps its separate existing protocol.
-- The editors reveal and focus their entry field, mark the edited row, and return Escape/Cancel to its Edit control. A successful edit waits for the list reload before revealing/flashing and focusing that row. Adds reveal/flash while preserving the repeat-entry focus and existing amount-reset ordering.
+- The editors reveal and focus their entry field, mark the edited row, and return Escape/Cancel to its Edit control. A successful edit waits for the list reload before revealing/flashing and focusing that row. Single-add securities, offerings, profiles, comp events and grants focus the new row's Edit control after reload. Repeat-entry transactions, dividends and ESPP lots retain their form focus. Both paths preserve the existing focus-before-reset ordering for amount inputs.
 - SaveButton/SaveStatus keep form state and failures at the action row; subsequent input clears failures. Row failures use the toast. Controls retain focus while busy; siblings are inert. Duplicate starts a fresh transaction baseline even when its source is currently being edited. An applied paycheck scenario starts dirty and can be saved immediately.
 - ESPP Reset uses a small local logged-delete path, approved by the coordinator, so its receipt is exactly `Reset the {label} purchase period`. It restores the batch with `undoBatch`, waits for the model reload, reveals/flashes the period and focuses Reset. The fallback after reset is the corresponding derived row's first input. Model Save and Reset each own their spinner.
-- Allocation draft/activation keep their labels and put the spinner only on the pressed button. The editor's trigger receives focus before it closes. ClassificationEditor's existing logged Undo was retained and verified by its existing suite.
-- Security Set price reveals/focuses its input, keeps its error beside its controls, and returns Cancel/save to Set price. Paycheck validation focuses the named field, its actions span the form grid, and a Profiles arrival has no visible Summary breakdown ghost.
+- Allocation draft/activation keep their labels and put the spinner only on the pressed button. Opening the editor reveals/focuses the first target, and Escape focuses the trigger before closing. Its Undo returns the batch promise; success and failure return focus to the trigger. ClassificationEditor's existing logged Undo was retained and verified by its existing suite.
+- Security Set price reveals/focuses its input, keeps its error beside its controls, and returns Cancel/save to Set price. Existing local validation errors focus the first named invalid field throughout the lane, including the ESPP model's table cells. No validation rules changed. Paycheck's actions span the form grid, and a Profiles arrival has no visible Summary breakdown ghost.
 - The L6 native-confirm allowlist block is empty. Other lanes' blocks and `ALLOWLIST_AT_LANDING` are untouched.
 
 ### Tests and gates
@@ -188,13 +190,24 @@ Test-first regressions were observed failing before implementation for edit/Esca
 | `tsc -p tsconfig.node.json --noEmit` | Clean; no `tsc -b` |
 | `eslint .` | **0 errors / 26 existing warnings** |
 | `git diff --check` | Clean |
-| Final full gate | Queued with coordinator after L5; append its result when complete |
+| Pre-review full gate on `c7af2ef6`, `--maxWorkers=4` | **321 files / 4,782 tests passed**, exit 0, 226.37 seconds; `full-vitest-final.log` |
+| Review regressions, first run | **14 failed** for the expected focus gaps; `review-red.log` |
+| Same review regressions after fixes | **14 passed**, five files; `review-green.log` |
+| Final affected suites, `--maxWorkers=2` | **7 files / 372 tests passed**, exit 0, 33.06 seconds; `review-targeted.log` |
 
 The first full gate exposed a guide source-label fence (`Save & recalculate` had been expressed as an HTML entity) and a grant test clicking Edit before the preceding reload finished. The label remains unchanged in the UI and is now a literal. The sequential grant test now waits for the intentionally inert Edit control to become ready. A later targeted ESPP serializer test needed the same correction. Existing independent-feed overlap coverage remains; same-panel actions correctly wait through reload.
+
+### Review completion
+
+The coordinator found three remaining spec gaps in the first handoff: single-add creates still kept form focus, Allocation lacked edit/Escape handling and a failed-Undo focus fallback, and several local validation errors left focus on Save. The follow-up fixes all three. Five create regressions replace the page's list through its asynchronous reload and assert focus on the new row's Edit control plus its flash. Allocation tests cover first-target focus, Escape/trigger return and failed logged Undo. Validation tests cover missing security/manual price, event year, all grant field families, lot sale pairs, transaction required fields and split factor, dividend amount, and each ESPP model input plus its percentage range. Existing carry-forward and focus-before-reset regressions remain green.
+
+The final app/node TypeScript checks, full ESLint run and diff check were repeated after these fixes. The coordinator reviewed the bounded source diff with no remaining blocker. No shared primitive contracts changed: Allocation returns its Undo promise for the coordinator's async ToastProvider support. The final combined full gate and browser V are integration work, not claimed as completed by this lane.
 
 ### Real browser evidence
 
 Headless Edge 153, 1366 × 768, worktree Vite 5276 and copied writable backend 8086 (`finance_polish_w6`, scheduler/snapshots disabled). The eight-record probe checked the last row's Edit/Escape, create reveal and flash, deferred PATCH ownership/width, delete disappearance before the toast, useful focus, and exact API row equality after Undo. All eight passed, with no native dialogs, page errors or console errors in the successful runs.
+
+These browser runs preceded the review fixes. Their create check asserted useful non-body focus and row flash, not specifically new-row Edit focus. That stronger behavior is covered by the new real-reload component regressions; the V owner was told to include representative post-merge browser checks. No additional product writes were made during review.
 
 | Record | Save width before / during | Exact restore |
 |---|---:|---|
@@ -225,4 +238,4 @@ Artifacts remain outside the source tree at `%TEMP%/codex-polish-L6/work-L6/`: `
 - The three editor families share the helper, so the remaining ESPP/Comp/Paycheck implementation and its small Portfolio follow-ups are committed together with their fence removals.
 - Scratch artifacts moved outside the worktree because the private Vite cache otherwise made ESLint scan generated dependency files. The source tree contains no generated cache or browser artifacts.
 - The local stack initially needed a backend restart and an IPv4 database host correction. Larger Portfolio responses were still intermittently cut off by the local Vite proxy: a 200 response with a 75,698-byte Content-Length ended in `ECONNRESET`, and the browser's request timed out. The successful ledger and extra probes transparently fetched **real GET responses directly from 8086** and fulfilled them into the browser; prefs retained the harness overlay and all writes used the normal local Vite-to-backend route. No API data was mocked and no application transport/timeouts were changed. This limits the browser evidence to the UI/backend behavior, not the reliability of the local dev proxy.
-- No push, merge, deployment, backend edit or shared primitive edit was made. Final full gate and coordinator review remain before integration.
+- No push, merge, deployment, backend edit or shared primitive edit was made. L6 implementation, targeted verification and coordinator source review are complete; the combined full gate and browser V remain with integration.

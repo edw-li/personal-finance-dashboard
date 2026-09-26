@@ -322,6 +322,17 @@ vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) })
 
 const confirmSpy = vi.spyOn(window, 'confirm')
 
+it('focuses a newly created profile after its list reloads', async () => {
+  vi.mocked(fetchProfiles).mockResolvedValueOnce([profile2025]).mockResolvedValueOnce(PROFILES)
+  renderPage('/paycheck?section=profiles')
+  await screen.findByLabelText('Effective date')
+  type('Effective date', '2026-01-01')
+  fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+  const edit = await screen.findByRole('button', { name: 'Edit the profile effective Jan 1, 2026' })
+  await waitFor(() => expect(document.activeElement).toBe(edit))
+  expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true)
+})
+
 it('reveals the profile effective date and returns Escape to its row', async () => {
   renderPage('/paycheck?section=profiles')
   const edit = (await screen.findAllByRole('button', { name: /^Edit the profile effective/ })).at(-1)!

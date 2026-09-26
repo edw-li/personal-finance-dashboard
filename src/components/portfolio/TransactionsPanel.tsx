@@ -428,12 +428,14 @@ export default function TransactionsPanel({
     if (busy) return
     if (!form.security_id || !form.account.trim()) {
       setError('Security and account are required')
+      feedback.reveal(!form.security_id ? '#txn-security' : '[aria-label="Account"]')
       return
     }
     // Type-appropriate numeric guard: an empty string reaches the API as `""`, which
     // 422s as an opaque pydantic decimal-parse error (Task 14 review M2).
     if (form.type === 'split' ? !form.split_factor.trim() : !(form.shares.trim() && form.price.trim())) {
       setError(form.type === 'split' ? 'Split factor is required' : 'Shares and price are required')
+      feedback.reveal(form.type === 'split' ? '#txn-split-factor' : !form.shares.trim() ? '#txn-shares' : '#txn-price')
       return
     }
     setError(null)
@@ -536,6 +538,7 @@ export default function TransactionsPanel({
         <label>
           Security
           <select
+            id="txn-security"
             value={form.security_id}
             onChange={(e) => {
               // The cue claims the security was kept; the moment it is changed the
@@ -632,7 +635,7 @@ export default function TransactionsPanel({
               {/* kind="plain", not money: price is Numeric(14, 4), so the $-echo would
                   render "$123.46" over a stored 123.4567 and hide two digits — and plain
                   also refuses the 2dp "=" evaluator the belt refuses. */}
-              <AmountInput kind="plain" value={form.price} onValueChange={set('price')} />
+              <AmountInput id="txn-price" kind="plain" value={form.price} onValueChange={set('price')} />
             </label>
             <label>
               Fees
