@@ -73,6 +73,7 @@ from app.services.ordering import (
     SORT_INDEX_STEP,
     STALE_TRANSACTIONS,
     check_permutation,
+    moved_ids,
     next_sort_index,
     order_lock,
     position_changes,
@@ -464,8 +465,10 @@ async def list_transactions(
 @router.put("/transactions/order", response_model=TransactionOrderOut)
 async def reorder_transactions(
     body: OrderIn,
+    response: Response,
     owner: OwnerQuery = None,
     db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> TransactionOrderOut:
     """Change the REPLAY order (2026-09-23 drag-to-reorder spec §3.2). `ids` is every row
     `GET /transactions?owner=` returns, in its new order. The visible rows take the slots
@@ -477,13 +480,15 @@ async def reorder_transactions(
     A scope never splits a holding: a position is keyed by an account label, and a label
     belongs to one owner (or joint), so each position is wholly visible or wholly hidden.
 
-    NOT change-logged, on purpose (spec §0.10): undo replays whole-row images, and this
-    table's other writers (the CRUD routes here, the importer) are unlogged, so undoing a
-    logged reorder after an unlogged edit of a moved row would silently revert that edit.
-    The client's Undo re-sends the previous order through this same route instead.
+    Change-logged since 2026-09-25 (polish spec §6.1): one update per renumbered row. The
+    ledger's CRUD is logged now too, and undo replays whole-row images, so an UNLOGGED reorder
+    would let an older edit's Undo write that row's old sort_index back and silently move it;
+    logged, that Undo meets the overlap refusal instead. The client's own Undo still re-sends
+    the previous order through this route.
 
     Serialized per ledger (decision 16): the order lock is the first statement, so two tabs'
-    replay orders never blend into one neither sent — the later request wins whole.
+    replay orders never blend into one neither sent — the later request wins whole, with fresh
+    before-images.
 
     Declared before the /transactions/{txn_id} routes so a later PUT on that path can never
     shadow it."""
@@ -507,16 +512,25 @@ async def reorder_transactions(
         for security_id, ticker in await db.execute(select(Security.id, Security.ticker))
     }
     by_id = {txn.id: txn for txn in ledger}
+    images = {txn.id: row_image(txn) for txn in ledger}  # BEFORE renumber touches a row
     before = fold_transactions(ledger)  # folded BEFORE renumber touches a row
     new_order = subset_in_slots([txn.id for txn in ledger], body.ids)
-    renumber(
+    renumbered = renumber(
         [by_id[txn_id] for txn_id in new_order],
         "sort_index",
         start=SORT_INDEX_STEP,
         step=SORT_INDEX_STEP,
     )
     changed = position_changes(before, fold_transactions(ledger), tickers)
-    await db.commit()
+    for txn, _old, _new in renumbered:
+        batch.record_update(txn, images[txn.id])
+    moved = moved_ids(visible_ids, body.ids)
+    if len(moved) == 1:
+        mover = by_id[moved[0]]
+        batch.label = f"Moved {_txn_name(tickers[mover.security_id], mover)}"
+    else:
+        batch.label = f"Reordered {len(moved)} transactions"
+    response.headers.update(batch_header(await batch.commit()))
     return TransactionOrderOut(
         transactions=[TransactionOut.model_validate(by_id[txn_id]) for txn_id in body.ids],
         changed_positions=changed,

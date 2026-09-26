@@ -5,8 +5,12 @@ ledger positions and price history included."""
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from uuid import UUID
 
-from sqlalchemy import select
+import pytest
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models import (
     LatestPrice,
@@ -16,13 +20,15 @@ from app.models import (
     Security,
     SecurityDividendEvent,
 )
-from app.services.changelog import DEPENDENT_REFUSAL, REPLAY_REFUSAL
+from app.services.changelog import DEPENDENT_REFUSAL, OVERLAP_REFUSAL, REPLAY_REFUSAL, undo_batch
+from app.services.ordering import order_lock
 from tests.exact_undo import images, logged, shape, undo
 from tests.portfolio_factories import acct
 
 PORTFOLIO = "/api/v1/portfolio"
 SECURITIES = f"{PORTFOLIO}/securities"
 TRANSACTIONS = f"{PORTFOLIO}/transactions"
+ORDER = f"{TRANSACTIONS}/order"
 VOO = {"ticker": "VOO", "name": "Vanguard S&P 500 ETF", "holding_type": "etf"}
 
 
@@ -309,3 +315,65 @@ async def test_deleting_a_transaction_and_undoing_it_restores_the_same_row(auth_
     assert await images(db, PositionTransaction) == before
     listed = (await auth_client.get(TRANSACTIONS)).json()
     assert [row["id"] for row in listed] == [first, middle, last]
+
+
+# ── the replay order ─────────────────────────────────────────────────────────────────
+
+
+async def test_a_reorder_logs_every_row_it_renumbers_and_undoes_to_the_old_order(auth_client, db):
+    first, middle, last = await ledger(db)
+    unchanged = await auth_client.put(ORDER, json={"ids": [first, middle, last]})
+    assert unchanged.status_code == 200 and "x-change-batch" not in unchanged.headers
+    moved = await auth_client.put(ORDER, json={"ids": [last, middle, first]})
+    assert moved.status_code == 200, moved.text
+    batch_id = moved.headers["x-change-batch"]
+    rows = await logged(db, batch_id)
+    # The middle row keeps 20, so it is neither written nor logged.
+    assert [(r.op, r.pk["id"], r.before["sort_index"], r.after["sort_index"]) for r in rows] == [
+        ("update", last, 30, 10),
+        ("update", first, 10, 30),
+    ]
+    assert {row.label for row in rows} == {"Reordered 2 transactions"}
+    assert (await undo(auth_client, batch_id)).status_code == 200
+    assert await replay(db) == [(first, 10), (middle, 20), (last, 30)]
+
+
+async def test_a_single_move_names_the_row_it_moved(auth_client, db):
+    first, middle, last = await ledger(db)
+    moved = await auth_client.put(ORDER, json={"ids": [middle, first, last]})
+    assert moved.status_code == 200, moved.text
+    labels = {row.label for row in await logged(db, moved.headers["x-change-batch"])}
+    assert labels == {"Moved NVDA buy of Sep 2, 2026"}
+
+
+async def test_an_older_edit_cannot_be_undone_once_a_reorder_moved_its_row(auth_client, db):
+    first, middle, last = await ledger(db)
+    edited = await auth_client.patch(f"{TRANSACTIONS}/{first}", json={"notes": "first lot"})
+    assert edited.status_code == 200, edited.text
+    moved = await auth_client.put(ORDER, json={"ids": [middle, first, last]})
+    assert moved.status_code == 200, moved.text
+    # Unlogged, the reorder would let this Undo write the edit's image — the row's OLD
+    # sort_index with it — and silently move the row back. Logged, the overlap refusal says so.
+    refused = await undo(auth_client, edited.headers["x-change-batch"])
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == OVERLAP_REFUSAL
+
+
+async def test_an_undo_of_a_reorder_waits_for_the_ledger_lock(auth_client, db, engine):
+    """The ledger is one of services.ordering's ORDERED_LISTS, so an Undo that rewrites its
+    replay order serializes with a reorder or an append in another tab, as the accounts' does."""
+    first, middle, last = await ledger(db)
+    moved = await auth_client.put(ORDER, json={"ids": [last, middle, first]})
+    batch_id = UUID(moved.headers["x-change-batch"])
+    after_move = await replay(db)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as holder:
+        await holder.execute(order_lock(PositionTransaction))  # a reorder in flight elsewhere
+        async with sessions() as undoing:
+            await undoing.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                await undo_batch(undoing, batch_id, actor="tab 2")
+        assert await replay(db) == after_move  # nothing undone meanwhile
+    async with sessions() as undoing:  # the holder's transaction is over: the lock is free
+        await undo_batch(undoing, batch_id, actor="tab 2")
+    assert await replay(db) == [(first, 10), (middle, 20), (last, 30)]
