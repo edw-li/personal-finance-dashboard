@@ -1,9 +1,14 @@
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useEscapeCancel } from '../feedback/reveal'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { useLatest } from '../reorder/useLatest'
+import { useRecordFeedback } from '../portfolio/useRecordFeedback'
 import { useState } from 'react'
-import { ApiError } from '../../api/client'
 import { createRsuGrant, deleteRsuGrant, updateRsuGrant } from '../../api/comp'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
-import { useToast } from '../ToastProvider'
 import type { RsuGrantCreate, RsuGrantOut, SeedCandidateOut } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
@@ -36,11 +41,6 @@ const KIND_LABELS: Record<GrantKind, string> = {
 }
 
 const KINDS: GrantKind[] = ['new_hire', 'refresh']
-
-function message(err: unknown, fallback: string): string {
-  // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
-  return err instanceof ApiError ? err.message : fallback
-}
 
 interface GrantFormState {
   kind: GrantKind
@@ -79,14 +79,25 @@ export default function RsuGrantsPanel({
 }: {
   grants: RsuGrantOut[]
   seedCandidates: SeedCandidateOut[]
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<GrantFormState>(EMPTY_GRANT)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
-  const toast = useToast()
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, grants, 'data-grant-id')
+  const current = useLatest({ onChanged, editingId })
+  const deleteWithUndo = useDeleteWithUndo()
+  const cancelEdit = () => {
+    if (busy) return
+    feedback.focusRow(editingId)
+    setEditingId(null)
+    setForm(EMPTY_GRANT)
+    feedback.begin(EMPTY_GRANT)
+    setError(null)
+  }
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
 
   const set = (field: keyof GrantFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
@@ -95,7 +106,7 @@ export default function RsuGrantsPanel({
     setEditingId(grant.id)
     // The server's own quantized strings, verbatim: nothing is reformatted on the way into a
     // box whose contents are about to be sent back. `shares` is the one int on the wire.
-    setForm({
+    const next: GrantFormState = {
       kind: grant.kind,
       label: grant.label,
       focal_year: grant.focal_year === null ? '' : String(grant.focal_year),
@@ -104,7 +115,11 @@ export default function RsuGrantsPanel({
       first_vest_date: grant.first_vest_date,
       vest_quantum: String(grant.vest_quantum),
       notes: grant.notes ?? '',
-    })
+    }
+    setForm(next)
+    feedback.begin(next)
+    setError(null)
+    feedback.reveal('#grant-label')
   }
 
   /**
@@ -116,6 +131,8 @@ export default function RsuGrantsPanel({
   const prefill = (seed: SeedCandidateOut) => {
     // Any open edit is dropped first: seeding the boxes while a row is being edited would
     // PATCH that row with this offer the moment Save was pressed.
+    feedback.begin(EMPTY_GRANT)
+    feedback.reveal('#grant-label')
     setEditingId(null)
     setError(null)
     setForm({
@@ -135,6 +152,7 @@ export default function RsuGrantsPanel({
   }
 
   const submit = () => {
+    if (busy) return
     const label = form.label.trim()
     const shares = form.shares.trim()
     const price = form.grant_price.trim()
@@ -222,72 +240,36 @@ export default function RsuGrantsPanel({
       notes: form.notes.trim() || null,
     }
     const request = editingId !== null ? updateRsuGrant(editingId, body) : createRsuGrant(body)
-    request
-      .then(() => {
-        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1).
-        // The LABEL, not the form's literal first field: that one is the Kind <select>, and
-        // a refocused select is one accidental wheel-scroll from silently changing a grant's
-        // kind — which is its whole vesting schedule. So the caret goes to the first box
-        // that is actually TYPED into.
-        // BEFORE the reset, and that order is load-bearing: this form carries no
-        // data-entry-scope, so Enter is the browser's implicit submit and the caret can
-        // still be sitting in the price AmountInput when this lands. Moving it BLURS that
-        // box synchronously, and the blur's commit closes over the box's PRE-reset text —
-        // canonicalizing a "$129.57" into an enqueued write. Focusing first aims that write
-        // at the state the full-object reset below then replaces; the other order lets it
-        // land on the emptied form and resurrect the price of the grant just saved.
-        // getElementById is the house DOM protocol (like data-entry-scope), so AmountInput
-        // keeps its no-ref API; the target is a plain <input>, so focusing it runs no React
-        // handler of its own.
-        document.getElementById('grant-label')?.focus()
-        setForm(EMPTY_GRANT)
-        setEditingId(null)
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
+    void saveState.run(() => request.then((saved) => {
+      // Focus before resetting: an AmountInput blur must commit into the old form.
+      if (editingId !== null) feedback.focusRow(editingId)
+      else document.getElementById('grant-label')?.focus()
+      setForm(EMPTY_GRANT)
+      feedback.saved(EMPTY_GRANT, saved?.id ?? editingId, editingId !== null)
+      setEditingId(null)
+      return current.current.onChanged()
+    })).finally(() => setBusy(false))
   }
 
   const remove = (grant: RsuGrantOut) => {
+    if (busy) return
     setBusy(true)
-    // Cleared on entry like submit's: a delete that succeeds must not leave the previous
-    // save's 409 sitting over the panel as if it still described the table.
-    setError(null)
-    // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone. Grants are
-    // parameters (the schedule recomputes from them), so a re-POST restores everything.
-    deleteRsuGrant(grant.id)
-      .then(() => {
-        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
-        // (Task 14 review I3). Reset on SUCCESS only.
-        if (grant.id === editingId) {
+    void deleteWithUndo({
+      name: `the ${grant.label} grant`,
+      row: feedback.row(grant.id),
+      request: () => deleteRsuGrant(grant.id),
+      onDeleted: () => {
+        if (current.current.editingId === grant.id) {
           setEditingId(null)
           setForm(EMPTY_GRANT)
+          feedback.begin(EMPTY_GRANT)
         }
-        onChanged()
-        toast.success(`Deleted the ${grant.label} grant`, {
-          action: {
-            label: 'Undo',
-            onAction: () => {
-              // The STORED columns only — vest_count and friends are computed on read.
-              createRsuGrant({
-                kind: grant.kind,
-                label: grant.label,
-                focal_year: grant.focal_year,
-                shares: grant.shares,
-                grant_price: grant.grant_price,
-                first_vest_date: grant.first_vest_date,
-                cliff_pct: grant.cliff_pct,
-                vest_quantum: grant.vest_quantum,
-                notes: grant.notes,
-              })
-                .then(() => onChanged())
-                .catch(() => toast.error(`Could not restore the ${grant.label} grant`))
-            },
-          },
-        })
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+        return current.current.onChanged()
+      },
+      onRestored: () => current.current.onChanged(),
+      restoredRow: () => feedback.row(grant.id),
+      focusAfter: feedback.focusAfterDelete(grant.id),
+    }).finally(() => setBusy(false))
   }
 
   return (
@@ -305,7 +287,6 @@ export default function RsuGrantsPanel({
         vest trues up). The focal year is only a tag that lines a grant up with its comp
         event.
       </p>
-      <FeedBanner error={error} />
       {seedCandidates.length > 0 && (
         <>
           <p className="drill-hint">
@@ -335,6 +316,8 @@ export default function RsuGrantsPanel({
         </>
       )}
       <form
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="comp-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -426,21 +409,21 @@ export default function RsuGrantsPanel({
           />
         </label>
         <div className="comp-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
+          <SaveButton type="submit" className="button button-primary" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {editingId !== null ? 'Save grant' : 'Add grant'}
-          </button>
+          </SaveButton>
+          <SaveStatus state={saveState} />
+          <FeedBanner error={error} />
           {editingId !== null && (
-            <button
+            <BusyButton
               type="button"
               className="button"
               aria-label="Cancel the grant edit"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY_GRANT)
-              }}
+               onClick={cancelEdit}
+              inert={busy}
             >
               Cancel
-            </button>
+            </BusyButton>
           )}
         </div>
       </form>
@@ -466,7 +449,7 @@ export default function RsuGrantsPanel({
             </thead>
             <tbody>
               {grants.map((grant) => (
-                <tr key={grant.id} className={grant.id === editingId ? 'is-editing' : undefined}>
+                <tr key={grant.id} data-grant-id={grant.id} aria-current={editingId === grant.id ? true : undefined} className={grant.id === editingId ? 'is-editing' : undefined}>
                   <td>{grant.label}</td>
                   <td>
                     <span className="badge">{KIND_LABELS[grant.kind]}</span>
@@ -493,7 +476,7 @@ export default function RsuGrantsPanel({
                     {grant.notes ?? '—'}
                   </td>
                   <td className="row-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Edit the ${grant.label} grant`}
@@ -501,19 +484,19 @@ export default function RsuGrantsPanel({
                       // fills the form from the row, and a save landing a moment later would
                       // reset it out from under the click.
                       disabled={busy}
-                      onClick={() => startEdit(grant)}
+                      data-edit inert={busy} onClick={() => startEdit(grant)}
                     >
                       Edit
-                    </button>
-                    <button
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Delete the ${grant.label} grant`}
                       disabled={busy}
-                      onClick={() => remove(grant)}
+                      data-delete onClick={() => remove(grant)}
                     >
                       Delete
-                    </button>
+                    </BusyButton>
                   </td>
                 </tr>
               ))}

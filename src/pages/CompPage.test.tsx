@@ -1,3 +1,4 @@
+import { undoBatch } from '../api/lifecycle'
 import { MemoryRouter } from 'react-router-dom'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -295,7 +296,37 @@ function fillNewGrant() {
   type('First vest', '2027-02-17')
 }
 
+vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) }))
+
 const confirmSpy = vi.spyOn(window, 'confirm')
+
+it('reveals a comp event editor and returns Escape to its row', async () => {
+  render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
+  const edit = await screen.findByRole('button', { name: 'Edit the 2027 comp event' })
+  fireEvent.click(edit)
+  await waitFor(() => expect(document.activeElement).toBe(field('Focal year')))
+  expect(edit.closest('tr')?.getAttribute('aria-current')).toBe('true')
+  fireEvent.keyDown(field('Focal year'), { key: 'Escape' })
+  expect(document.activeElement).toBe(edit)
+})
+
+it('restores an event batch and its original row after the reload', async () => {
+  vi.mocked(fetchEvents).mockResolvedValueOnce(EVENTS).mockResolvedValueOnce([event2024, event2027]).mockResolvedValueOnce(EVENTS)
+  render(<ToastProvider><MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter></ToastProvider>)
+  const remove = await screen.findByRole('button', { name: 'Delete the 2026 comp event' })
+  remove.focus()
+  fireEvent.click(remove)
+  await screen.findByText('Deleted the 2026 comp event')
+  expect(screen.queryByRole('button', { name: 'Edit the 2026 comp event' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Restored the 2026 comp event')
+  const row = screen.getByRole('button', { name: 'Edit the 2026 comp event' }).closest('tr')!
+  expect(row.getAttribute('data-comp-event-id')).toBe('3')
+  expect(row.contains(document.activeElement)).toBe(true)
+  expect(row.hasAttribute('data-flash')).toBe(true)
+  expect(undoBatch).toHaveBeenCalledWith('event-batch')
+  expect(createEvent).not.toHaveBeenCalled()
+})
 
 beforeEach(() => {
   clearSnapshots()
@@ -305,11 +336,11 @@ beforeEach(() => {
   vi.mocked(fetchEvents).mockResolvedValue(EVENTS)
   vi.mocked(createEvent).mockResolvedValue(event2027)
   vi.mocked(updateEvent).mockResolvedValue(event2026)
-  vi.mocked(deleteEvent).mockResolvedValue({ batchId: null })
+  vi.mocked(deleteEvent).mockResolvedValue({ batchId: 'event-batch' })
   vi.mocked(fetchVestingSchedule).mockResolvedValue(EMPTY_SCHEDULE)
   vi.mocked(createRsuGrant).mockResolvedValue(GRANT_NEW_HIRE)
   vi.mocked(updateRsuGrant).mockResolvedValue(GRANT_NEW_HIRE)
-  vi.mocked(deleteRsuGrant).mockResolvedValue({ batchId: null })
+  vi.mocked(deleteRsuGrant).mockResolvedValue({ batchId: 'grant-batch' })
   confirmSpy.mockReturnValue(true)
 })
 
@@ -577,15 +608,11 @@ describe('CompPage — writes', () => {
     expect(vi.mocked(createEvent).mock.calls[0][0].unvested_price).toBe('190.0000')
   })
 
-  it('deletes an event only after the confirm is accepted', async () => {
+  it('deletes an event instantly without a native confirm', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('FY26 refresh')
 
-    confirmSpy.mockReturnValue(false)
-    fireEvent.click(screen.getByRole('button', { name: 'Delete the 2026 comp event' }))
-    expect(vi.mocked(deleteEvent)).not.toHaveBeenCalled()
-
-    confirmSpy.mockReturnValue(true)
+    expect(confirmSpy).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2026 comp event' }))
     await waitFor(() => expect(vi.mocked(deleteEvent)).toHaveBeenCalledWith(3))
     await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
@@ -794,33 +821,19 @@ describe('CompPage — loading', () => {
     )
   })
 
-  it('lets only the NEWEST of two overlapping loads land', async () => {
+  it('keeps event actions quiet until the changed list has arrived', async () => {
     const slow = deferred<CompEventOut[]>()
-    const fast = deferred<CompEventOut[]>()
-    vi.mocked(fetchEvents)
-      .mockResolvedValueOnce(EVENTS)
-      .mockReturnValueOnce(slow.promise)
-      .mockReturnValueOnce(fast.promise)
+    vi.mocked(fetchEvents).mockResolvedValueOnce(EVENTS).mockReturnValueOnce(slow.promise)
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('FY26 refresh')
-
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2024 comp event' }))
-    await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete the 2027 comp event' }))
-    await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(3))
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
-    fast.resolve([event2026])
-    await waitFor(() =>
-      expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2026'),
-    )
-
-    await act(async () => {
-      slow.resolve([event2024, event2027])
-    })
-    // The older load answers LAST and must not roll the table back — the seq ref, not the
-    // network, decides which feed is on screen.
-    expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2026')
+    await waitFor(() => expect(fetchEvents).toHaveBeenCalledTimes(2))
+    const remove = screen.getByRole('button', { name: 'Delete the 2027 comp event' })
+    expect(remove.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(remove)
+    expect(deleteEvent).toHaveBeenCalledTimes(1)
+    await act(async () => slow.resolve([event2026, event2027]))
+    await waitFor(() => expect(remove.getAttribute('aria-disabled')).not.toBe('true'))
   })
 })
 
@@ -1135,7 +1148,8 @@ describe('CompPage — RSU grant writes', () => {
 
     // The query must retry: this button's own text (Add → Save) flips on the same
     // edit-mode re-render, which races parallel-load scheduling under the full suite.
-    fireEvent.click(await screen.findByRole('button', { name: 'Save grant' }))
+    // Exercise the stored-row serializer; an unchanged Save is quiet.
+    fireEvent.submit((await screen.findByRole('button', { name: 'Save grant' })).closest('form')!)
     await waitFor(() => expect(vi.mocked(updateRsuGrant)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(updateRsuGrant).mock.calls[0][0]).toBe(11)
     // The column's own 4dp string, NOT the '0.25' this client would derive: an old grant may
@@ -1155,7 +1169,9 @@ describe('CompPage — RSU grant writes', () => {
       notes: null,
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit the FY24 new hire grant' }))
+    const editAgain = screen.getByRole('button', { name: 'Edit the FY24 new hire grant' })
+    await waitFor(() => expect(editAgain.getAttribute('aria-disabled')).not.toBe('true'))
+    fireEvent.click(editAgain)
     fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'refresh' } })
     fireEvent.click(await screen.findByRole('button', { name: 'Save grant' }))
     await waitFor(() => expect(vi.mocked(updateRsuGrant)).toHaveBeenCalledTimes(2))
@@ -1257,46 +1273,33 @@ describe('CompPage — RSU grant writes', () => {
     // `setForm(EMPTY_GRANT)`), so an offer taken — or a row opened — mid-flight would be
     // wiped a moment after it was clicked. They shut with the rest of the panel.
     await waitFor(() => expect(chip().disabled).toBe(true))
-    expect(edit().disabled).toBe(true)
+    expect(edit().getAttribute('aria-disabled')).toBe('true')
 
     await act(async () => {
       slow.resolve(GRANT_NEW_HIRE)
     })
     expect(chip().disabled).toBe(false)
-    expect(edit().disabled).toBe(false)
+    expect(edit().getAttribute('aria-disabled')).not.toBe('true')
   })
 
-  it('deletes a grant instantly, and Undo re-creates it through the POST', async () => {
-    render(
-      <ToastProvider>
-        <MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>
-      </ToastProvider>,
-    )
-    await screen.findByText('RSU grants')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete the FY26 refresh grant' }))
-    // No confirm interrupt any more (2026-08-25 polish §8) — the delete just runs.
-    expect(confirmSpy).not.toHaveBeenCalled()
-    await waitFor(() => expect(vi.mocked(deleteRsuGrant)).toHaveBeenCalledWith(12))
-    await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2))
-    expect(screen.getByText('Deleted the FY26 refresh grant')).toBeTruthy()
-
+  it('deletes a grant and restores its original id through the change batch', async () => {
+    vi.mocked(fetchVestingSchedule).mockResolvedValueOnce(SCHEDULE)
+      .mockResolvedValueOnce({ ...SCHEDULE, grants: [GRANT_NEW_HIRE] })
+      .mockResolvedValueOnce(SCHEDULE)
+    render(<ToastProvider><MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter></ToastProvider>)
+    const remove = await screen.findByRole('button', { name: 'Delete the FY26 refresh grant' })
+    remove.focus()
+    fireEvent.click(remove)
+    await screen.findByText('Deleted the FY26 refresh grant')
+    expect(screen.queryByRole('button', { name: 'Edit the FY26 refresh grant' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-    // The captured row's STORED fields, verbatim — computed columns never travel back.
-    await waitFor(() =>
-      expect(vi.mocked(createRsuGrant)).toHaveBeenCalledWith({
-        kind: 'refresh',
-        label: 'FY26 refresh',
-        focal_year: 2026,
-        shares: 480,
-        grant_price: '129.5651',
-        first_vest_date: '2026-09-16',
-        cliff_pct: '0.0625',
-        vest_quantum: 1,
-        notes: 'seeded from focal history',
-      }),
-    )
-    await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(3))
+    await screen.findByText('Restored the FY26 refresh grant')
+    expect(undoBatch).toHaveBeenCalledWith('grant-batch')
+    expect(createRsuGrant).not.toHaveBeenCalled()
+    const row = screen.getByRole('button', { name: 'Edit the FY26 refresh grant' }).closest('tr')!
+    expect(row.getAttribute('data-grant-id')).toBe('12')
+    expect(row.contains(document.activeElement)).toBe(true)
+    expect(row.hasAttribute('data-flash')).toBe(true)
   })
 })
 
@@ -1412,7 +1415,8 @@ describe('CompPage — the two feeds are independent', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete the FY26 refresh grant' }))
     await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete the FY24 new hire grant' }))
+    // A different panel can refresh the same schedule while the grant reload waits.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete the 2024 comp event' }))
     await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(3))
 
     // The grant AND its tranches: a deleted grant takes its vest rows with it.

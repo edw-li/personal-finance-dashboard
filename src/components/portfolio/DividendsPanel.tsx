@@ -155,7 +155,7 @@ export default function DividendsPanel({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
-  const feedback = useRecordFeedback(form, [], 'data-dividend-id')
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, [], 'data-dividend-id')
   const latest = useLatest({ onChanged, editingId })
   const deleteWithUndo = useDeleteWithUndo()
   const cancelEdit = () => {
@@ -167,7 +167,7 @@ export default function DividendsPanel({
     setKept(false)
     setError(null)
   }
-  useEscapeCancel(feedback.formRef, cancelEdit, editingId !== null && !busy)
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
   const accountNote = newAccountNote(form.account, accounts, primaryName)
   // Only the CHART option is memoized (EChart keys its notMerge setOption on [option], so
   // a fresh object per keystroke in the form below would redraw it); the tiles are plain
@@ -367,7 +367,7 @@ export default function DividendsPanel({
       editingId !== null
         ? updateDividend(editingId, body)
         : createDividend({ ...body, security_id: Number(form.security_id) })
-    void feedback.state.run(() => request
+    void saveState.run(() => request
       .then((saved) => {
         if (editingId === null) {
           // The next payment starts here — BEFORE the reset, and that order is load-bearing
@@ -440,7 +440,7 @@ export default function DividendsPanel({
       },
       restoredRow: () => feedback.row(dividend.id),
       focusAfter: () => (neighbour ? feedback.row(neighbour.id)?.querySelector<HTMLButtonElement>('[data-delete]') : null)
-        ?? feedback.formRef.current?.querySelector<HTMLButtonElement>('[type="submit"]') ?? null,
+        ?? editorRef.current?.querySelector<HTMLButtonElement>('[type="submit"]') ?? null,
     }).finally(() => setBusy(false))
   }
 
@@ -497,8 +497,8 @@ export default function DividendsPanel({
         </p>
       )}
       <form
-        ref={feedback.formRef}
-        onChangeCapture={() => { setError(null); feedback.state.clearError() }}
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="entry-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -561,12 +561,12 @@ export default function DividendsPanel({
           <input className="field-input" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
         </label>
         <div className="form-actions">
-          <SaveButton className="button" type="submit" state={feedback.state} inert={busy && feedback.state.status !== 'saving'}>
+          <SaveButton className="button" type="submit" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {/* The label is the second half of the carry-forward cue: "Add another" is what
                 a form still holding the last row's context is actually about to do. */}
             {editingId !== null ? 'Save changes' : kept ? 'Add another' : 'Add dividend'}
           </SaveButton>
-          <SaveStatus state={feedback.state} />
+          <SaveStatus state={saveState} />
           <FeedBanner error={error} />
           {editingId !== null && (
             <BusyButton className="button" type="button" inert={busy} onClick={cancelEdit}>Cancel</BusyButton>

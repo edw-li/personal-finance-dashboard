@@ -1,3 +1,14 @@
+import BusyButton from '../components/feedback/BusyButton'
+import { SaveButton } from '../components/feedback/SaveButton'
+import { SaveStatus } from '../components/feedback/SaveStatus'
+import { flashElement, revealRow, useEscapeCancel } from '../components/feedback/reveal'
+import { undoBatch } from '../api/lifecycle'
+import { useToast } from '../components/ToastProvider'
+import { nextFrame } from '../components/reorder/reorderDom'
+import { useSaveState } from '../components/feedback/useSaveState'
+import { useDeleteWithUndo } from '../components/feedback/useDeleteWithUndo'
+import { useLatest } from '../components/reorder/useLatest'
+import { useRecordFeedback } from '../components/portfolio/useRecordFeedback'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -124,13 +135,25 @@ function LotsPanel({
   offerings: EsppOfferingOut[]
   // The lot the anatomy chart is pointing at (spec §5.6), or null.
   highlightId: number | null
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<LotFormState>(EMPTY_LOT)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, data.lots, 'data-lot-id')
+  const current = useLatest({ onChanged, editingId })
+  const deleteWithUndo = useDeleteWithUndo()
+  const cancelEdit = () => {
+    if (busy) return
+    feedback.focusRow(editingId)
+    setEditingId(null)
+    setForm(EMPTY_LOT)
+    feedback.begin(EMPTY_LOT)
+    setError(null)
+  }
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
   // The lots scroller's edge cue (data-scroll-more, spec §7) — the shared hook; null-safe.
   const scrollRef = useRef<HTMLDivElement>(null)
   useScrollEdges(scrollRef)
@@ -140,7 +163,7 @@ function LotsPanel({
 
   const startEdit = (lot: EsppLotOut) => {
     setEditingId(lot.id)
-    setForm({
+    const next: LotFormState = {
       purchase_date: lot.purchase_date,
       qualifying_date: lot.qualifying_date,
       shares: lot.shares,
@@ -150,7 +173,11 @@ function LotsPanel({
       sold_date: lot.sold_date ?? '',
       sold_price: lot.sold_price ?? '',
       notes: lot.notes ?? '',
-    })
+    }
+    setForm(next)
+    feedback.begin(next)
+    setError(null)
+    feedback.reveal('#lot-purchase-date')
   }
 
   // Prefill-only, untouched-box guard (spec §6.4): typing a purchase date fills the
@@ -181,6 +208,7 @@ function LotsPanel({
   }
 
   const submit = () => {
+    if (busy) return
     // Canonicalized at the READ site, so the presence checks, the blank-vs-null branches
     // and both bodies below all see the one text the column will store — a submit reached
     // without a blur (type, then click Save) must not ship "$85.50" to a Decimal column.
@@ -256,46 +284,36 @@ function LotsPanel({
       }
       request = createLot(body)
     }
-    request
-      .then(() => {
-        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1).
-        // BEFORE the reset, and that order is load-bearing: this form carries no
-        // data-entry-scope, so Enter is the browser's implicit submit and the caret is
-        // still sitting in an AmountInput when this lands. Moving it BLURS that box
-        // synchronously, and the blur's commit closes over the box's PRE-reset text —
-        // canonicalizing a "$150.00" into an enqueued write. Focusing first aims that write
-        // at the state the full-object reset below then replaces; the other order lets it
-        // land on the emptied form and resurrect one figure of the lot just saved.
-        // getElementById is the house DOM protocol (like data-entry-scope), so AmountInput
-        // keeps its no-ref API; the target is a plain <input type="date">, so focusing it
-        // runs no React handler of its own.
-        document.getElementById('lot-purchase-date')?.focus()
-        setForm(EMPTY_LOT)
-        setEditingId(null)
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
+    void saveState.run(() => request.then((saved) => {
+      // Focus before resetting: an AmountInput blur must commit into the old form.
+      if (editingId !== null) feedback.focusRow(editingId)
+      else document.getElementById('lot-purchase-date')?.focus()
+      setForm(EMPTY_LOT)
+      feedback.saved(EMPTY_LOT, saved?.id ?? editingId, editingId !== null)
+      setEditingId(null)
+      return current.current.onChanged()
+    })).finally(() => setBusy(false))
   }
 
   const remove = (lot: EsppLotOut) => {
-    if (!window.confirm(`Delete the lot purchased ${formatDate(lot.purchase_date)}?`)) return
+    if (busy) return
     setBusy(true)
-    // Cleared on entry like submit's: a delete that succeeds must not leave the previous
-    // save's 409 sitting over the panel as if it still described the table.
-    setError(null)
-    deleteLot(lot.id)
-      .then(() => {
-        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
-        // (Task 14 review I3). Reset on SUCCESS only.
-        if (lot.id === editingId) {
+    void deleteWithUndo({
+      name: `the lot purchased ${formatDate(lot.purchase_date)}`,
+      row: feedback.row(lot.id),
+      request: () => deleteLot(lot.id),
+      onDeleted: () => {
+        if (current.current.editingId === lot.id) {
           setEditingId(null)
           setForm(EMPTY_LOT)
+          feedback.begin(EMPTY_LOT)
         }
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+        return current.current.onChanged()
+      },
+      onRestored: () => current.current.onChanged(),
+      restoredRow: () => feedback.row(lot.id),
+      focusAfter: feedback.focusAfterDelete(lot.id),
+    }).finally(() => setBusy(false))
   }
 
   return (
@@ -328,8 +346,9 @@ function LotsPanel({
       <p className="drill-hint">
         A sold lot is measured against its sale price; every other row against the quote above.
       </p>
-      <FeedBanner error={error} />
       <form
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="espp-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -430,21 +449,21 @@ function LotsPanel({
           />
         </label>
         <div className="espp-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
+          <SaveButton type="submit" className="button button-primary" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {editingId !== null ? 'Save lot' : 'Add lot'}
-          </button>
+          </SaveButton>
+          <SaveStatus state={saveState} />
+          <FeedBanner error={error} />
           {editingId !== null && (
-            <button
+            <BusyButton
               type="button"
               className="button"
               aria-label="Cancel the lot edit"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY_LOT)
-              }}
+               onClick={cancelEdit}
+              inert={busy}
             >
               Cancel
-            </button>
+            </BusyButton>
           )}
         </div>
       </form>
@@ -476,7 +495,7 @@ function LotsPanel({
             <tbody>
               {data.lots.map((lot) => (
                 <tr
-                  key={lot.id}
+                  key={lot.id} data-lot-id={lot.id} aria-current={editingId === lot.id ? true : undefined}
                   // The chart cards address rows by id (spec §5.6) — the scroll target and the ring.
                   id={`lot-row-${lot.id}`}
                   className={
@@ -512,23 +531,23 @@ function LotsPanel({
                     {lot.notes ?? ''}
                   </td>
                   <td className="row-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Edit lot from ${formatDate(lot.purchase_date)}`}
-                      onClick={() => startEdit(lot)}
+                      data-edit inert={busy} onClick={() => startEdit(lot)}
                     >
                       Edit
-                    </button>
-                    <button
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Delete lot from ${formatDate(lot.purchase_date)}`}
                       disabled={busy}
-                      onClick={() => remove(lot)}
+                      data-delete onClick={() => remove(lot)}
                     >
                       Delete
-                    </button>
+                    </BusyButton>
                     {/* UNSOLD rows only: the what-if card models a PROSPECTIVE sale, and a
                         lot that already has a sold date 409s there (api/taxes.py). The link
                         wears .button so it sits in the row-actions rank with its two
@@ -615,7 +634,7 @@ function OfferingsPanel({
   offerings: EsppOfferingOut[]
   // Employer daily closes for the "use close" chip; empty when the ticker/bars are absent.
   bars: PricePoint[]
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
   /** The page's view switch — the empty note's door into the Purchase model view (spec §14). */
   goTo: (section: EsppSection) => void
 }) {
@@ -623,6 +642,18 @@ function OfferingsPanel({
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, offerings, 'data-offering-id')
+  const current = useLatest({ onChanged, editingId })
+  const deleteWithUndo = useDeleteWithUndo()
+  const cancelEdit = () => {
+    if (busy) return
+    feedback.focusRow(editingId)
+    setEditingId(null)
+    setForm(EMPTY_OFFERING)
+    feedback.begin(EMPTY_OFFERING)
+    setError(null)
+  }
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
 
   const set = (field: keyof OfferingFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
@@ -640,14 +671,19 @@ function OfferingsPanel({
 
   const startEdit = (offering: EsppOfferingOut) => {
     setEditingId(offering.id)
-    setForm({
+    const next: OfferingFormState = {
       offering_start: offering.offering_start,
       subscription_price: offering.subscription_price,
       notes: offering.notes ?? '',
-    })
+    }
+    setForm(next)
+    feedback.begin(next)
+    setError(null)
+    feedback.reveal('#offering-start')
   }
 
   const submit = () => {
+    if (busy) return
     // Canonical at the READ site (LotsPanel's rule). kind="plain": the column is 5dp, so
     // no "=" and no 2dp echo may touch it.
     const price = canonicalAmount(form.subscription_price.trim(), { expressions: false })
@@ -663,33 +699,36 @@ function OfferingsPanel({
       notes: form.notes.trim() || null,
     }
     const request = editingId !== null ? updateOffering(editingId, body) : createOffering(body)
-    request
-      .then(() => {
-        // Focus BEFORE the reset (the blur-commit invariant, LotsPanel's note).
-        document.getElementById('offering-start')?.focus()
-        setForm(EMPTY_OFFERING)
-        setEditingId(null)
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
+    void saveState.run(() => request.then((saved) => {
+      // Focus before resetting: an AmountInput blur must commit into the old form.
+      if (editingId !== null) feedback.focusRow(editingId)
+      else document.getElementById('offering-start')?.focus()
+      setForm(EMPTY_OFFERING)
+      feedback.saved(EMPTY_OFFERING, saved?.id ?? editingId, editingId !== null)
+      setEditingId(null)
+      return current.current.onChanged()
+    })).finally(() => setBusy(false))
   }
 
   const remove = (offering: EsppOfferingOut) => {
-    if (!window.confirm(`Delete the offering starting ${formatDate(offering.offering_start)}?`))
-      return
+    if (busy) return
     setBusy(true)
-    setError(null)
-    deleteOffering(offering.id)
-      .then(() => {
-        if (offering.id === editingId) {
+    void deleteWithUndo({
+      name: `the offering starting ${formatDate(offering.offering_start)}`,
+      row: feedback.row(offering.id),
+      request: () => deleteOffering(offering.id),
+      onDeleted: () => {
+        if (current.current.editingId === offering.id) {
           setEditingId(null)
           setForm(EMPTY_OFFERING)
+          feedback.begin(EMPTY_OFFERING)
         }
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+        return current.current.onChanged()
+      },
+      onRestored: () => current.current.onChanged(),
+      restoredRow: () => feedback.row(offering.id),
+      focusAfter: feedback.focusAfterDelete(offering.id),
+    }).finally(() => setBusy(false))
   }
 
   const coverage = (offering: EsppOfferingOut, index: number): string => {
@@ -709,8 +748,9 @@ function OfferingsPanel({
         your subscription price. Periods resolve to the latest offering starting on or
         before them — adding a reset re-prices everything after it automatically.
       </p>
-      <FeedBanner error={error} />
       <form
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="espp-form espp-knobs"
         onSubmit={(e) => {
           e.preventDefault()
@@ -751,21 +791,21 @@ function OfferingsPanel({
           />
         </label>
         <div className="espp-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
+          <SaveButton type="submit" className="button button-primary" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {editingId !== null ? 'Save offering' : 'Add offering'}
-          </button>
+          </SaveButton>
+          <SaveStatus state={saveState} />
+          <FeedBanner error={error} />
           {editingId !== null && (
-            <button
+            <BusyButton
               type="button"
               className="button"
               aria-label="Cancel the offering edit"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY_OFFERING)
-              }}
+               onClick={cancelEdit}
+              inert={busy}
             >
               Cancel
-            </button>
+            </BusyButton>
           )}
         </div>
       </form>
@@ -805,7 +845,7 @@ function OfferingsPanel({
             <tbody>
               {offerings.map((offering, index) => (
                 <tr
-                  key={offering.id}
+                  key={offering.id} data-offering-id={offering.id} aria-current={editingId === offering.id ? true : undefined}
                   className={offering.id === editingId ? 'is-editing' : undefined}
                 >
                   <td>{formatDate(offering.offering_start)}</td>
@@ -816,23 +856,23 @@ function OfferingsPanel({
                     {offering.notes ?? ''}
                   </td>
                   <td className="row-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Edit offering from ${formatDate(offering.offering_start)}`}
-                      onClick={() => startEdit(offering)}
+                      data-edit inert={busy} onClick={() => startEdit(offering)}
                     >
                       Edit
-                    </button>
-                    <button
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Delete offering from ${formatDate(offering.offering_start)}`}
                       disabled={busy}
-                      onClick={() => remove(offering)}
+                      data-delete onClick={() => remove(offering)}
                     >
                       Delete
-                    </button>
+                    </BusyButton>
                   </td>
                 </tr>
               ))}
@@ -899,16 +939,27 @@ function ModelerCard({
   data: EsppModelerOut | null
   knobs: Knobs
   onKnobChange: (update: (current: Knobs) => Knobs) => void
-  onRun: () => void
+  onRun: () => void | Promise<void>
   onYearSelect: (year: number) => void
-  onRowsSaved: () => void
+  onRowsSaved: () => void | Promise<void>
   /** The page-top $25k tile must not assert a figure this card is disclaiming. */
   onDirtyChange?: (dirty: boolean) => void
   busy: boolean
 }) {
   const [edits, setEdits] = useState<RowEdits>({})
   const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+  const [action, setAction] = useState<'save' | number | null>(null)
+  const saving = action !== null
+  const toast = useToast()
+  const current = useLatest({ onRowsSaved, onRun })
+  const saveButton = useRef<HTMLButtonElement>(null)
+  const periodElement = (label: string) => Array.from(scrollRef.current?.querySelectorAll<HTMLElement>('[data-period-label]') ?? [])
+    .find((element) => element.dataset.periodLabel === label) ?? null
+  const reloadRows = async () => {
+    await current.current.onRowsSaved()
+    // The refreshed rows must commit before a replaced stored/derived slot takes focus.
+    await new Promise<void>((resolve) => nextFrame(resolve))
+  }
   // The period table's edge cue (spec §7). The scroller lives behind a `data !== null` gate, so
   // on a COLD arrival at /espp?section=purchase the ref is still null when the effect first runs
   // — `active` is what re-runs it once the payload renders the table (2026-09-13 review round;
@@ -919,10 +970,10 @@ function ModelerCard({
   // An UPDATER, never `{ ...knobs, field: value }`: React batches, and a keystroke built
   // from a stale props snapshot would resurrect the siblings it spread.
   const setKnob = (field: keyof Knobs) => (value: string) =>
-    onKnobChange((current) => ({ ...current, [field]: value }))
+    { setError(null); saveState.clearError(); onKnobChange((current) => ({ ...current, [field]: value })) }
 
   const editCell = (key: string, field: 'base' | 'additional' | 'pct') => (value: string) =>
-    setEdits((cur) => ({ ...cur, [key]: { ...cur[key], [field]: value } }))
+    { setError(null); saveState.clearError(); setEdits((cur) => ({ ...cur, [key]: { ...cur[key], [field]: value } })) }
 
   // The DISPLAYED text per cell: the edit if one exists, else the payload value (pct at
   // human scale — "14", never "0.140000000").
@@ -953,14 +1004,18 @@ function ModelerCard({
   // edits and a year switch's replaced periods all land on the same derived list
   // (InputsForm's onDirtyChange idiom; 2026-08-31 review round).
   const dirty = dirtyRows.length > 0
+  const saveState = useSaveState({ dirty })
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
 
   const saveAndRecalculate = () => {
+    if (busy || saving) return
     if (data === null || dirtyRows.length === 0) {
       // Nothing to write — the primary is still the way to re-run the chain with the knobs.
-      onRun()
+      setAction('save')
+      setError(null)
+      void saveState.run(() => Promise.resolve(current.current.onRun())).finally(() => setAction(null))
       return
     }
     // Validate every dirty row before ANY write (the wizard's validate-then-save order).
@@ -987,7 +1042,7 @@ function ModelerCard({
         return
       }
     }
-    setSaving(true)
+    setAction('save')
     setError(null)
     const requests = dirtyRows.map((row) => {
       // The FULL row on both verbs: the router validates the MERGED period. A
@@ -1005,10 +1060,10 @@ function ModelerCard({
       }
       return row.id !== null ? updatePeriod(row.id, body) : createPeriod(body)
     })
-    Promise.all(requests)
-      .then(() => {
+    void saveState.run(() => Promise.all(requests)
+      .then(async () => {
         setEdits({})
-        onRowsSaved()
+        await current.current.onRowsSaved()
       })
       .catch((err: unknown) => {
         setError(message(err, 'Save failed'))
@@ -1021,29 +1076,48 @@ function ModelerCard({
         // under `p{id}` so the retry writes what the user is still looking at, and the
         // orphaned `d{label}` key a succeeded derived row leaves behind is dead weight only
         // — that row now keys as `p{id}`, so `rowIsDirty` never reads it again.
-        onRowsSaved()
-      })
-      .finally(() => setSaving(false))
+        void current.current.onRowsSaved()
+        throw err
+      })).finally(() => setAction(null))
   }
 
   // Un-store a row: deleting the stored period hands the slot back to the derived planner,
   // which is exactly what "reset to the derived values" means here.
   const resetRow = (row: EsppModelerPeriod) => {
-    if (row.id === null) return
-    if (!window.confirm(`Reset ${row.label} to its derived values?`)) return
-    setSaving(true)
+    if (row.id === null || busy || saving) return
+    const element = periodElement(row.label)
+    element?.setAttribute('data-leaving', '')
+    setAction(row.id)
     setError(null)
-    deletePeriod(row.id)
-      .then(() => {
-        setEdits((cur) => {
-          const next = { ...cur }
-          delete next[rowKey(row)]
-          return next
-        })
-        onRowsSaved()
+    void deletePeriod(row.id).then(async ({ batchId }) => {
+      setEdits((cur) => {
+        const next = { ...cur }
+        delete next[rowKey(row)]
+        return next
       })
-      .catch((err: unknown) => setError(message(err, 'Reset failed')))
-      .finally(() => setSaving(false))
+      await reloadRows()
+      const derived = periodElement(row.label)
+      derived?.removeAttribute('data-leaving')
+      ;(derived?.querySelector<HTMLInputElement>('input') ?? saveButton.current)?.focus()
+      toast.success(`Reset the ${row.label} purchase period`, batchId === null ? undefined : {
+        action: { label: 'Undo', onAction: () => {
+          void undoBatch(batchId).then(async () => {
+            await reloadRows()
+            const restored = periodElement(row.label)
+            revealRow(restored)
+            flashElement(restored)
+            ;(restored?.querySelector<HTMLButtonElement>('[data-reset]') ?? saveButton.current)?.focus()
+            toast.success(`Restored the ${row.label} purchase period`)
+          }).catch((err: unknown) => {
+            toast.error(errorDetail(err))
+            saveButton.current?.focus()
+          })
+        } },
+      })
+    }).catch((err: unknown) => {
+      element?.removeAttribute('data-leaving')
+      toast.error(errorDetail(err))
+    }).finally(() => setAction(null))
   }
 
   const working = busy || saving
@@ -1123,17 +1197,15 @@ function ModelerCard({
           <AmountInput value={knobs.carry} onValueChange={setKnob('carry')} placeholder="0" />
         </label>
         <div className="espp-form-actions">
-          <button
-            type="submit"
-            className="button button-primary"
-            data-entry-primary=""
-            disabled={working}
-          >
-            {working ? 'Working…' : 'Save & recalculate'}
-          </button>
+          <BusyButton ref={saveButton}
+            type="submit" className="button button-primary" data-entry-primary=""
+            busy={action === 'save'} inert={working && action !== 'save'}>
+            {'Save & recalculate'}
+          </BusyButton>
+          <SaveStatus state={saveState} />
+          <FeedBanner error={saveState.error ? null : error} />
         </div>
       </form>
-      <FeedBanner error={error} />
       {dirtyRows.length > 0 && (
         <p className="drill-hint" role="status">
           {`${dirtyRows.length} ${
@@ -1196,7 +1268,7 @@ function ModelerCard({
               </thead>
               <tbody>
                 {data.periods.map((row) => (
-                  <tr key={rowKey(row)}>
+                  <tr key={rowKey(row)} data-period-id={row.id ?? undefined} data-period-label={row.label}>
                     <td className="col-identity">
                       {row.label}
                       {!row.stored && <span className="badge">derived</span>}
@@ -1250,15 +1322,15 @@ function ModelerCard({
                     <td className="num">{formatCurrency(row.value_25k)}</td>
                     <td className="row-actions">
                       {row.stored && (
-                        <button
+                        <BusyButton data-reset
                           type="button"
                           className="button"
                           aria-label={`Reset ${row.label} to derived values`}
-                          disabled={working}
+                          busy={action === row.id} inert={working && action !== row.id}
                           onClick={() => resetRow(row)}
                         >
                           Reset
-                        </button>
+                        </BusyButton>
                       )}
                     </td>
                   </tr>
@@ -1335,7 +1407,7 @@ export default function EsppPage() {
   // Promise callbacks only — no setState in an effect's synchronous body (react-hooks 7).
   const loadLots = () => {
     const seq = ++lotsSeq.current
-    fetchLots()
+    return fetchLots()
       .then((data) => {
         if (seq !== lotsSeq.current) return
         // Lazy, once: the chip's bars need the employer ticker, which this payload names.
@@ -1371,7 +1443,7 @@ export default function EsppPage() {
 
   const loadOfferings = () => {
     const seq = ++offeringsSeq.current
-    fetchOfferings()
+    return fetchOfferings()
       .then((data) => {
         if (seq !== offeringsSeq.current) return
         const previous = getSnapshot<EsppOfferingOut[]>('espp:offerings')
@@ -1393,7 +1465,7 @@ export default function EsppPage() {
   // user-parameterized and must not collide with the default in the snapshot cache.
   const loadModeler = (params: ModelerParams = {}, cacheKey?: string) => {
     const seq = ++modelerSeq.current
-    fetchModeler(params)
+    return fetchModeler(params)
       .then((data) => {
         if (seq !== modelerSeq.current) return
         if (cacheKey !== undefined) {
@@ -1429,7 +1501,7 @@ export default function EsppPage() {
   const reloadLots = () => {
     setLotsBusy(true)
     setLotsError(null)
-    loadLots()
+    return loadLots()
   }
 
   // Blank knobs are OMITTED from the query (src/api/espp.ts) — blank means the server's
@@ -1440,7 +1512,7 @@ export default function EsppPage() {
     const target = yearOverride !== undefined ? yearOverride : year
     setModelerBusy(true)
     setModelerError(null)
-    loadModeler({
+    return loadModeler({
       subscriptionPrice: canonicalAmount(knobs.subscription.trim(), { expressions: false }),
       purchaseFmv: canonicalAmount(knobs.fmv.trim(), { expressions: false }),
       carryForward: canonicalAmount(knobs.carry.trim()),
@@ -1459,8 +1531,7 @@ export default function EsppPage() {
   const onOfferingsChanged = () => {
     setOfferingsBusy(true)
     setOfferingsError(null)
-    loadOfferings()
-    runModeler()
+    return Promise.all([loadOfferings(), runModeler()]).then(() => {})
   }
 
   // ONE banner for three parallel loads (spec §9): only the parts that failed, and only the

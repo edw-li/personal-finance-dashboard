@@ -32,9 +32,6 @@ const ALLOWLIST: Record<string, number> = {
   'pages/SettingsPage.tsx': 1, // Apply import
 
   // L6 Portfolio·ESPP·Comp·Paycheck
-  'pages/CompPage.tsx': 1, // comp event delete → instant + Undo
-  'pages/EsppPage.tsx': 3, // lot and offering deletes, a period's Reset → instant + Undo
-  'pages/PaycheckPage.tsx': 1, // profile delete → instant + Undo
 
   // L7 Cards·Calendar·Budgets·Projection·Assistant
   // (none: these surfaces ask with in-app lines or not at all today)

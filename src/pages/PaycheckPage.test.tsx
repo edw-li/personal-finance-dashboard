@@ -1,3 +1,5 @@
+import { undoBatch } from '../api/lifecycle'
+import ToastProvider from '../components/ToastProvider'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -316,7 +318,57 @@ function line(label: string): string {
 const netPayShows = (figure: string) => waitFor(() => expect(line('Net pay')).toBe(figure))
 const netPayLanded = () => netPayShows('$3,384.16')
 
+vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) }))
+
 const confirmSpy = vi.spyOn(window, 'confirm')
+
+it('reveals the profile effective date and returns Escape to its row', async () => {
+  renderPage('/paycheck?section=profiles')
+  const edit = (await screen.findAllByRole('button', { name: /^Edit the profile effective/ })).at(-1)!
+  fireEvent.click(edit)
+  await waitFor(() => expect(document.activeElement).toBe(field('Effective date')))
+  expect(edit.closest('tr')?.getAttribute('aria-current')).toBe('true')
+  fireEvent.keyDown(field('Effective date'), { key: 'Escape' })
+  expect(document.activeElement).toBe(edit)
+})
+
+it('restores the original profile id and focuses it after its reload', async () => {
+  vi.mocked(fetchProfiles).mockResolvedValueOnce(PROFILES).mockResolvedValueOnce([profile2026]).mockResolvedValueOnce(PROFILES)
+  render(<ToastProvider><MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter></ToastProvider>)
+  const remove = await screen.findByRole('button', { name: 'Delete the profile effective Jan 1, 2025' })
+  remove.focus()
+  fireEvent.click(remove)
+  await screen.findByText('Deleted the profile effective Jan 1, 2025')
+  expect(screen.queryByRole('button', { name: 'Edit the profile effective Jan 1, 2025' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Restored the profile effective Jan 1, 2025')
+  const row = screen.getByRole('button', { name: 'Edit the profile effective Jan 1, 2025' }).closest('tr')!
+  expect(row.getAttribute('data-profile-id')).toBe('2')
+  expect(row.contains(document.activeElement)).toBe(true)
+  expect(row.hasAttribute('data-flash')).toBe(true)
+  expect(undoBatch).toHaveBeenCalledWith('profile-batch')
+  expect(createProfile).not.toHaveBeenCalled()
+})
+
+it('keeps profile validation beside Save and focuses its named field', async () => {
+  renderPage('/paycheck?section=profiles')
+  await screen.findByLabelText('Effective date')
+  type('Effective date', '2027-01-01')
+  type('Pay periods per year', '0')
+  fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+  const error = await screen.findByText(/pay_periods_per_year must be between/)
+  expect(error.closest('.paycheck-form-actions')).not.toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(field('Pay periods per year')))
+  type('Pay periods per year', '24')
+  expect(screen.queryByText(/pay_periods_per_year must be between/)).toBeNull()
+})
+
+it('does not show the Summary breakdown ghost on a Profiles deep link', async () => {
+  vi.mocked(fetchBreakdown).mockReturnValue(new Promise(() => {}))
+  renderPage('/paycheck?section=profiles')
+  await screen.findAllByRole('button', { name: /^Edit the profile effective/ })
+  expect(screen.queryByLabelText('Loading the breakdown…')).toBeNull()
+})
 
 beforeEach(() => {
   clearSnapshots()
@@ -328,7 +380,7 @@ beforeEach(() => {
   vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026))
   vi.mocked(createProfile).mockResolvedValue(profile2026)
   vi.mocked(updateProfile).mockResolvedValue(profile2026)
-  vi.mocked(deleteProfile).mockResolvedValue({ batchId: null })
+  vi.mocked(deleteProfile).mockResolvedValue({ batchId: 'profile-batch' })
   confirmSpy.mockReturnValue(true)
 })
 
@@ -705,17 +757,11 @@ describe('PaycheckPage — the profile form', () => {
     expect(body.roth_401k_pct).toBe('0')
   })
 
-  it('deletes a profile only after the confirm is accepted', async () => {
+  it('deletes a profile instantly without a native confirm', async () => {
     render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
     await screen.findByLabelText('Effective date')
 
-    confirmSpy.mockReturnValue(false)
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Delete the profile effective Jan 1, 2025' }),
-    )
-    expect(vi.mocked(deleteProfile)).not.toHaveBeenCalled()
-
-    confirmSpy.mockReturnValue(true)
+    expect(confirmSpy).not.toHaveBeenCalled()
     fireEvent.click(
       screen.getByRole('button', { name: 'Delete the profile effective Jan 1, 2025' }),
     )
@@ -744,7 +790,7 @@ describe('PaycheckPage — the profile form', () => {
     render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
     await screen.findByLabelText('Effective date')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    fireEvent.submit(screen.getByRole('button', { name: 'Add profile' }).closest('form')!)
 
     expect(
       await screen.findByText('Effective date, annual salary and pay periods are required'),
@@ -1487,7 +1533,7 @@ describe('PaycheckPage — shell scope', () => {
     expect(screen.getByTestId('location').textContent).toContain(`owner=${ME.id}`)
   })
 
-  it('Apply from Try it pre-fills the profile form for next month and writes nothing', async () => {
+  it('Apply from Try it pre-fills the profile form and leaves it ready to save', async () => {
     vi.mocked(previewPaycheck).mockResolvedValue(previewOf(profile2026))
     renderPage('/paycheck?whatif=trad_401k_pct%3A0.2')
     await screen.findByText('Payroll savings')
@@ -1499,6 +1545,9 @@ describe('PaycheckPage — shell scope', () => {
     expect(document.activeElement).toBe(date)
     expect(createProfile).not.toHaveBeenCalled()
     expect(updateProfile).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(createProfile).toHaveBeenCalledOnce())
+    expect(vi.mocked(createProfile).mock.calls[0][0]).toMatchObject({ trad_401k_pct: '0.2' })
   })
 
   it('never hands one person’s applied scenario to another person’s form', async () => {

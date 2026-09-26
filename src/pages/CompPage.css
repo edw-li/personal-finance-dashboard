@@ -178,3 +178,8 @@
   margin: 4px 0 10px;
   overflow-wrap: anywhere;
 }
+
+/* Save feedback belongs to the form's full action row. */
+.comp-form-actions { grid-column: 1 / -1; flex-wrap: wrap; align-items: center; }
+.comp-form-actions .button { white-space: nowrap; }
+.comp-form-actions .error-banner { flex-basis: 100%; margin: 0; }

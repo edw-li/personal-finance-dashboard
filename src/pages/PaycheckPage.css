@@ -240,3 +240,8 @@
   font-size: 0.7rem;
   color: var(--muted);
 }
+
+/* Save feedback belongs to the form's full action row. */
+.paycheck-form-actions { grid-column: 1 / -1; flex-wrap: wrap; align-items: center; }
+.paycheck-form-actions .button { white-space: nowrap; }
+.paycheck-form-actions .error-banner { flex-basis: 100%; margin: 0; }

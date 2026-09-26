@@ -5,9 +5,9 @@ import { useLatest } from '../reorder/useLatest'
 
 /** Feedback shared by the money-entry forms. The list stays its owner's: this only remembers
  *  the form's clean seed and the row a successful save will reveal after the list reloads. */
-export function useRecordFeedback<T>(form: T, rows: readonly unknown[], attribute: string) {
+export function useRecordFeedback<T>(form: T, rows: readonly unknown[], attribute: string, cleanSeed: T = form) {
   const formRef = useRef<HTMLFormElement>(null)
-  const [baseline, setBaseline] = useState(form)
+  const [baseline, setBaseline] = useState(cleanSeed)
   const dirty = JSON.stringify(form) !== JSON.stringify(baseline)
   const state = useSaveState({ dirty })
   const pending = useRef<{ id: number; focus: boolean; rows: readonly unknown[]; at: number } | null>(null)

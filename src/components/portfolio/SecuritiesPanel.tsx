@@ -55,7 +55,7 @@ export default function SecuritiesPanel({
   const [busy, setBusy] = useState(false)
   const [priceError, setPriceError] = useState<string | null>(null)
   const [pricing, setPricing] = useState(false)
-  const feedback = useRecordFeedback(form, securities, 'data-security-id')
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, securities, 'data-security-id')
   const latest = useLatest({ onChanged, editingId, pricingId })
   const deleteWithUndo = useDeleteWithUndo()
   const cancelEdit = () => {
@@ -71,7 +71,7 @@ export default function SecuritiesPanel({
     setPricingId(null)
     setPriceError(null)
   }
-  useEscapeCancel(feedback.formRef, cancelEdit, editingId !== null && !busy)
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
 
   // The union and the two booleans are excluded: they have dedicated handlers below
   // (same split as TransactionsPanel's `type`).
@@ -135,9 +135,9 @@ export default function SecuritiesPanel({
             holding_type: form.holding_type,
             is_manual_priced: form.is_manual_priced,
           })
-    void feedback.state.run(() => request.then((saved) => {
+    void saveState.run(() => request.then((saved) => {
       if (editingId !== null) feedback.focusRow(editingId)
-      else feedback.formRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+      else editorRef.current?.querySelector<HTMLInputElement>('input')?.focus()
       setForm(EMPTY)
       feedback.saved(EMPTY, saved?.id ?? editingId, editingId !== null)
       setEditingId(null)
@@ -207,8 +207,8 @@ export default function SecuritiesPanel({
         securities — edit the dividend only on manual-priced ones.
       </p>
       <form
-        ref={feedback.formRef}
-        onChangeCapture={() => { setError(null); feedback.state.clearError() }}
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="entry-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -288,10 +288,10 @@ export default function SecuritiesPanel({
           </label>
         )}
         <div className="form-actions">
-          <SaveButton className="button" type="submit" state={feedback.state} inert={busy && feedback.state.status !== 'saving'}>
+          <SaveButton className="button" type="submit" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {editingId !== null ? 'Save changes' : 'Add security'}
           </SaveButton>
-          <SaveStatus state={feedback.state} />
+          <SaveStatus state={saveState} />
           <FeedBanner error={error} />
           {editingId !== null && (
             <BusyButton className="button" type="button" inert={busy} onClick={cancelEdit}>Cancel</BusyButton>

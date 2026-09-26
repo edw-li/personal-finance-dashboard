@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import ToastProvider from '../ToastProvider'
+import { undoBatch } from '../../api/lifecycle'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecurityOut } from '../../types/api'
@@ -11,8 +14,10 @@ vi.mock('../../api/portfolio', () => ({
 vi.mock('../../api/prices', () => ({
   putManualPrice: vi.fn().mockResolvedValue({}),
 }))
-import { updateSecurity } from '../../api/portfolio'
+import { createSecurity, updateSecurity } from '../../api/portfolio'
 import { putManualPrice } from '../../api/prices'
+
+vi.mock('../../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) }))
 
 afterEach(cleanup)
 // Call counts are per-test; clearAllMocks keeps the factory's mockResolvedValue.
@@ -141,4 +146,30 @@ describe('SecuritiesPanel', () => {
     expect(scroller.classList.contains('table-scroll')).toBe(true)
     expect(screen.getByRole('region', { name: 'Securities table' })).toBe(scroller)
   })
+})
+
+
+it('restores the original security and focuses it after the list reload', async () => {
+  let restored = false
+  vi.mocked(undoBatch).mockImplementationOnce(async () => { restored = true; return {} as Awaited<ReturnType<typeof undoBatch>> })
+  function Host() {
+    const [rows, setRows] = useState([manualPriced])
+    return <ToastProvider><SecuritiesPanel securities={rows}
+      onChanged={async () => { await Promise.resolve(); setRows(restored ? [manualPriced] : []) }} /></ToastProvider>
+  }
+  render(<Host />)
+  const remove = screen.getByRole('button', { name: 'Delete' })
+  remove.focus()
+  fireEvent.click(remove)
+  await screen.findByText('Deleted security HOUSE')
+  expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
+  expect(document.activeElement).not.toBe(document.body)
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Restored security HOUSE')
+  const row = screen.getByRole('button', { name: 'Edit' }).closest('tr')!
+  expect(row.getAttribute('data-security-id')).toBe('2')
+  expect(row.contains(document.activeElement)).toBe(true)
+  expect(row.hasAttribute('data-flash')).toBe(true)
+  expect(undoBatch).toHaveBeenCalledWith('security-batch')
+  expect(createSecurity).not.toHaveBeenCalled()
 })

@@ -434,6 +434,18 @@ describe('TransactionsPanel entry session', () => {
     })
   })
 
+  it('can duplicate the row currently open for editing without changing its fields', async () => {
+    render(<TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(screen.getByRole('button', { name: 'Save changes' }).getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate this buy' }))
+    const add = screen.getByRole('button', { name: 'Add transaction' })
+    expect(add.getAttribute('aria-disabled')).not.toBe('true')
+    fireEvent.click(add)
+    await waitFor(() => expect(createTransaction).toHaveBeenCalledOnce())
+    expect(updateTransaction).not.toHaveBeenCalled()
+  })
+
   it('drops the kept cue when the security changes', async () => {
     const onChanged = vi.fn()
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)

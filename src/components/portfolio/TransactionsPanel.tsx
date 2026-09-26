@@ -286,7 +286,7 @@ export default function TransactionsPanel({
     layer !== null && layer.scope === owner ? layer.rows : null
   const rows = inScope(pendingOrder) ?? inScope(savedOrder) ?? transactions
   const rowById = new Map(rows.map((txn) => [txn.id, txn]))
-  const feedback = useRecordFeedback(form, transactions, 'data-transaction-id')
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, transactions, 'data-transaction-id')
   const editingRef = useLatest(editingId)
   const deleteWithUndo = useDeleteWithUndo()
   const cancelEdit = () => {
@@ -298,7 +298,7 @@ export default function TransactionsPanel({
     setKept(false)
     setError(null)
   }
-  useEscapeCancel(feedback.formRef, cancelEdit, editingId !== null && !busy)
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
 
   // Undo re-sends the order that stood before the drop (spec §5): the endpoint is not
   // change-logged, so the client holds the previous order — and the scope it was made in. Not
@@ -419,6 +419,7 @@ export default function TransactionsPanel({
     // rule has nothing to say here: the click on this button already blurred whatever cell
     // held the caret (and committed it), so this transfer blurs nothing and the microtask
     // runs after the seed has flushed — there is no pre-reset text left to resurrect.
+    feedback.begin(EMPTY)
     setError(null)
     feedback.reveal(txn.type === 'split' ? '#txn-split-factor' : '#txn-shares')
   }
@@ -441,7 +442,7 @@ export default function TransactionsPanel({
       editingId !== null
         ? updateTransaction(editingId, payload)
         : createTransaction({ ...payload, security_id: Number(form.security_id) })
-    void track(() => feedback.state.run(() =>
+    void track(() => saveState.run(() =>
       request
         .then((saved) => {
           if (editingId === null) {
@@ -524,8 +525,8 @@ export default function TransactionsPanel({
         </p>
       )}
       <form
-        ref={feedback.formRef}
-        onChangeCapture={() => { setError(null); feedback.state.clearError() }}
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="entry-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -650,12 +651,12 @@ export default function TransactionsPanel({
           />
         </label>
         <div className="form-actions">
-          <SaveButton className="button" type="submit" state={feedback.state} inert={busy && feedback.state.status !== 'saving'}>
+          <SaveButton className="button" type="submit" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {/* The label is the second half of the carry-forward cue: "Add another" is what
                 a form still holding the last row's context is actually about to do. */}
             {editingId !== null ? 'Save changes' : kept ? 'Add another' : 'Add transaction'}
           </SaveButton>
-          <SaveStatus state={feedback.state} />
+          <SaveStatus state={saveState} />
           <FeedBanner error={error} />
           {editingId !== null && (
             <BusyButton className="button" type="button" inert={busy} onClick={cancelEdit}>Cancel</BusyButton>

@@ -1,7 +1,14 @@
+import BusyButton from '../components/feedback/BusyButton'
+import { SaveButton } from '../components/feedback/SaveButton'
+import { SaveStatus } from '../components/feedback/SaveStatus'
+import { useEscapeCancel } from '../components/feedback/reveal'
+import { useDeleteWithUndo } from '../components/feedback/useDeleteWithUndo'
+import { useLatest } from '../components/reorder/useLatest'
+import { useRecordFeedback } from '../components/portfolio/useRecordFeedback'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
+import { describeLoadFailures, errorDetail } from '../api/client'
 import {
   createEvent,
   deleteEvent,
@@ -35,11 +42,6 @@ import './CompPage.css'
 // here rather than spending a request on a 422 that says the same thing.
 const YEAR_MIN = 1990
 const YEAR_MAX = 2100
-
-function message(err: unknown, fallback: string): string {
-  // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
-  return err instanceof ApiError ? err.message : fallback
-}
 
 interface EventFormState {
   focal_year: string
@@ -176,13 +178,25 @@ function EventsPanel({
   onChanged,
 }: {
   events: CompEventOut[]
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<EventFormState>(EMPTY_EVENT)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
+  const { formRef: editorRef, state: saveState, ...feedback } = useRecordFeedback(form, events, 'data-comp-event-id')
+  const current = useLatest({ onChanged, editingId })
+  const deleteWithUndo = useDeleteWithUndo()
+  const cancelEdit = () => {
+    if (busy) return
+    feedback.focusRow(editingId)
+    setEditingId(null)
+    setForm(EMPTY_EVENT)
+    feedback.begin(EMPTY_EVENT)
+    setError(null)
+  }
+  useEscapeCancel(editorRef, cancelEdit, editingId !== null && !busy)
   // Which half of the table is showing (2026-09-13 polish spec §7). Entered by default: the
   // typed columns plus Notes fit a 1440 viewport with no horizontal scroll, so the actions stay
   // in view. A view choice, not a preference — not persisted.
@@ -201,7 +215,7 @@ function EventsPanel({
     setEditingId(event.id)
     // The server's own quantized strings, verbatim: nothing is reformatted on the way into
     // a box whose contents are about to be sent back.
-    setForm({
+    const next: EventFormState = {
       focal_year: String(event.focal_year),
       current_base: event.current_base,
       new_base: event.new_base ?? '',
@@ -210,10 +224,15 @@ function EventsPanel({
       refresh_rsus: event.refresh_rsus ?? '',
       grant_price: event.grant_price ?? '',
       notes: event.notes ?? '',
-    })
+    }
+    setForm(next)
+    feedback.begin(next)
+    setError(null)
+    feedback.reveal('#comp-focal-year')
   }
 
   const submit = () => {
+    if (busy) return
     const yearText = form.focal_year.trim()
     const base = form.current_base.trim()
     if (!yearText || !base) {
@@ -271,46 +290,36 @@ function EventsPanel({
       notes: form.notes.trim() || null,
     }
     const request = editingId !== null ? updateEvent(editingId, body) : createEvent(body)
-    request
-      .then(() => {
-        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1).
-        // BEFORE the reset, and that order is load-bearing: this form carries no
-        // data-entry-scope, so Enter is the browser's implicit submit and the caret is
-        // still sitting in an AmountInput when this lands. Moving it BLURS that box
-        // synchronously, and the blur's commit closes over the box's PRE-reset text —
-        // canonicalizing a "$188,930" into an enqueued write. Focusing first aims that
-        // write at the state the full-object reset below then replaces; the other order
-        // lets it land on the emptied form and resurrect the row that was just saved.
-        // getElementById is the house DOM protocol (like data-entry-scope), so AmountInput
-        // keeps its no-ref API; the target is a plain <input>, so focusing it runs no
-        // React handler of its own.
-        document.getElementById('comp-focal-year')?.focus()
-        setForm(EMPTY_EVENT)
-        setEditingId(null)
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
+    void saveState.run(() => request.then((saved) => {
+      // Focus before resetting: an AmountInput blur must commit into the old form.
+      if (editingId !== null) feedback.focusRow(editingId)
+      else document.getElementById('comp-focal-year')?.focus()
+      setForm(EMPTY_EVENT)
+      feedback.saved(EMPTY_EVENT, saved?.id ?? editingId, editingId !== null)
+      setEditingId(null)
+      return current.current.onChanged()
+    })).finally(() => setBusy(false))
   }
 
   const remove = (event: CompEventOut) => {
-    if (!window.confirm(`Delete the ${event.focal_year} comp event?`)) return
+    if (busy) return
     setBusy(true)
-    // Cleared on entry like submit's: a delete that succeeds must not leave the previous
-    // save's 409 sitting over the panel as if it still described the table.
-    setError(null)
-    deleteEvent(event.id)
-      .then(() => {
-        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
-        // (Task 14 review I3). Reset on SUCCESS only.
-        if (event.id === editingId) {
+    void deleteWithUndo({
+      name: `the ${event.focal_year} comp event`,
+      row: feedback.row(event.id),
+      request: () => deleteEvent(event.id),
+      onDeleted: () => {
+        if (current.current.editingId === event.id) {
           setEditingId(null)
           setForm(EMPTY_EVENT)
+          feedback.begin(EMPTY_EVENT)
         }
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+        return current.current.onChanged()
+      },
+      onRestored: () => current.current.onChanged(),
+      restoredRow: () => feedback.row(event.id),
+      focusAfter: feedback.focusAfterDelete(event.id),
+    }).finally(() => setBusy(false))
   }
 
   // The row being edited, as the SERVER has it — looked up in the current feed, so a
@@ -332,7 +341,6 @@ function EventsPanel({
       </p>
       {/* A save that failed, not a feed that is behind: the bare alert, with no stale cue
           and nothing to retry — the form itself is the retry. */}
-      <FeedBanner error={error} />
       {orphans.length > 0 && (
         // Not an error banner: nothing failed and nothing is blocked. React text nodes, so
         // the sentences are escaped by construction — though every one of them is this
@@ -344,6 +352,8 @@ function EventsPanel({
         </div>
       )}
       <form
+        ref={editorRef}
+        onChangeCapture={() => { setError(null); saveState.clearError() }}
         className="comp-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -419,21 +429,21 @@ function EventsPanel({
           />
         </label>
         <div className="comp-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
+          <SaveButton type="submit" className="button button-primary" state={saveState} inert={busy && saveState.status !== 'saving'}>
             {editingId !== null ? 'Save event' : 'Add event'}
-          </button>
+          </SaveButton>
+          <SaveStatus state={saveState} />
+          <FeedBanner error={error} />
           {editingId !== null && (
-            <button
+            <BusyButton
               type="button"
               className="button"
               aria-label="Cancel the comp event edit"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY_EVENT)
-              }}
+               onClick={cancelEdit}
+              inert={busy}
             >
               Cancel
-            </button>
+            </BusyButton>
           )}
         </div>
       </form>
@@ -471,7 +481,7 @@ function EventsPanel({
             </thead>
             <tbody>
               {events.map((event) => (
-                <tr key={event.id} className={event.id === editingId ? 'is-editing' : undefined}>
+                <tr key={event.id} data-comp-event-id={event.id} aria-current={editingId === event.id ? true : undefined} className={event.id === editingId ? 'is-editing' : undefined}>
                   <td className="col-identity">{event.focal_year}</td>
                   {/* Every figure is the server's, rendered as it arrived — the computed half is
                       comp_calc's and none of it is re-derived here (global rule 9). */}
@@ -487,23 +497,23 @@ function EventsPanel({
                     </td>
                   ))}
                   <td className="row-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Edit the ${event.focal_year} comp event`}
-                      onClick={() => startEdit(event)}
+                      data-edit inert={busy} onClick={() => startEdit(event)}
                     >
                       Edit
-                    </button>
-                    <button
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button"
                       aria-label={`Delete the ${event.focal_year} comp event`}
                       disabled={busy}
-                      onClick={() => remove(event)}
+                      data-delete onClick={() => remove(event)}
                     >
                       Delete
-                    </button>
+                    </BusyButton>
                   </td>
                 </tr>
               ))}
@@ -548,7 +558,7 @@ export default function CompPage() {
   // The mount fetch is covered by the initial busy value; the handlers below flip it.
   const load = () => {
     const seq = ++seqRef.current
-    fetchEvents()
+    return fetchEvents()
       .then((data) => {
         if (seq !== seqRef.current) return
         const previous = getSnapshot<CompEventOut[]>('comp:events')
@@ -574,7 +584,7 @@ export default function CompPage() {
 
   const loadSchedule = () => {
     const seq = ++scheduleSeq.current
-    fetchVestingSchedule()
+    return fetchVestingSchedule()
       .then((data) => {
         if (seq !== scheduleSeq.current) return
         const previous = getSnapshot<VestingScheduleOut>('comp:schedule')
@@ -603,13 +613,13 @@ export default function CompPage() {
   const reload = () => {
     setBusy(true)
     setEventsError(null)
-    load()
+    return load()
   }
 
   const reloadSchedule = () => {
     setScheduleBusy(true)
     setScheduleError(null)
-    loadSchedule()
+    return loadSchedule()
   }
 
   // A comp event moves the schedule card WITHOUT moving any grant: the seed chips are built
@@ -617,8 +627,7 @@ export default function CompPage() {
   // two tables. So an event write reloads both feeds; a grant write (below) reloads only its
   // own — grants never touch the focal history.
   const onEventsChanged = () => {
-    reload()
-    reloadSchedule()
+    return Promise.all([reload(), reloadSchedule()]).then(() => {})
   }
 
   // The legend picks the page mirrors back into the option (§9).

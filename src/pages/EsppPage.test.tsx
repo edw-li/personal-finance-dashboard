@@ -1,3 +1,5 @@
+import { undoBatch } from '../api/lifecycle'
+import ToastProvider from '../components/ToastProvider'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -316,7 +318,84 @@ function fillNewLot() {
   type('FMV', '160.00')
 }
 
+vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) }))
+
 const confirmSpy = vi.spyOn(window, 'confirm')
+
+it('reveals a lot editor and returns Escape to the same row', async () => {
+  renderPage('/espp?section=lots')
+  const edit = (await screen.findAllByRole('button', { name: /^Edit lot from/ })).at(-1)!
+  fireEvent.click(edit)
+  await waitFor(() => expect(document.activeElement).toBe(field('Purchase date')))
+  expect(edit.closest('tr')?.getAttribute('aria-current')).toBe('true')
+  fireEvent.keyDown(field('Purchase date'), { key: 'Escape' })
+  expect(document.activeElement).toBe(edit)
+})
+
+it('restores a deleted lot with its original id after the reload', async () => {
+  vi.mocked(fetchLots).mockResolvedValueOnce(lotsResponse())
+    .mockResolvedValueOnce(lotsResponse({ lots: [] }))
+    .mockResolvedValueOnce(lotsResponse())
+  render(<ToastProvider><MemoryRouter initialEntries={['/espp?section=lots']}><EsppPage /></MemoryRouter></ToastProvider>)
+  const remove = (await screen.findAllByRole('button', { name: /^Delete lot from/ }))[0]
+  const id = remove.closest('tr')?.getAttribute('data-lot-id')
+  remove.focus()
+  fireEvent.click(remove)
+  const undo = await screen.findByRole('button', { name: 'Undo' })
+  expect(screen.queryByRole('button', { name: /^Delete lot from/ })).toBeNull()
+  fireEvent.click(undo)
+  await waitFor(() => expect(document.querySelector(`[data-lot-id="${id}"]`)?.hasAttribute('data-flash')).toBe(true))
+  expect(undoBatch).toHaveBeenCalledWith('lot-batch')
+  expect(createLot).not.toHaveBeenCalled()
+  expect(document.querySelector(`[data-lot-id="${id}"]`)?.contains(document.activeElement)).toBe(true)
+})
+
+it('restores the exact offering through its batch after its list reloads', async () => {
+  vi.mocked(fetchOfferings).mockResolvedValueOnce([septOffering]).mockResolvedValueOnce([]).mockResolvedValueOnce([septOffering])
+  render(<ToastProvider><MemoryRouter initialEntries={['/espp?section=lots']}><EsppPage /></MemoryRouter></ToastProvider>)
+  const remove = await screen.findByRole('button', { name: 'Delete offering from Sep 1, 2023' })
+  remove.focus()
+  fireEvent.click(remove)
+  await screen.findByRole('button', { name: 'Undo' })
+  expect(screen.queryByRole('button', { name: 'Edit offering from Sep 1, 2023' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await waitFor(() => expect(document.querySelector('[data-offering-id="1"]')?.hasAttribute('data-flash')).toBe(true))
+  expect(undoBatch).toHaveBeenCalledWith('offering-batch')
+  expect(createOffering).not.toHaveBeenCalled()
+  expect(document.querySelector('[data-offering-id="1"]')?.contains(document.activeElement)).toBe(true)
+})
+
+it('puts Reset progress on its own button and restores the period batch', async () => {
+  const pending = deferred<{ batchId: string | null }>()
+  vi.mocked(deletePeriod).mockReturnValueOnce(pending.promise)
+  render(<ToastProvider><MemoryRouter initialEntries={['/espp?section=purchase']}><EsppPage /></MemoryRouter></ToastProvider>)
+  const reset = await screen.findByRole('button', { name: 'Reset 1H24 to derived values' })
+  fireEvent.click(reset)
+  expect(reset.getAttribute('aria-busy')).toBe('true')
+  const save = screen.getByRole('button', { name: 'Save & recalculate' })
+  expect(save.getAttribute('aria-busy')).toBeNull()
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  await act(async () => pending.resolve({ batchId: 'period-batch' }))
+  await screen.findByText('Reset the 1H24 purchase period')
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Restored the 1H24 purchase period')
+  expect(undoBatch).toHaveBeenCalledWith('period-batch')
+  expect(createPeriod).not.toHaveBeenCalled()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reset 1H24 to derived values' }))
+})
+
+it('keeps a refused period reset visible and reports the server sentence', async () => {
+  vi.mocked(deletePeriod).mockRejectedValueOnce(new ApiError('This purchase period changed; reload it first.', 409))
+  render(<ToastProvider><MemoryRouter initialEntries={['/espp?section=purchase']}><EsppPage /></MemoryRouter></ToastProvider>)
+  const reset = await screen.findByRole('button', { name: 'Reset 1H24 to derived values' })
+  reset.focus()
+  fireEvent.click(reset)
+  await screen.findByText('This purchase period changed; reload it first.')
+  expect(reset.closest('tr')?.hasAttribute('data-leaving')).toBe(false)
+  expect(document.activeElement).toBe(reset)
+  expect(reset.getAttribute('aria-disabled')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+})
 
 // Every render goes through a router: each unsold lot row carries a "Model sale →" <Link>
 // into the what-if card, and a Link has no meaning outside one.
@@ -336,13 +415,13 @@ beforeEach(() => {
   })
   vi.mocked(createLot).mockResolvedValue(qualifiedLot)
   vi.mocked(updateLot).mockResolvedValue(qualifiedLot)
-  vi.mocked(deleteLot).mockResolvedValue({ batchId: null })
+  vi.mocked(deleteLot).mockResolvedValue({ batchId: 'lot-batch' })
   vi.mocked(createOffering).mockResolvedValue(septOffering)
   vi.mocked(updateOffering).mockResolvedValue(septOffering)
-  vi.mocked(deleteOffering).mockResolvedValue({ batchId: null })
+  vi.mocked(deleteOffering).mockResolvedValue({ batchId: 'offering-batch' })
   vi.mocked(createPeriod).mockResolvedValue(storedPeriod)
   vi.mocked(updatePeriod).mockResolvedValue(storedPeriod)
-  vi.mocked(deletePeriod).mockResolvedValue({ batchId: null })
+  vi.mocked(deletePeriod).mockResolvedValue({ batchId: 'period-batch' })
   confirmSpy.mockReturnValue(true)
 })
 
@@ -509,7 +588,9 @@ describe('EsppPage — lots', () => {
 
     // Edit the qualified lot and clear its price: on PATCH an explicit null is the
     // documented re-derive (the one null the server does NOT treat as a no-op).
-    fireEvent.click(screen.getByRole('button', { name: 'Edit lot from Feb 29, 2024' }))
+    const editLot = screen.getByRole('button', { name: 'Edit lot from Feb 29, 2024' })
+    await waitFor(() => expect(editLot.getAttribute('aria-disabled')).not.toBe('true'))
+    fireEvent.click(editLot)
     // kind="plain" over a Numeric(14,5): the stored 5dp string stands as it arrived, where
     // a money echo would have rounded it on screen to "$41.23".
     expect(field('Purchase price').value).toBe('41.23265')
@@ -640,15 +721,11 @@ describe('EsppPage — lots', () => {
     expect(vi.mocked(createLot)).not.toHaveBeenCalled()
   })
 
-  it('deletes a lot only after the confirm is accepted', async () => {
+  it('deletes a lot instantly without a native confirm', async () => {
     renderPage('/espp?section=lots')
     await screen.findByText('$10,720.49')
 
-    confirmSpy.mockReturnValue(false)
-    fireEvent.click(screen.getByRole('button', { name: 'Delete lot from Feb 29, 2024' }))
-    expect(vi.mocked(deleteLot)).not.toHaveBeenCalled()
-
-    confirmSpy.mockReturnValue(true)
+    expect(confirmSpy).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Delete lot from Feb 29, 2024' }))
     await waitFor(() => expect(vi.mocked(deleteLot)).toHaveBeenCalledWith(1))
     await waitFor(() => expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(2))
@@ -924,7 +1001,7 @@ describe('EsppPage — offerings', () => {
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
   })
 
-  it('edits an offering through PATCH and deletes one after a confirm', async () => {
+  it('edits an offering through PATCH and deletes it instantly', async () => {
     renderPage('/espp?section=lots')
     await screen.findByRole('button', { name: 'Edit offering from Sep 1, 2023' })
     const section = offeringsCard()
@@ -949,14 +1026,9 @@ describe('EsppPage — offerings', () => {
     // never reach deleteOffering. Wait for Delete to be live first.
     const deleteButton = () =>
       screen.getByRole('button', { name: 'Delete offering from Sep 1, 2023' }) as HTMLButtonElement
-    await waitFor(() => expect(deleteButton().disabled).toBe(false))
+    await waitFor(() => expect(deleteButton().getAttribute('aria-disabled')).not.toBe('true'))
 
-    confirmSpy.mockReturnValue(false)
-    fireEvent.click(deleteButton())
-    expect(confirmSpy).toHaveBeenCalledTimes(1) // the click reached the confirm, and was declined
-    expect(vi.mocked(deleteOffering)).not.toHaveBeenCalled()
-
-    confirmSpy.mockReturnValue(true)
+    expect(confirmSpy).not.toHaveBeenCalled()
     fireEvent.click(deleteButton())
     await waitFor(() => expect(vi.mocked(deleteOffering)).toHaveBeenCalledWith(1))
   })
@@ -1207,15 +1279,11 @@ describe('EsppPage — modeler', () => {
     })
   })
 
-  it('reset deletes a stored row after confirm and re-runs', async () => {
+  it('reset deletes a stored row instantly and re-runs', async () => {
     renderPage('/espp?section=purchase')
     await screen.findAllByRole('meter')
 
-    confirmSpy.mockReturnValue(false)
-    fireEvent.click(screen.getByRole('button', { name: 'Reset 1H24 to derived values' }))
-    expect(vi.mocked(deletePeriod)).not.toHaveBeenCalled()
-
-    confirmSpy.mockReturnValue(true)
+    expect(confirmSpy).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Reset 1H24 to derived values' }))
     await waitFor(() => expect(vi.mocked(deletePeriod)).toHaveBeenCalledWith(1))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
@@ -1283,7 +1351,7 @@ describe('EsppPage — modeler', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
 
     // The failure is the server's own sentence, verbatim...
-    expect(await screen.findByText('espp period 1H24 could not be saved')).toBeTruthy()
+    expect(await screen.findByText('the server had a problem (HTTP 500)')).toBeTruthy()
     await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
     // ...but Promise.all only rejects on the FIRST failure: that POST still materialized a
     // period, and the row on screen still says `id: null`. Without this refetch the next
