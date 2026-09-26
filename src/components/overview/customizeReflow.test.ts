@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
-import { childRects, deeperSpans, flipChildren } from './customizeReflow'
+import { childRects, deeperSpans, FLIP_ANIMATION_ID, flipChildren } from './customizeReflow'
 
 // 2026-09-25 polish spec §3.2 (OU-16): the two half-width charts pair only when they are adjacent;
 // the spans are computed from the order the reader chose instead of hard-coded.
@@ -67,7 +67,7 @@ describe('flipChildren', () => {
   it('glides a moved child from its old box, on --t-fast with the house curve', () => {
     const { root, animate } = container([box(0, 200)])
     flipChildren(root, ['spending'], new Map([['spending', box(600, 0)]]))
-    expect(animate).toHaveBeenCalledWith([{ translate: '600px -200px' }, { translate: 'none' }], { duration: MOTION_MS.fast, easing: EASE_OUT })
+    expect(animate).toHaveBeenCalledWith([{ translate: '600px -200px' }, { translate: 'none' }], { id: FLIP_ANIMATION_ID, duration: MOTION_MS.fast, easing: EASE_OUT })
   })
 
   // A half-width card that now runs the full row starts from its old left edge — which would hang it
@@ -75,13 +75,30 @@ describe('flipChildren', () => {
   it('never slides a child past the container’s sides — a card that grew keeps only its vertical travel', () => {
     const { root, animate } = container([{ ...box(0, 400), right: 1200, width: 1200 } as DOMRect])
     flipChildren(root, ['spending'], new Map([['spending', box(600, 0)]]))
-    expect(animate).toHaveBeenCalledWith([{ translate: '0px -400px' }, { translate: 'none' }], { duration: MOTION_MS.fast, easing: EASE_OUT })
+    expect(animate).toHaveBeenCalledWith([{ translate: '0px -400px' }, { translate: 'none' }], { id: FLIP_ANIMATION_ID, duration: MOTION_MS.fast, easing: EASE_OUT })
+  })
+
+  // A second Customize change inside the 120ms glide: the old animation still applies its translate, so
+  // the box read as "now" would be off by what is left of it and the new glide jumped (review). The
+  // card's own in-flight glide is cancelled before its box is read; nothing else's is touched.
+  it('cancels its own in-flight glide before reading where a child now is', () => {
+    const { root, animate } = container([box(0, 0)])
+    const child = root.children[0] as HTMLElement
+    let gliding = true
+    child.getBoundingClientRect = () => (gliding ? box(300, 0) : box(0, 0))
+    const inFlight = { id: FLIP_ANIMATION_ID, cancel: vi.fn(() => { gliding = false }) }
+    const reveal = { id: '', cancel: vi.fn() } // the card's scroll-linked reveal, a CSS animation
+    child.getAnimations = (() => [inFlight, reveal]) as unknown as Element['getAnimations']
+    flipChildren(root, ['spending'], new Map([['spending', box(600, 0)]]))
+    expect(inFlight.cancel).toHaveBeenCalledTimes(1)
+    expect(reveal.cancel).not.toHaveBeenCalled()
+    expect(animate).toHaveBeenCalledWith([{ translate: '600px 0px' }, { translate: 'none' }], { id: FLIP_ANIMATION_ID, duration: MOTION_MS.fast, easing: EASE_OUT })
   })
 
   it('fades in a child that was not there before', () => {
     const { root, animate } = container([box(0, 0)])
     flipChildren(root, ['money_flow'], new Map())
-    expect(animate).toHaveBeenCalledWith([{ opacity: 0 }, { opacity: 1 }], { duration: MOTION_MS.fast, easing: EASE_OUT })
+    expect(animate).toHaveBeenCalledWith([{ opacity: 0 }, { opacity: 1 }], { id: FLIP_ANIMATION_ID, duration: MOTION_MS.fast, easing: EASE_OUT })
   })
 
   it('leaves a child that did not move alone', () => {

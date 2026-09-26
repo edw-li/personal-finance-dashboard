@@ -29,7 +29,11 @@ export function deeperSpans(shown: readonly OverviewCard[]): Map<OverviewCard, 6
   return spans
 }
 
-/** Each child's box, keyed by the view it draws: `ids` is the render order, one child per id. */
+/** The id every glide and fade here carries, so a later change can find — and cancel — its own. */
+export const FLIP_ANIMATION_ID = 'customize-reflow'
+
+/** Each child's box, keyed by the view it draws: `ids` is the render order, one child per id. The
+ *  box is read as it is on screen — mid-glide if one is running — which is where a new glide starts. */
 export function childRects(container: Element | null, ids: readonly string[]): Map<string, DOMRect> {
   const rects = new Map<string, DOMRect>()
   if (container === null) return rects
@@ -48,7 +52,9 @@ export function childRects(container: Element | null, ids: readonly string[]): M
  * `transform`, composes with it. Widths snap: a span change is not a move. The sideways travel is
  * clamped to the container: a card that grew (a half-width chart now running the full row) would start
  * hanging past the grid's side, and the page flashed a horizontal scrollbar for the length of the
- * glide. Nothing under reduced motion, or where animate() is missing (jsdom).
+ * glide. A glide of this module's own still running when the next change lands (two clicks inside
+ * 120ms) is cancelled before the child's new box is read: its translate would offset that read and the
+ * new glide jumped. Nothing under reduced motion, or where animate() is missing (jsdom).
  */
 export function flipChildren(container: Element | null, ids: readonly string[], before: ReadonlyMap<string, DOMRect>): void {
   if (container === null || prefersReducedMotion()) return
@@ -56,15 +62,18 @@ export function flipChildren(container: Element | null, ids: readonly string[], 
   ids.forEach((id, index) => {
     const child = container.children[index] as HTMLElement | undefined
     if (child === undefined || typeof child.animate !== 'function') return
+    if (typeof child.getAnimations === 'function') {
+      for (const running of child.getAnimations()) if (running.id === FLIP_ANIMATION_ID) running.cancel()
+    }
     const was = before.get(id)
     if (was === undefined) {
-      child.animate([{ opacity: 0 }, { opacity: 1 }], { duration: MOTION_MS.fast, easing: EASE_OUT })
+      child.animate([{ opacity: 0 }, { opacity: 1 }], { id: FLIP_ANIMATION_ID, duration: MOTION_MS.fast, easing: EASE_OUT })
       return
     }
     const now = child.getBoundingClientRect()
     const dx = Math.min(Math.max(Math.round(was.left - now.left), Math.ceil(bounds.left - now.left)), Math.floor(bounds.right - now.right))
     const dy = Math.round(was.top - now.top)
     if (dx === 0 && dy === 0) return
-    child.animate([{ translate: `${dx}px ${dy}px` }, { translate: 'none' }], { duration: MOTION_MS.fast, easing: EASE_OUT })
+    child.animate([{ translate: `${dx}px ${dy}px` }, { translate: 'none' }], { id: FLIP_ANIMATION_ID, duration: MOTION_MS.fast, easing: EASE_OUT })
   })
 }
