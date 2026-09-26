@@ -1,4 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { useConfirm } from '../feedback/confirm'
+import { flashElement, revealEditor, useEscapeCancel } from '../feedback/reveal'
+import { useLatest } from '../reorder/useLatest'
 import { ApiError } from '../../api/client'
 import { undoBatch } from '../../api/lifecycle'
 import {
@@ -22,7 +31,6 @@ import { budgetProgress } from '../../utils/spending'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import { windowWords } from '../overview/ytd'
-import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import Disclosure from '../Disclosure'
 import BudgetSuggestions from './BudgetSuggestions'
@@ -97,7 +105,7 @@ export default function BudgetPanel({
   defaultIndex?: number
   /** Moves the page to a month (the aware empty state's "View Sep 2026"). */
   onViewMonth?: (month: string) => void
-  onBudgetsChanged: () => void
+  onBudgetsChanged: () => void | Promise<void>
   /** `GET /coverage` `time.flows_due` (2026-09-23 spec §T12): an ended month listed with its
    *  spending partly entered or missing reads so — never as a complete month under budget. */
   flowsDue?: readonly FlowsPartOut[]
@@ -115,17 +123,28 @@ export default function BudgetPanel({
   // Histories arrive ONLY as PUT responses (spec §3 — no history GET exists), so the
   // expandable list appears per category once this session has saved it.
   const [histories, setHistories] = useState<Record<number, CategoryBudgetEntry[]>>({})
-  const [error, setError] = useState<string | null>(null)
+  const [editorError, setEditorError] = useState<{ field: 'amount' | 'month'; text: string } | null>(null)
+  const [baselines, setBaselines] = useState<Record<number, EditorState>>({})
+  const saveState = useSaveState({ dirty: openEditor !== null && JSON.stringify(editors[openEditor]) !== JSON.stringify(baselines[openEditor]) })
+  const panelRef = useRef<HTMLElement>(null)
+  const historiesRef = useLatest(histories)
+  const reloadRef = useLatest(onBudgetsChanged)
+  const ask = useConfirm()
+  const deleteWithUndo = useDeleteWithUndo()
+  const entryFor = (id: number) => panelRef.current?.querySelector<HTMLElement>(`[data-budget-category="${id}"]`) ?? null
+  const closeEditor = () => {
+    const id = openEditor
+    setOpenEditor(null)
+    setEditorError(null)
+    saveState.clearError()
+    if (id !== null) entryFor(id)?.querySelector<HTMLElement>('.budget-editor-toggle')?.focus()
+  }
+  useEscapeCancel(panelRef, closeEditor, openEditor !== null)
   const [busy, setBusy] = useState(false)
   const [suggestions, setSuggestions] = useState<BudgetSuggestionsOut | null>(null)
   const [suggestionsFailed, setSuggestionsFailed] = useState(false)
   // The last seed's skip detail; cleared by its Undo, replaced by the next seed.
   const [seedStatus, setSeedStatus] = useState<string | null>(null)
-  const [confirmReseed, setConfirmReseed] = useState(false)
-  // The house manages focus explicitly in its drawers; this is the card's first
-  // confirm-first control, so it owes the same courtesy — Cancel hands focus back to
-  // the button that asked, instead of dropping it on <body>.
-  const reseedRef = useRef<HTMLButtonElement>(null)
   // "View <month>" moves the card, and the button that was pressed leaves with the month it
   // offered — the heading takes focus so it does not fall to <body>.
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -258,13 +277,12 @@ export default function BudgetPanel({
 
   const seed = () => {
     setBusy(true)
-    setError(null)
-    setConfirmReseed(false)
     seedBudgets(effectiveMonth)
       .then((out) => {
         setSeedStatus(skipSummary(out.skipped))
+        requestAnimationFrame(() => headingRef.current?.focus())
         keepMonth()
-        onBudgetsChanged()
+        void reloadRef.current()
         const n = out.written.length
         const done = `Seeded ${n} ${n === 1 ? 'budget' : 'budgets'} from averages, from ${formatMonth(month)}`
         const batchId = out.batch_id
@@ -280,8 +298,9 @@ export default function BudgetPanel({
                     undoBatch(batchId)
                       .then(() => {
                         setSeedStatus(null)
+                        requestAnimationFrame(() => headingRef.current?.focus())
                         toast.success(`Undone — the ${formatMonth(month)} seed is gone.`)
-                        onBudgetsChanged()
+                        void reloadRef.current()
                       })
                       .catch((err: unknown) => toast.error(failMessage(err, 'Undo failed')))
                   },
@@ -289,63 +308,69 @@ export default function BudgetPanel({
               },
         )
       })
-      .catch((err: unknown) => setError(failMessage(err, 'Failed to seed the budgets')))
+      .catch((err: unknown) => toast.error(failMessage(err, 'Failed to seed the budgets')))
       .finally(() => setBusy(false))
   }
 
   const save = (category: CategoryOut, editor: EditorState) => {
+    if (busy || saveState.status === 'clean' || saveState.status === 'saved' || saveState.status === 'saving') return
     const trimmed = editor.amount.trim()
-    // Blank ENDS the budget from that month (the stored null marker, spec §2); anything
-    // else must be a non-negative amount — mirrors the server's 422s so the round trip
-    // never surprises.
+    if (trimmed !== '' && !isAmount(trimmed)) {
+      setEditorError({ field: 'amount', text: 'Enter a number, e.g. 80' })
+      revealEditor(entryFor(category.id)?.querySelector('.budget-editor') ?? null)
+      return
+    }
     const amount = trimmed === '' ? null : canonicalAmount(trimmed)
-    if (amount !== null && (!isAmount(trimmed) || Number(amount) < 0)) {
-      setError('Budget must be a non-negative amount (or blank to end the budget)')
+    if (amount !== null && Number(amount) < 0) {
+      setEditorError({ field: 'amount', text: "Budgets can't be negative" })
+      revealEditor(entryFor(category.id)?.querySelector('.budget-editor') ?? null)
       return
     }
     if (!/^\d{4}-\d{2}$/.test(editor.effectiveFrom)) {
-      setError('Pick an effective-from month')
+      setEditorError({ field: 'month', text: 'Pick an effective-from month' })
+      revealEditor(entryFor(category.id)?.querySelector('.budget-editor') ?? null, '[type="month"]')
       return
     }
-    setBusy(true)
-    setError(null)
-    putCategoryBudget(category.id, {
-      amount,
-      effective_month: `${editor.effectiveFrom}-01`,
-    })
-      .then((history) => {
-        setHistories((cur) => ({ ...cur, [category.id]: history }))
-        setEditors((cur) => {
-          const next = { ...cur }
-          delete next[category.id]
-          return next
-        })
-        // The editor STAYS open: the PUT's response is the effective-dated history rendered
-        // inside it, and that list is the save's only receipt (its own tests pin it). One
-        // editor at a time is still the rule — it is the row's button that closes this one.
-        keepMonth()
-        onBudgetsChanged()
+    setEditorError(null)
+    void saveState.run(async () => {
+      const history = await putCategoryBudget(category.id, { amount, effective_month: `${editor.effectiveFrom}-01` })
+      const saved = { ...editor, amount: amount ?? '' }
+      setHistories((cur) => ({ ...cur, [category.id]: history }))
+      setEditors((cur) => ({ ...cur, [category.id]: saved }))
+      setBaselines((cur) => ({ ...cur, [category.id]: saved }))
+      keepMonth()
+      await reloadRef.current()
+      requestAnimationFrame(() => {
+        const entry = entryFor(category.id)
+        flashElement(entry?.querySelector('.budget-row') ?? null)
+        // A first budget moves its row from the unbudgeted list into the meter list.
+        if (document.activeElement === document.body) entry?.querySelector<HTMLInputElement>('.budget-editor input')?.focus()
       })
-      .catch((err: unknown) => setError(failMessage(err, 'Failed to save the budget')))
-      .finally(() => setBusy(false))
+    })
   }
 
   const removeRow = (category: CategoryOut, effectiveMonthIso: string) => {
-    setBusy(true)
-    setError(null)
-    deleteCategoryBudget(category.id, effectiveMonthIso)
-      .then(() => {
-        setHistories((cur) => ({
-          ...cur,
-          [category.id]: (cur[category.id] ?? []).filter(
-            (h) => h.effective_month !== effectiveMonthIso,
-          ),
-        }))
+    const entry = historiesRef.current[category.id]?.find((row) => row.effective_month === effectiveMonthIso)
+    if (!entry) return
+    const rowId = `budget-history-${category.id}-${effectiveMonthIso}`
+    void deleteWithUndo({
+      name: `the ${formatMonth(effectiveMonthIso)} budget row for ${category.name}`,
+      row: document.getElementById(rowId),
+      request: () => deleteCategoryBudget(category.id, effectiveMonthIso),
+      onDeleted: async () => {
+        setHistories((cur) => ({ ...cur, [category.id]: (cur[category.id] ?? []).filter((row) => row.effective_month !== effectiveMonthIso) }))
         keepMonth()
-        onBudgetsChanged()
-      })
-      .catch((err: unknown) => setError(failMessage(err, 'Failed to delete the budget row')))
-      .finally(() => setBusy(false))
+        await reloadRef.current()
+      },
+      focusAfter: () => entryFor(category.id)?.querySelector<HTMLElement>('.budget-editor input') ?? headingRef.current,
+      onRestored: async () => {
+        setHistories((cur) => ({ ...cur, [category.id]: [...(cur[category.id] ?? []).filter((row) => row.effective_month !== effectiveMonthIso), entry]
+          .sort((a, b) => a.effective_month.localeCompare(b.effective_month)) }))
+        setOpenEditor(category.id)
+        await reloadRef.current()
+      },
+      restoredRow: () => document.getElementById(rowId),
+    })
   }
 
   const editorBlock = (category: CategoryOut, budget: string | null) => {
@@ -353,13 +378,16 @@ export default function BudgetPanel({
       amount: budget ?? '',
       effectiveFrom: defaultEffectiveFrom,
     }
-    const setEditor = (patch: Partial<EditorState>) =>
+    const setEditor = (patch: Partial<EditorState>) => {
+      setEditorError(null)
+      saveState.clearError()
       setEditors((cur) => ({ ...cur, [category.id]: { ...editor, ...patch } }))
+    }
     const history = histories[category.id]
     const suggestion = suggestionById.get(category.id)
     return (
       <div className="budget-editor">
-        <div className="budget-editor-form">
+        <form className="budget-editor-form" onSubmit={(event) => { event.preventDefault(); save(category, editor) }}>
           <label>
             Monthly budget
             <AmountInput
@@ -367,27 +395,27 @@ export default function BudgetPanel({
               onValueChange={(next) => setEditor({ amount: next })}
               placeholder="blank ends the budget"
               aria-label={`${category.name} budget amount`}
+              aria-invalid={editorError?.field === 'amount' || undefined}
+              aria-describedby={editorError?.field === 'amount' ? `budget-error-${category.id}` : undefined}
             />
+            {editorError?.field === 'amount' && <span className="budget-field-error" id={`budget-error-${category.id}`} role="alert">{editorError.text}</span>}
           </label>
           <label>
             Effective from
             <input
               type="month"
+              aria-invalid={editorError?.field === 'month' || undefined}
               className="field-input"
               aria-label={`${category.name} budget effective from`}
               value={editor.effectiveFrom}
               onChange={(e) => setEditor({ effectiveFrom: e.target.value })}
             />
           </label>
-          <button
-            type="button"
-            className="button"
-            aria-label={`Save ${category.name} budget`}
-            disabled={busy}
-            onClick={() => save(category, editor)}
-          >
+          {editorError?.field === 'month' && <span className="budget-field-error" role="alert">{editorError.text}</span>}
+          <SaveButton type="submit" className="button" aria-label={`Save ${category.name} budget`} state={saveState} aria-disabled={busy || undefined}>
             Save
-          </button>
+          </SaveButton>
+          <SaveStatus state={saveState} />
           {/* A5: promoted into the control row (was parked between the form and the
               history list) — the past-dating warning must be read at the moment the date
               is chosen, one short line. */}
@@ -403,17 +431,17 @@ export default function BudgetPanel({
               onPick={(amount) => setEditor({ amount })}
             />
           )}
-        </div>
+        </form>
         {history !== undefined && (
           <ul className="budget-history">
             {history.map((entry) => (
-              <li key={entry.effective_month}>
+              <li key={entry.effective_month} id={`budget-history-${category.id}-${entry.effective_month}`}>
                 <span>
                   {`${formatMonth(entry.effective_month)} — ${
                     entry.amount === null ? 'budget ends' : formatCurrency(entry.amount)
                   }`}
                 </span>
-                <button
+                <BusyButton
                   type="button"
                   className="button"
                   aria-label={`Delete the ${formatMonth(entry.effective_month)} budget row for ${category.name}`}
@@ -421,7 +449,7 @@ export default function BudgetPanel({
                   onClick={() => removeRow(category, entry.effective_month)}
                 >
                   Delete
-                </button>
+                </BusyButton>
               </li>
             ))}
           </ul>
@@ -432,15 +460,28 @@ export default function BudgetPanel({
 
   // The row's one control: "Edit budget" where a budget stands, "Set budget" where none does.
   const editorToggle = (category: CategoryOut, verb: 'Set' | 'Edit') => (
-    <button
+    <BusyButton
       type="button"
       className="button budget-editor-toggle"
       aria-label={`${verb} ${category.name} budget`}
       aria-expanded={openEditor === category.id}
-      onClick={() => setOpenEditor((current) => (current === category.id ? null : category.id))}
+      onClick={() => {
+        if (openEditor === category.id) { closeEditor(); return }
+        const initial = { amount: rows.find((row) => row.category.id === category.id)?.budget ?? '', effectiveFrom: defaultEffectiveFrom }
+        flushSync(() => {
+          if (!editors[category.id]) {
+            setEditors((cur) => ({ ...cur, [category.id]: initial }))
+            setBaselines((cur) => ({ ...cur, [category.id]: initial }))
+          }
+          setOpenEditor(category.id)
+          setEditorError(null)
+          saveState.clearError()
+        })
+        revealEditor(entryFor(category.id)?.querySelector('.budget-editor') ?? null)
+      }}
     >
       {verb} budget
-    </button>
+    </BusyButton>
   )
 
   const newCount = counts === null ? 0 : counts.writes - counts.rewrites
@@ -453,7 +494,7 @@ export default function BudgetPanel({
   }
 
   return (
-    <section className="card span-12">
+    <section className="card span-12" ref={panelRef}>
       {/* tabIndex -1: the focus target after "View <month>", never a tab stop of its own. */}
       <h2 className="eyebrow" ref={headingRef} tabIndex={-1}>
         Budgets — {formatMonth(month)}
@@ -467,7 +508,6 @@ export default function BudgetPanel({
         )}
         <InfoHint text="Each budgeted category's spend against its budget for the month shown: the month picked in the ribbon, or else this month when a budget is in force, else the latest month that has one. Budgets are effective-dated: a change applies from its month forward and never rewrites history — each row says since when. With no transaction feed there is no mid-month pacing: a month still in progress reads month to date, and a month whose spending was saved while it was running reads partly entered until it is saved again after it ends or confirmed complete. Start from my averages writes every living category's typical spend as an editable budget; the editor's chips offer the same figures one at a time." />
       </h2>
-      <FeedBanner error={error} />
       {seedStatus !== null && (
         <p className="drill-hint budget-seed-status" role="status">
           {seedStatus}
@@ -483,47 +523,28 @@ export default function BudgetPanel({
                     partlyEntered ? ` — its spending is partly entered (${due})` : ''
                   }`}
             </p>
-            {canSeed && !confirmReseed && (
-              <button
-                ref={reseedRef}
+            {canSeed && (
+              <BusyButton
                 type="button"
                 className="button"
-                disabled={busy}
-                onClick={() => setConfirmReseed(true)}
-              >
-                Re-seed from averages
-              </button>
-            )}
-          </div>
-          {confirmReseed && counts !== null && (
-            <p className="drill-hint budget-reseed-confirm">
-              {/* The live region is the SENTENCE only: a role="status" wrapping the buttons
-                  re-announces "Confirm Cancel" with every re-render of the count. */}
-              <span role="status">
-                {`Rewrites ${counts.rewrites} existing ${counts.rewrites === 1 ? 'budget' : 'budgets'} and sets ${newCount} new ${newCount === 1 ? 'one' : 'ones'} from ${formatMonth(month)}.`}
-              </span>
-              {/* autoFocus: the confirm IS the answer to the click that opened this line, so
-                  focus follows the question rather than staying on a button that just left. */}
-              <button type="button" className="button" autoFocus disabled={busy} onClick={seed}>
-                Confirm
-              </button>
-              <button
-                type="button"
-                className="button"
-                onClick={() => {
-                  setConfirmReseed(false)
-                  // The Re-seed button remounts with that state change, so the ref points at
-                  // the NEW node by the time the frame runs.
-                  requestAnimationFrame(() => reseedRef.current?.focus())
+                busy={busy}
+                onClick={async (event) => {
+                  if (await ask({
+                    anchor: event.currentTarget,
+                    title: 'Re-seed budgets from averages?',
+                    body: `Rewrites ${counts?.rewrites ?? 0} existing ${counts?.rewrites === 1 ? 'budget' : 'budgets'} and sets ${newCount} new ${newCount === 1 ? 'one' : 'ones'} from ${formatMonth(month)}. One Undo reverts the whole seed.`,
+                    confirmLabel: 'Re-seed budgets',
+                    tone: 'default',
+                  })) seed()
                 }}
               >
-                Cancel
-              </button>
-            </p>
-          )}
+                Re-seed from averages
+              </BusyButton>
+            )}
+          </div>
           <div className="budget-rows">
             {budgeted.map(({ category, budget, since, progress }) => (
-              <div className="budget-entry" key={category.id}>
+              <div className="budget-entry" key={category.id} data-budget-category={category.id} aria-current={openEditor === category.id ? true : undefined}>
                 <div className="budget-row">
                   <span className="budget-label">
                     <span className="budget-name">{category.name}</span>
@@ -571,13 +592,13 @@ export default function BudgetPanel({
             )}
           </p>
           {onViewMonth !== undefined && (
-            <button
+            <BusyButton
               type="button"
               className="button"
               onClick={() => viewMonth(matrix.months[elsewhere.targetIndex])}
             >
               View {formatMonth(matrix.months[elsewhere.targetIndex])}
-            </button>
+            </BusyButton>
           )}
         </div>
       ) : (
@@ -585,17 +606,18 @@ export default function BudgetPanel({
           {/* W6: a lead sentence beside its button — not a centred placeholder 24px from both. */}
           <div className="budget-seed-row">
             <p className="empty-note">No budgets yet.</p>
-            <button
+            <BusyButton
               type="button"
               className="button button-primary"
               // Disabled says THAT it cannot run; only the hint says why, so the button has to
               // name it — a disabled control is otherwise mute to a screen reader.
               aria-describedby="budget-seed-hint"
-              disabled={busy || !canSeed}
+              busy={busy}
+              inert={!canSeed}
               onClick={seed}
             >
               Start from my averages
-            </button>
+            </BusyButton>
           </div>
           <p className="drill-hint budget-seed-hint" id="budget-seed-hint">
             {seedHint()}
@@ -612,7 +634,7 @@ export default function BudgetPanel({
         const rows = (
           <div className="budget-rows">
             {unbudgeted.map(({ category, budget }) => (
-              <div className="budget-entry" key={category.id}>
+              <div className="budget-entry" key={category.id} data-budget-category={category.id} aria-current={openEditor === category.id ? true : undefined}>
                 <div className="budget-row budget-row-unbudgeted">
                   <span className="budget-name">{category.name}</span>
                   {editorToggle(category, 'Set')}

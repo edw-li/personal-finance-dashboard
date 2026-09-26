@@ -230,3 +230,10 @@
   flex-basis: 100%;
   margin: 0;
 }
+
+.budget-editor [aria-invalid="true"] {
+  border-color: var(--negative);
+  box-shadow: 0 0 0 1px var(--negative);
+}
+.budget-field-error { color: var(--negative); font-size: 0.8rem; }
+.budget-editor .save-status { align-self: center; }
