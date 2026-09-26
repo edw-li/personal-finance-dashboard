@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { ClipboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarPlus, Ellipsis } from 'lucide-react'
@@ -1229,6 +1230,22 @@ function MonthlyUpdateWizard() {
         if (!(err instanceof ApiError && err.status === 404)) throw err
       }
       removeDraft(part, month)
+      if (loadedMonth.current === loaded) {
+        // The server has removed this part. Retire its controls before announcing success,
+        // even when the refresh is slow; the step control survives both updates.
+        anchor.closest('.monthly-update-page')?.querySelector<HTMLElement>('.wizard-step.active')?.focus({ preventScroll: true })
+        flushSync(() => {
+          closeActions()
+          if (part === 'balances') setMonthExisted(false)
+          else {
+            setSpendingExisted(false)
+            setEmptyMonth(false)
+          }
+          setLastSave(null)
+          setRestoredParts((current) => ({ ...current, [part]: false }))
+          reloadMonth()
+        })
+      }
       toast.success(
         `Deleted ${name} — ${part === 'balances' ? 'spending' : 'balances'} untouched.`,
         batchId === null
@@ -1245,16 +1262,6 @@ function MonthlyUpdateWizard() {
               },
             },
       )
-      if (loadedMonth.current !== loaded) return
-      closeActions()
-      // Deleting the last stored part removes this kebab after reloading. The step
-      // control remains mounted throughout the read and is the stable return target.
-      anchor.closest('.monthly-update-page')?.querySelector<HTMLElement>('.wizard-step.active')?.focus({ preventScroll: true })
-      // The receipt and the restored banner describe rows that no longer exist.
-      setLastSave(null)
-      setRestoredParts((current) => ({ ...current, [part]: false }))
-      // The form re-seeds from what is left; the ribbon and the strip re-read coverage.
-      reloadMonth()
     } catch (err) {
       if (loadedMonth.current === loaded) setError(err instanceof ApiError ? `Delete failed: ${err.message} — retry` : 'Delete failed — retry')
     } finally {
@@ -1268,11 +1275,21 @@ function MonthlyUpdateWizard() {
   // ritual's anchor, and the month keeps its net worth.
   const deleteEmptySpending = async () => {
     if (saving) return
+    const loaded = loadedMonth.current
+    const repaired = month
     setRepairing(true)
     setError(null)
     try {
       const { batchId } = await deleteSpendingMonth(month, { source: 'repair' })
-      const repaired = month
+      if (loadedMonth.current === loaded) {
+        document.querySelector<HTMLElement>('.monthly-update-page .wizard-step.active')?.focus({ preventScroll: true })
+        flushSync(() => {
+          setEmptyMonth(false)
+          setSpendingExisted(false)
+          closeActions()
+          reloadMonth()
+        })
+      }
       toast.success(
         `Deleted ${formatMonth(repaired)}'s empty spending rows — balances untouched.`,
         batchId === null
@@ -1284,13 +1301,6 @@ function MonthlyUpdateWizard() {
               },
             },
       )
-      setEmptyMonth(false)
-      // The spending feed is gone: the ribbon must re-read coverage, and the form must
-      // re-seed (the zeros it is showing no longer exist). The re-seed is also what re-homes
-      // the caret: the button just clicked unmounts with the banner it sat in, and remounting
-      // the step body runs the first typable cell's autoFocus — so focus lands on a cell
-      // rather than falling back to <body>, where the next Tab would restart at the top.
-      reloadMonth()
     } catch (err) {
       setError(
         err instanceof ApiError ? `Delete failed: ${err.message} — retry` : 'Delete failed — retry',

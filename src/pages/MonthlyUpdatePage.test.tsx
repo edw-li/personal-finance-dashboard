@@ -1291,6 +1291,23 @@ const undone = {
 }
 
 describe('deletes per part (2026-09-23 spec §M6)', () => {
+  it.each([
+    { step: 'balances', name: 'Jul 1 balances', message: 'Deleted Jul 1 balances — spending untouched.' },
+    { step: 'spending', name: 'July spending & take-home', message: 'Deleted July spending & take-home — balances untouched.' },
+  ])('removes $name before its success toast while the refresh is pending', async ({ step, name, message }) => {
+    savedJuly()
+    vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
+    vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-sp' })
+    renderWizardAt(`/update?month=2026-07-01&step=${step}`)
+    await openPartActions(name)
+    // A slow refresh must not leave the deleted part actionable beside its success message.
+    vi.mocked(monthReviewApi.fetchMonthReview).mockReturnValue(deferred<MonthReview>().promise)
+    acceptPartDelete(screen.getByRole('button', { name: `Delete ${name}` }))
+    await screen.findByText(message)
+    expect(screen.queryByRole('button', { name: `Actions for ${name}` })).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('.wizard-step.active'))
+  })
+
   // Lane T's Data health check flags balances filed more than a month ahead (a mistyped Dec 1 in
   // October) and sends the user here to delete them: the month's saves stay shut (§M3), but its
   // Balances step still offers the delete, with its guard and its Undo.
@@ -1812,6 +1829,32 @@ it('deletes only the spending rows, offers Undo, and leaves the balances snapsho
   await screen.findByText("Undone — Aug 2026's rows are back.")
   // The Undo moved coverage back: the month re-seeds AND the ribbon re-reads (review M12).
   await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length - reads).toBeGreaterThanOrEqual(2))
+})
+
+it('removes the repaired empty part before its success toast while the refresh is pending', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue(EMPTY_MONTH)
+  vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-empty' })
+  renderWizardAt('/update?month=2026-08-01&step=spending')
+  const repair = await screen.findByRole('button', { name: 'Delete the empty month' })
+  vi.mocked(monthReviewApi.fetchMonthReview).mockReturnValue(deferred<MonthReview>().promise)
+  fireEvent.click(repair)
+  await screen.findByText("Deleted Aug 2026's empty spending rows — balances untouched.")
+  expect(screen.queryByRole('button', { name: 'Actions for August spending & take-home' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Delete the empty month' })).toBeNull()
+  expect(document.activeElement).toBe(document.querySelector('.wizard-step.active'))
+})
+
+it('ordinary delete removes an empty month repair action before the success toast', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue(EMPTY_MONTH)
+  vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-empty' })
+  renderWizardAt('/update?month=2026-08-01&step=spending')
+  await openPartActions('August spending & take-home')
+  vi.mocked(monthReviewApi.fetchMonthReview).mockReturnValue(deferred<MonthReview>().promise)
+  acceptPartDelete(screen.getByRole('button', { name: 'Delete August spending & take-home' }))
+  await screen.findByText('Deleted August spending & take-home — balances untouched.')
+  expect(screen.queryByRole('button', { name: 'Delete the empty month' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Actions for August spending & take-home' })).toBeNull()
+  expect(document.activeElement).toBe(document.querySelector('.wizard-step.active'))
 })
 
 it("the conflict banner's Reload re-seeds the month and has the ribbon re-read coverage (review M12)", async () => {
