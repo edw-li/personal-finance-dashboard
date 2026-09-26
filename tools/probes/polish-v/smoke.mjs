@@ -235,7 +235,8 @@ async function layoutGroup(options) {
     check(id, 'Unnumbered Guide Next focuses selected rail', await page.locator('.guide-rail [aria-selected="true"]:focus').count() === 1, await measure.activeFocus(page))
     for (const route of ['/net-worth', '/taxes', '/spending']) {
       await visit(page, route)
-      const title = await page.locator('section.chart-card h2').first().innerText()
+      // innerText includes CSS uppercase; use the underlying label consistently with tableBox.
+      const title = (await page.locator('section.chart-card h2').first().textContent()).trim()
       await measure.toggleTable(page, title); await sleep(900)
       const table = await measure.tableBox(page, title)
       check(id, `${route}: chart Table revealed below sticky block`, table !== null && table.visible >= Math.min(table.height, table.available) - 1, table, { visible: baseline.chartTableVisiblePx })
