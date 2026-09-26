@@ -10,7 +10,7 @@ from decimal import Decimal
 import pytest
 
 from app.models import CreditCard, CreditLimitEvent, RewardCategory
-from tests.changelog_asserts import logged
+from tests.exact_undo import logged
 from tests.ordering_helpers import flushed_updates
 
 CARDS = "/api/v1/credit-cards"

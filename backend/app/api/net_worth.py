@@ -26,9 +26,17 @@ from app.schemas.net_worth import (
 )
 from app.schemas.ordering import OrderIn
 from app.services import clock
-from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.changelog import (
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    edit_label,
+    lock_children,
+    lock_parent,
+    row_image,
+)
 from app.services.money import mom_pct, require_first_of_month
-from app.services.month_review import load_review_book
+from app.services.month_review import load_review_book, lock_review_inputs
 from app.services.month_writes import write_balances
 from app.services.net_worth_calc import (
     ZERO,
@@ -226,13 +234,16 @@ async def create_account(
     db.add(account)
     await db.flush()
     batch.record_insert(account)
-    batch.label = f"Created account {account.name}"
+    batch.label = f"Added account {account.name}"
     response.headers.update(batch_header(await batch.commit()))
     return account
 
 
-async def _get_account(db: AsyncSession, account_id: int) -> Account:
-    account = await db.get(Account, account_id)
+async def _get_account(db: AsyncSession, account_id: int, *, lock: bool = False) -> Account:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    account = (
+        await lock_parent(db, Account, account_id) if lock else await db.get(Account, account_id)
+    )
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
     return account
@@ -301,7 +312,9 @@ async def update_account(
     for field, value in updates.items():
         setattr(account, field, value)
     batch.record_update(account, before)
-    batch.label = f"Updated account {account.name}"
+    batch.label = edit_label(
+        "account", account.name, before, row_image(account), off="Retired", on="Restored"
+    )
     response.headers.update(batch_header(await batch.commit()))
     return account
 
@@ -316,8 +329,13 @@ async def delete_account(
     the account are nulled first — its components' parent_account_id and credit cards'
     account_id, the end state the FKs' SET NULL left — each imaged through the ORM, then the
     account LAST, so an Undo (which replays in reverse) brings the account back and relinks
-    them (2026-09-25 polish spec §6.1)."""
-    account = await _get_account(db, account_id)
+    them (2026-09-25 polish spec §6.1). The account is read FOR UPDATE first, so a balance,
+    component or card link another tab writes meanwhile waits rather than leaving with the
+    cascade unimaged — and before that the month-review table locks, the month save's own, in
+    undo_batch's order (review locks, then rows): row lock first, a save holding them and writing
+    a balance for this account deadlocked with the delete, and Postgres aborted the save."""
+    await lock_review_inputs(db)
+    account = await _get_account(db, account_id, lock=True)
     balance_count = (
         await db.execute(
             select(func.count())
@@ -330,20 +348,16 @@ async def delete_account(
             status_code=409,
             detail=f"account has {balance_count} balance rows — deactivate it instead",
         )
-    components = (
-        await db.execute(
-            select(Account).where(Account.parent_account_id == account_id).order_by(Account.id)
-        )
-    ).scalars()
+    components = await lock_children(
+        db, select(Account).where(Account.parent_account_id == account_id).order_by(Account.id)
+    )
     for component in components:
         before = row_image(component)
         component.parent_account_id = None
         batch.record_update(component, before)
-    cards = (
-        await db.execute(
-            select(CreditCard).where(CreditCard.account_id == account_id).order_by(CreditCard.id)
-        )
-    ).scalars()
+    cards = await lock_children(
+        db, select(CreditCard).where(CreditCard.account_id == account_id).order_by(CreditCard.id)
+    )
     for card in cards:
         before = row_image(card)
         card.account_id = None

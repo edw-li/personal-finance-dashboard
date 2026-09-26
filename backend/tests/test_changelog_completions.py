@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal
 
 from app.models import Account, CategoryBudget, CreditCard, RewardCategory, SpendingCategory
-from tests.exact_undo import images, logged, shape, undo
+from tests.exact_undo import images, label_of, logged, shape, undo
 
 NW = "/api/v1/net-worth"
 SP = "/api/v1/spending"
@@ -22,15 +22,15 @@ async def test_account_and_category_writes_answer_their_batch(auth_client, db):
     account = await auth_client.post(
         f"{NW}/accounts", json={"name": "Brokerage", "group": "taxable"}
     )
-    await named(account, "Created account Brokerage")
+    await named(account, "Added account Brokerage")
     account_path = f"{NW}/accounts/{account.json()['id']}"
     retire = {"is_active": False}
-    await named(await auth_client.patch(account_path, json=retire), "Updated account Brokerage")
+    await named(await auth_client.patch(account_path, json=retire), "Retired account Brokerage")
     category = await auth_client.post(f"{SP}/categories", json={"name": "Dining"})
-    await named(category, "Created category Dining")
+    await named(category, "Added category Dining")
     category_path = f"{SP}/categories/{category.json()['id']}"
     kind = {"kind": "transfer"}
-    await named(await auth_client.patch(category_path, json=kind), "Updated category Dining")
+    await named(await auth_client.patch(category_path, json=kind), "Edited category Dining")
     budget = {"amount": "400.00", "effective_month": "2026-09-01"}
     await named(
         await auth_client.put(f"{category_path}/budget", json=budget),
@@ -43,6 +43,26 @@ async def test_account_and_category_writes_answer_their_batch(auth_client, db):
         await auth_client.put(f"{category_path}/budget", json=budget),
     ):
         assert resp.status_code == 200 and "x-change-batch" not in resp.headers
+
+
+async def test_retire_and_restore_read_in_the_buttons_own_verbs(auth_client, db):
+    """Settings' one-click Retire / Restore, named like the cards' Archive and the reward
+    categories' Hide (changelog.edit_label): a PATCH that moves only is_active says what the
+    button said; any other edit is still "Edited"."""
+    account = await auth_client.post(
+        f"{NW}/accounts", json={"name": "Brokerage", "group": "taxable"}
+    )
+    category = await auth_client.post(f"{SP}/categories", json={"name": "Dining"})
+    for path, noun in (
+        (f"{NW}/accounts/{account.json()['id']}", "account Brokerage"),
+        (f"{SP}/categories/{category.json()['id']}", "category Dining"),
+    ):
+        retired = await auth_client.patch(path, json={"is_active": False})
+        assert label_of(await logged(db, retired)) == f"Retired {noun}"
+        restored = await auth_client.patch(path, json={"is_active": True})
+        assert label_of(await logged(db, restored)) == f"Restored {noun}"
+        both = await auth_client.patch(path, json={"is_active": False, "sort_order": 7})
+        assert label_of(await logged(db, both)) == f"Edited {noun}"
 
 
 async def test_deleting_a_category_takes_its_budgets_and_links_and_undo_restores_them(

@@ -160,7 +160,9 @@ async def test_a_later_edit_of_a_moved_row_makes_the_undo_refuse(auth_client, db
 
 async def test_undo_after_a_later_reorder_refuses_until_the_later_one_is_undone(auth_client, db):
     """Spec §9: two reorders touch the same rows, so the first one's before images are stale
-    — its undo refuses with the overlap sentence — while the later one undoes cleanly."""
+    — its undo refuses with the overlap sentence — until the later one is undone: a change and
+    its standing Undo cancel out (changelog.superseded), so the retry goes through and puts the
+    seed's numbers back."""
     ids = await seed_categories(db)
     first = await auth_client.put(
         ORDER, json={"ids": [ids["Travel"], ids["Food"], ids["Rent"], ids["Old"]]}
@@ -181,6 +183,15 @@ async def test_undo_after_a_later_reorder_refuses_until_the_later_one_is_undone(
         (ids["Food"], 1),
         (ids["Rent"], 2),
         (ids["Old"], 3),
+    ]
+    retried = await auth_client.post(f"{ACTIVITY}/batches/{first_batch}/undo")
+    assert retried.status_code == 200, retried.text
+    listed = (await auth_client.get(f"{SP}/categories")).json()
+    assert [(c["id"], c["sort_order"]) for c in listed] == [
+        (ids["Food"], 2),
+        (ids["Rent"], 3),
+        (ids["Old"], 7),
+        (ids["Travel"], 20),
     ]
 
 

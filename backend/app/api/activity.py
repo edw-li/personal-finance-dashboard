@@ -28,7 +28,7 @@ from app.services.changelog import (
     UndoRefused,
     superseded,
     undo_batch,
-    undone_by,
+    undo_links,
 )
 
 router = APIRouter(prefix="/activity", tags=["activity"], dependencies=[Depends(get_current_user)])
@@ -82,9 +82,10 @@ async def activity(
     batches = (await db.execute(batch_q)).all()
     runs = (await db.execute(run_q)).scalars().all()
     batch_ids = [b.batch_id for b in batches]
-    undone = await undone_by(db, batch_ids)
+    # The undo runs, read once: which batches were undone, and the chains superseded walks.
+    undone = await undo_links(db) if batch_ids else {}
     # Page-wide, not per row: the two id-ordering refusals undo_batch would raise.
-    stale = await superseded(db, batch_ids)
+    stale = await superseded(db, batch_ids, undone)
     entries: list[ActivityBatchOut | ActivityRunOut] = [
         ActivityBatchOut(
             batch_id=b.batch_id,

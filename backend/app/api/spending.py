@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -40,13 +40,22 @@ from app.schemas.spending import (
 )
 from app.services import clock
 from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
-from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.changelog import (
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    edit_label,
+    lock_children,
+    lock_parent,
+    row_image,
+)
 from app.services.metrics import average_evidence, category_amounts, category_comparison
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     quantize_money,
     require_first_of_month,
 )
+from app.services.month_review import lock_review_inputs
 from app.services.month_writes import write_spending
 from app.services.net_worth_calc import get_swr_pct, investable_bases
 from app.services.ordering import (
@@ -148,13 +157,20 @@ async def create_category(
     db.add(category)
     await db.flush()
     batch.record_insert(category)
-    batch.label = f"Created category {category.name}"
+    batch.label = f"Added category {category.name}"
     response.headers.update(batch_header(await batch.commit()))
     return category
 
 
-async def _get_category(db: AsyncSession, category_id: int) -> SpendingCategory:
-    category = await db.get(SpendingCategory, category_id)
+async def _get_category(
+    db: AsyncSession, category_id: int, *, lock: bool = False
+) -> SpendingCategory:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    category = (
+        await lock_parent(db, SpendingCategory, category_id)
+        if lock
+        else await db.get(SpendingCategory, category_id)
+    )
     if category is None:
         raise HTTPException(status_code=404, detail="category not found")
     return category
@@ -201,7 +217,9 @@ async def update_category(
     for field, value in updates.items():
         setattr(category, field, value)
     batch.record_update(category, before)
-    batch.label = f"Updated category {category.name}"
+    batch.label = edit_label(
+        "category", category.name, before, row_image(category), off="Retired", on="Restored"
+    )
     response.headers.update(batch_header(await batch.commit()))
     return category
 
@@ -216,8 +234,12 @@ async def delete_category(
     category goes first — reward categories' links nulled, the budget history deleted — each
     imaged through the ORM rather than left to the FKs' ON DELETE, then the category LAST, so
     an Undo (which replays in reverse) brings the category back first and then everything
-    that hung off it, ids included (2026-09-25 polish spec §6.1)."""
-    category = await _get_category(db, category_id)
+    that hung off it, ids included (2026-09-25 polish spec §6.1). The category is read FOR
+    UPDATE first, so a month row, budget or reward link another tab writes meanwhile waits
+    rather than leaving with the cascade unimaged — and before that the month-review table
+    locks, as delete_account takes them and for its reason."""
+    await lock_review_inputs(db)
+    category = await _get_category(db, category_id, lock=True)
     row_count = (
         await db.execute(
             select(func.count())
@@ -230,18 +252,17 @@ async def delete_category(
             status_code=409,
             detail=f"category has {row_count} monthly rows — deactivate it instead",
         )
-    links = (
-        await db.execute(
-            select(RewardCategory)
-            .where(RewardCategory.spending_category_id == category_id)
-            .order_by(RewardCategory.id)
-        )
-    ).scalars()
+    links = await lock_children(
+        db,
+        select(RewardCategory)
+        .where(RewardCategory.spending_category_id == category_id)
+        .order_by(RewardCategory.id),
+    )
     for link in links:
         before = row_image(link)
         link.spending_category_id = None
         batch.record_update(link, before)
-    for budget in await _budget_history(db, category_id):
+    for budget in await lock_children(db, _budget_rows(category_id)):
         batch.record_delete(budget, month=budget.effective_month)
         await db.delete(budget)
     # Out before the category's own DELETE: no relationship() orders these mappers, and the
@@ -257,18 +278,18 @@ async def delete_category(
 # --- category budgets ---
 
 
-async def _budget_history(db: AsyncSession, category_id: int) -> list[CategoryBudget]:
-    return list(
-        (
-            await db.execute(
-                select(CategoryBudget)
-                .where(CategoryBudget.category_id == category_id)
-                .order_by(CategoryBudget.effective_month)
-            )
-        )
-        .scalars()
-        .all()
+def _budget_rows(category_id: int) -> Select[tuple[CategoryBudget]]:
+    """A category's budget history, ascending by month — the editor's list, and what its
+    delete images."""
+    return (
+        select(CategoryBudget)
+        .where(CategoryBudget.category_id == category_id)
+        .order_by(CategoryBudget.effective_month)
     )
+
+
+async def _budget_history(db: AsyncSession, category_id: int) -> list[CategoryBudget]:
+    return list((await db.execute(_budget_rows(category_id))).scalars().all())
 
 
 async def _get_budget_row(

@@ -45,7 +45,15 @@ from app.schemas.credit_cards import (
     RewardRatePut,
 )
 from app.schemas.ordering import OrderIn
-from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.changelog import (
+    ChangeBatch,
+    batch_header,
+    change_batch,
+    edit_label,
+    lock_children,
+    lock_parent,
+    row_image,
+)
 from app.services.day_labels import long_day
 from app.services.money import (
     MONEY_MAX_ABS_8_2,
@@ -78,17 +86,7 @@ POINT_VALUE_MAX_ABS = Decimal(100)  # Numeric(6,4): 2 integer digits
 # int converter. Keep new static sub-paths above the cards section.
 
 
-# --- Activity labels (2026-09-25 polish spec §6.1) ----------------------------------------
-
-
-def _edit_label(noun: str, name: str, before: dict, after: dict, *, off: str, on: str) -> str:
-    """A PATCH's label. When `is_active` is the only column that moved, the edit was the
-    row's one-click toggle, and the label says so in the button's own verb — the roster's
-    Archive / Unarchive, the categories' Hide / Show."""
-    moved = {key for key, value in after.items() if before.get(key) != value}
-    if moved == {"is_active"}:
-        return f"{on if after['is_active'] else off} {noun} {name}"
-    return f"Edited {noun} {name}"
+# --- Activity labels (2026-09-25 polish spec §6.1; a PATCH's is changelog.edit_label) ------
 
 
 def _dollars(value: Decimal) -> str:
@@ -114,11 +112,35 @@ def _reorder_label(
     return f"Reordered {len(moved)} {plural}"
 
 
+def _matrix_label(multipliers: int, conditions: int) -> str:
+    """A matrix save's label, by what it changed: the cells whose multiplier was added,
+    changed or cleared, and the cells where only the condition moved — the note and the
+    monthly bonus cap the matrix marks with ⁺. A save that only capped a bonus must not claim
+    it edited a multiplier."""
+
+    def cells(count: int) -> str:
+        return f"{count} reward multiplier{'' if count == 1 else 's'}"
+
+    condition = "condition" if conditions == 1 else "conditions"
+    if not conditions:
+        return f"Edited {cells(multipliers)}"
+    if not multipliers:
+        return f"Edited the {condition} on {cells(conditions)}"
+    return f"Edited {cells(multipliers)} and the {condition} on {conditions} more"
+
+
 # --- reward categories (matrix rows) ------------------------------------------------------
 
 
-async def _get_reward_category(db: AsyncSession, category_id: int) -> RewardCategory:
-    category = await db.get(RewardCategory, category_id)
+async def _get_reward_category(
+    db: AsyncSession, category_id: int, *, lock: bool = False
+) -> RewardCategory:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    category = (
+        await lock_parent(db, RewardCategory, category_id)
+        if lock
+        else await db.get(RewardCategory, category_id)
+    )
     if category is None:
         raise HTTPException(status_code=404, detail="reward category not found")
     return category
@@ -275,7 +297,7 @@ async def update_reward_category(
     for field, value in updates.items():
         setattr(category, field, value)
     batch.record_update(category, before)
-    batch.label = _edit_label(
+    batch.label = edit_label(
         "reward category", category.name, before, row_image(category), off="Hid", on="Showed"
     )
     response.headers.update(batch_header(await batch.commit()))
@@ -290,18 +312,12 @@ async def delete_reward_category(
 ) -> Response:
     """Deletes the row AND its matrix cells — the cells by their own explicit DELETEs, each
     imaged, so the Activity card's Undo restores them with the row. Unlike spending categories
-    there is no monthly history to orphan — cells are cheap to re-enter — so no guard."""
-    category = await _get_reward_category(db, category_id)
-    cells = (
-        (
-            await db.execute(
-                select(RewardRate)
-                .where(RewardRate.category_id == category_id)
-                .order_by(RewardRate.id)
-            )
-        )
-        .scalars()
-        .all()
+    there is no monthly history to orphan — cells are cheap to re-enter — so no guard. The row
+    is read FOR UPDATE first, so no cell another tab adds meanwhile can leave with the cascade
+    unimaged."""
+    category = await _get_reward_category(db, category_id, lock=True)
+    cells = await lock_children(
+        db, select(RewardRate).where(RewardRate.category_id == category_id).order_by(RewardRate.id)
     )
     for rate in cells:
         batch.record_delete(rate)
@@ -342,8 +358,9 @@ async def put_reward_rates(
     """Bulk matrix save: upsert cells, delete where multiplier is null. ATOMIC — any
     validation failure raises before the single commit, applying nothing. Returns the
     full post-save cell list (the matrix re-renders without a second fetch). Every cell it
-    adds, changes or clears is a row of ONE change batch, so one Undo reverts the whole save;
-    an all-unchanged save records nothing and names no batch."""
+    adds, changes or clears is a row of ONE change batch, so one Undo reverts the whole save,
+    and its label counts multipliers apart from conditions (_matrix_label); an all-unchanged
+    save records nothing and names no batch."""
     seen: set[tuple[int, int]] = set()
     for entry in body:
         key = (entry.card_id, entry.category_id)
@@ -378,6 +395,7 @@ async def put_reward_rates(
         for rate in (await db.execute(select(RewardRate))).scalars()
     }
     added: list[RewardRate] = []
+    multipliers = conditions = 0
     for entry in body:
         key = (entry.card_id, entry.category_id)
         row = existing.get(key)
@@ -385,6 +403,7 @@ async def put_reward_rates(
             if row is not None:
                 batch.record_delete(row)
                 await db.delete(row)
+                multipliers += 1
             continue
         multiplier = quantize_money(entry.multiplier, "multiplier", max_abs=MULTIPLIER_MAX_ABS)
         if multiplier <= 0:
@@ -410,11 +429,15 @@ async def put_reward_rates(
             row.note = entry.note
             row.monthly_cap = cap
             batch.record_update(row, before)
+            after = row_image(row)
+            if after["multiplier"] != before["multiplier"]:
+                multipliers += 1
+            elif after != before:
+                conditions += 1  # the note or the cap alone
     await db.flush()  # the new cells' ids, which their images need
     for rate in added:
         batch.record_insert(rate)
-    changed = batch.rows
-    batch.label = f"Edited {changed} reward multiplier{'' if changed == 1 else 's'}"
+    batch.label = _matrix_label(multipliers + len(added), conditions)
     response.headers.update(batch_header(await batch.commit()))
     return await _all_rates(db)
 
@@ -422,8 +445,9 @@ async def put_reward_rates(
 # --- cards --------------------------------------------------------------------------------
 
 
-async def _get_card(db: AsyncSession, card_id: int) -> CreditCard:
-    card = await db.get(CreditCard, card_id)
+async def _get_card(db: AsyncSession, card_id: int, *, lock: bool = False) -> CreditCard:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    card = await lock_parent(db, CreditCard, card_id) if lock else await db.get(CreditCard, card_id)
     if card is None:
         raise HTTPException(status_code=404, detail="card not found")
     return card
@@ -632,7 +656,7 @@ async def update_credit_card(
     for field, value in values.items():
         setattr(card, field, value)
     batch.record_update(card, before)
-    batch.label = _edit_label(
+    batch.label = edit_label(
         "card", card.name, before, row_image(card), off="Archived", on="Unarchived"
     )
     response.headers.update(batch_header(await batch.commit()))
@@ -649,28 +673,22 @@ async def delete_credit_card(
     card's Undo restores all of it with the same ids: the categories pinned to the card are
     unpinned first (updates to NULL), then its credits, cells and limit history go, and the
     card goes LAST — undo replays in reverse, so the card is back before anything that points
-    at it."""
-    card = await _get_card(db, card_id)
-    pinned = (
-        (
-            await db.execute(
-                select(RewardCategory)
-                .where(RewardCategory.pinned_card_id == card_id)
-                .order_by(RewardCategory.id)
-            )
-        )
-        .scalars()
-        .all()
+    at it. The card is read FOR UPDATE first, so nothing another tab points at it meanwhile can
+    leave with the cascade unimaged."""
+    card = await _get_card(db, card_id, lock=True)
+    pinned = await lock_children(
+        db,
+        select(RewardCategory)
+        .where(RewardCategory.pinned_card_id == card_id)
+        .order_by(RewardCategory.id),
     )
     for category in pinned:
         before = row_image(category)
         category.pinned_card_id = None
         batch.record_update(category, before)
     for child in (CardCredit, RewardRate, CreditLimitEvent):
-        rows = (
-            (await db.execute(select(child).where(child.card_id == card_id).order_by(child.id)))
-            .scalars()
-            .all()
+        rows = await lock_children(
+            db, select(child).where(child.card_id == card_id).order_by(child.id)
         )
         for row in rows:
             batch.record_delete(row)

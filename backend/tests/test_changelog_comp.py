@@ -4,7 +4,7 @@ X-Change-Batch header, and the Activity card undoes a delete exactly — same id
 
 from app.models import CompEvent, RsuGrant
 from app.services.changelog import REPLAY_REFUSAL
-from tests.changelog_asserts import label_of, logged, ops, table_rows, undo
+from tests.exact_undo import images, label_of, logged, shape, undo
 
 EVENTS = "/api/v1/comp/events"
 GRANTS = "/api/v1/comp/rsu-grants"
@@ -35,7 +35,7 @@ async def test_comp_event_create_edit_delete_each_log_one_labelled_batch(auth_cl
     created = await auth_client.post(EVENTS, json=EVENT)
     assert created.status_code == 201, created.text
     rows = await logged(db, created)
-    assert ops(rows) == [("insert", "comp_events")]
+    assert shape(rows) == [("insert", "comp_events")]
     assert label_of(rows) == "Added the 2025 comp event"
     assert rows[0].after["current_base"] == "162000.00"
     event_id = created.json()["id"]
@@ -43,14 +43,14 @@ async def test_comp_event_create_edit_delete_each_log_one_labelled_batch(auth_cl
     edited = await auth_client.patch(f"{EVENTS}/{event_id}", json={"new_base": "180000"})
     assert edited.status_code == 200, edited.text
     rows = await logged(db, edited)
-    assert ops(rows) == [("update", "comp_events")]
+    assert shape(rows) == [("update", "comp_events")]
     assert label_of(rows) == "Edited the 2025 comp event"
     assert (rows[0].before["new_base"], rows[0].after["new_base"]) == ("175000.00", "180000.00")
 
     deleted = await auth_client.delete(f"{EVENTS}/{event_id}")
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
-    assert ops(rows) == [("delete", "comp_events")]
+    assert shape(rows) == [("delete", "comp_events")]
     assert label_of(rows) == "Deleted the 2025 comp event"
     assert rows[0].before["focal_year"] == 2025 and rows[0].after is None
 
@@ -64,44 +64,44 @@ async def test_an_unchanged_comp_event_edit_logs_nothing_and_names_no_batch(auth
 
 async def test_undo_restores_a_deleted_comp_event_exactly(auth_client, db):
     event_id = (await auth_client.post(EVENTS, json=EVENT)).json()["id"]
-    before = await table_rows(db, CompEvent)
+    before = await images(db, CompEvent)
     deleted = await auth_client.delete(f"{EVENTS}/{event_id}")
-    assert await table_rows(db, CompEvent) == {"comp_events": []}
+    assert await images(db, CompEvent) == []
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
     assert resp.json()["label"] == "Undid: Deleted the 2025 comp event"
-    assert await table_rows(db, CompEvent) == before
+    assert await images(db, CompEvent) == before
 
 
 async def test_rsu_grant_create_edit_delete_each_log_one_labelled_batch(auth_client, db):
     created = await auth_client.post(GRANTS, json=GRANT)
     assert created.status_code == 201, created.text
     rows = await logged(db, created)
-    assert ops(rows) == [("insert", "rsu_grants")]
+    assert shape(rows) == [("insert", "rsu_grants")]
     assert label_of(rows) == "Added RSU grant 2025 focal"
     grant_id = created.json()["id"]
 
     edited = await auth_client.patch(f"{GRANTS}/{grant_id}", json={"shares": 500})
     assert edited.status_code == 200, edited.text
     rows = await logged(db, edited)
-    assert ops(rows) == [("update", "rsu_grants")]
+    assert shape(rows) == [("update", "rsu_grants")]
     assert label_of(rows) == "Edited RSU grant 2025 focal"
     assert (rows[0].before["shares"], rows[0].after["shares"]) == (480, 500)
 
     deleted = await auth_client.delete(f"{GRANTS}/{grant_id}")
     assert deleted.status_code == 204
     rows = await logged(db, deleted)
-    assert ops(rows) == [("delete", "rsu_grants")]
+    assert shape(rows) == [("delete", "rsu_grants")]
     assert label_of(rows) == "Deleted RSU grant 2025 focal"
 
 
 async def test_undo_restores_a_deleted_rsu_grant_exactly(auth_client, db):
     grant_id = (await auth_client.post(GRANTS, json=GRANT)).json()["id"]
-    before = await table_rows(db, RsuGrant)
+    before = await images(db, RsuGrant)
     deleted = await auth_client.delete(f"{GRANTS}/{grant_id}")
     resp = await undo(auth_client, deleted)
     assert resp.status_code == 200, resp.text
-    assert await table_rows(db, RsuGrant) == before
+    assert await images(db, RsuGrant) == before
 
 
 async def test_undoing_a_grant_delete_after_its_label_was_reused_refuses(auth_client, db):
@@ -116,4 +116,22 @@ async def test_undoing_a_grant_delete_after_its_label_was_reused_refuses(auth_cl
     refused = await undo(auth_client, deleted)
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == REPLAY_REFUSAL
-    assert [row["id"] for row in (await table_rows(db, RsuGrant))["rsu_grants"]] == [again_id]
+    assert [row["id"] for row in await images(db, RsuGrant)] == [again_id]
+
+
+async def test_undoing_a_comp_event_delete_after_its_focal_year_was_reused_refuses(auth_client, db):
+    """Accepted (spec §6.1): focal_year is the event's natural key, so the replayed row cannot
+    sit beside the new event entered for the same year — the replay refusal, never a 500 and
+    never an overwrite of the newer event."""
+    event_id = (await auth_client.post(EVENTS, json=EVENT)).json()["id"]
+    deleted = await auth_client.delete(f"{EVENTS}/{event_id}")
+    assert deleted.status_code == 204
+    again = await auth_client.post(EVENTS, json={**EVENT, "new_base": "180000"})
+    assert again.status_code == 201, again.text
+    again_id = again.json()["id"]
+    refused = await undo(auth_client, deleted)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == REPLAY_REFUSAL
+    assert [(row["id"], row["new_base"]) for row in await images(db, CompEvent)] == [
+        (again_id, "180000.00")
+    ]
