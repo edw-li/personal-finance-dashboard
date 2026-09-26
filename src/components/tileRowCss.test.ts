@@ -73,6 +73,16 @@ describe('tile rows share one grid (spec §4.1)', () => {
     expect(CSS).toContain('.kpi-row-steady .stat-badge-row { margin-bottom: 0.35rem; }')
     expect(CSS).toContain('.kpi-row-steady .stat-delta:empty { margin-top: 0.35rem; }')
   })
+
+  // The hero's longest words across every month ("▲ $126,583 (+15.7%) since Sep 1 · 21 days", 237.9px in
+  // Edge) need a row of 1148px in the four-across band; narrower, a month with long words wrapped them to
+  // a second line and the row went 142 ↔ 159px as the month changed at 1280 (2026-09-25 polish review).
+  // There the row reserves two lines — its ghost too, which wears the same classes.
+  it('reserves two delta lines on a steady hero row where its words can wrap', () => {
+    expect(CSS).toContain(
+      '@container page (980px < width < 1150px) { .kpi-row-steady:has(> .stat-tile-hero) .stat-delta { min-height: 2lh; } }',
+    )
+  })
 })
 
 describe('five-tile rows (spec §4.2)', () => {

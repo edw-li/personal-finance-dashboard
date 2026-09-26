@@ -319,6 +319,14 @@
   margin-top: 0.35rem;
 }
 
+/* …and TWO delta lines on a steady row with a hero, in the four-across band where the hero's words can
+   wrap: its longest across every month ("▲ $126,583 (+15.7%) since Sep 1 · 21 days", 237.9px in Edge)
+   needs a 1148px row, so narrower a long month went to two lines and the row 142 ↔ 159px at 1280. A
+   ghost row wears the same classes, so it reserves the same (the Projection band's 2lh, ProjectionPage.css). */
+@container page (980px < width < 1150px) {
+  .kpi-row-steady:has(> .stat-tile-hero) .stat-delta { min-height: 2lh; }
+}
+
 .stat-delta-positive { color: var(--positive); }
 .stat-delta-negative { color: var(--negative); }
 .stat-delta-neutral { color: var(--muted); }
