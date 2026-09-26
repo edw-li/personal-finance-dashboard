@@ -709,7 +709,7 @@ describe('OverviewPage tiles', () => {
     // the tone class carry direction, and formatPct signs the percent.
     // What the change spans, in the user's own words — never "MoM" (2026-09-23 spec §T1).
     expect(deltaOf(hero)?.textContent).toBe(
-      `▲ $10,000.00 (+0.8%) · July: ${dayName('2026-07-01')} → ${dayName('2026-08-01')}`,
+      '▲ $10,000 (+0.8%) · Jul 1 → Aug 1',
     )
     expect(deltaOf(hero)?.className).toContain('stat-delta-positive')
     expect(hero.className).toContain('stat-tile-hero')
@@ -1209,7 +1209,7 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     await screen.findByText('Net worth — as of Sep 22')
     const hero = tileFor('Net worth — as of Sep 22')
     expect(hero.textContent).toContain('Provisional')
-    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583.02 (+15.7%) since Sep 1 · 21 days')
+    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583 (+15.7%) since Sep 1 · 21 days')
     expect(screen.queryByText(/MoM/)).toBeNull()
   })
 
@@ -1226,7 +1226,7 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     expect(hero.textContent).not.toContain('Provisional')
     await waitFor(() =>
       expect(deltaOf(hero)?.textContent).toBe(
-        '▲ $126,583.02 (+15.7%) · September: Sep 1 → Oct 1 · spending not complete yet',
+        '▲ $126,583 (+15.7%) · Sep 1 → Oct 1 · spending not complete yet',
       ),
     )
   })
@@ -1248,7 +1248,7 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     await screen.findByText('Net worth — as of Oct 1')
     const hero = tileFor('Net worth — as of Oct 1')
     expect(hero.textContent).not.toContain('Provisional')
-    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583.02 (+15.7%) since Aug 1 · 2 months')
+    expect(deltaOf(hero)?.textContent).toBe('▲ $126,583 (+15.7%) since Aug 1 · 2 months')
   })
 
   it('carries the as-of date, the provisional completeness and the reason on its receipt', async () => {
@@ -1274,7 +1274,7 @@ describe('OverviewPage — the net-worth tile by date (2026-09-23 spec §T1)', (
     seedOverview(snapshotOf(serve({ summary: EARLY })), 1)
     renderPage('/?owner=1')
     await screen.findByText('Net worth — as of Sep 22')
-    expect(deltaOf(tileFor('Net worth — as of Sep 22'))?.textContent).toBe('▲ $126,583.02 (+15.7%) since Sep 1 · 21 days')
+    expect(deltaOf(tileFor('Net worth — as of Sep 22'))?.textContent).toBe('▲ $126,583 (+15.7%) since Sep 1 · 21 days')
   })
 })
 
