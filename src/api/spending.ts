@@ -1,4 +1,5 @@
-import { api, apiWithHeaders } from './client'
+import { api, apiDeleteLogged, apiLogged, apiWithHeaders } from './client'
+import type { Logged } from './client'
 import type {
   BudgetSeedOut,
   BudgetSuggestionsOut,
@@ -31,9 +32,22 @@ export function updateCategory(categoryId: number, body: CategoryUpdate): Promis
   })
 }
 
-// 409s once the category has monthly rows — the server's sentence names the count.
-export function deleteCategory(categoryId: number): Promise<void> {
-  return api<void>(`/spending/categories/${categoryId}`, { method: 'DELETE' })
+/** updateCategory's twin for the one-click Kind and Retire / Restore (2026-09-25 polish spec §6.2):
+ *  the same PATCH, answered with the change batch the toggle's Undo toast reverts. */
+export function updateCategoryLogged(
+  categoryId: number,
+  body: CategoryUpdate,
+): Promise<Logged<CategoryOut>> {
+  return apiLogged<CategoryOut>(`/spending/categories/${categoryId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+// 409s once the category has monthly rows — the server's sentence names the count. Logged (spec
+// §6.1): the undo brings back its budgets and re-points the reward categories mapped to it.
+export function deleteCategory(categoryId: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/spending/categories/${categoryId}`)
 }
 
 /** Drag-to-reorder (2026-09-23 spec §3.2): `ids` is EVERY category, retired included, in its
@@ -84,11 +98,12 @@ export function putCategoryBudget(
   })
 }
 
-// Removes one history ROW (a mis-dated entry) — distinct from the null-amount marker.
-export function deleteCategoryBudget(categoryId: number, effectiveMonth: string): Promise<void> {
-  return api<void>(`/spending/categories/${categoryId}/budget/${effectiveMonth}`, {
-    method: 'DELETE',
-  })
+// Removes one history ROW (a mis-dated entry) — distinct from the null-amount marker. Logged.
+export function deleteCategoryBudget(
+  categoryId: number,
+  effectiveMonth: string,
+): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/spending/categories/${categoryId}/budget/${effectiveMonth}`)
 }
 
 // The Budget card's suggestion figures (spec §2): one GET, read-only.

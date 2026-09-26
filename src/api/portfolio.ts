@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, apiDeleteLogged } from './client'
 import type { OwnerScope } from './netWorth'
 import type {
   AllocationDimension,
@@ -49,8 +49,10 @@ export function updateSecurity(id: number, body: SecurityUpdate): Promise<Securi
   })
 }
 
-export function deleteSecurity(id: number): Promise<void> {
-  return api<void>(`/portfolio/securities/${id}`, { method: 'DELETE' })
+// Logged (2026-09-25 polish spec §6.1): the answer names the change batch whose undo brings the
+// security back with its price history and dividend events — null when nothing was recorded.
+export function deleteSecurity(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/portfolio/securities/${id}`)
 }
 
 export function fetchTransactions(owner: OwnerScope = null): Promise<TransactionOut[]> {
@@ -71,8 +73,9 @@ export function updateTransaction(id: number, body: TransactionUpdate): Promise<
   })
 }
 
-export function deleteTransaction(id: number): Promise<void> {
-  return api<void>(`/portfolio/transactions/${id}`, { method: 'DELETE' })
+// Logged: an Undo restores the row with its id and its place in the replay order.
+export function deleteTransaction(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/portfolio/transactions/${id}`)
 }
 
 /** Change the REPLAY order (2026-09-23 spec §3.2): `ids` is every row fetchTransactions(owner)
@@ -112,8 +115,8 @@ export function updateDividend(id: number, body: DividendUpdate): Promise<Divide
   })
 }
 
-export function deleteDividend(id: number): Promise<void> {
-  return api<void>(`/portfolio/dividends/${id}`, { method: 'DELETE' })
+export function deleteDividend(id: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/portfolio/dividends/${id}`)
 }
 
 export function fetchHoldings(owner: OwnerScope = null): Promise<HoldingsResponse> {

@@ -1,4 +1,5 @@
-import { api, apiWithHeaders } from './client'
+import { api, apiDeleteLogged, apiLogged, apiWithHeaders } from './client'
+import type { Logged } from './client'
 import type {
   AccountCreate,
   AccountOut,
@@ -32,9 +33,19 @@ export function updateAccount(accountId: number, body: AccountUpdate): Promise<A
   })
 }
 
-// 409s while the account has balance rows — the server's sentence names the count.
-export function deleteAccount(accountId: number): Promise<void> {
-  return api<void>(`/net-worth/accounts/${accountId}`, { method: 'DELETE' })
+/** updateAccount's twin for the one-click Retire / Restore (2026-09-25 polish spec §6.2): the same
+ *  partial PATCH, answered with the change batch the toggle's Undo toast reverts. */
+export function updateAccountLogged(accountId: number, body: AccountUpdate): Promise<Logged<AccountOut>> {
+  return apiLogged<AccountOut>(`/net-worth/accounts/${accountId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+// 409s while the account has balance rows — the server's sentence names the count. Logged (spec
+// §6.1): the undo re-links its components and cards.
+export function deleteAccount(accountId: number): Promise<{ batchId: string | null }> {
+  return apiDeleteLogged(`/net-worth/accounts/${accountId}`)
 }
 
 /** Drag-to-reorder (2026-09-23 spec §3.2): `ids` is EVERY account, retired included, in its
