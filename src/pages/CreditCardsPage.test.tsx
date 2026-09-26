@@ -23,6 +23,7 @@ vi.mock('../api/creditCards', () => ({
   putRewardRates: vi.fn(),
   createCreditCard: vi.fn(),
   updateCreditCard: vi.fn(),
+  updateCreditCardLogged: vi.fn(),
   deleteCreditCard: vi.fn(),
   createCardCredit: vi.fn(),
   updateCardCredit: vi.fn(),
@@ -31,11 +32,13 @@ vi.mock('../api/creditCards', () => ({
   deleteLimitEvent: vi.fn(),
   createRewardCategory: vi.fn(),
   updateRewardCategory: vi.fn(),
+  updateRewardCategoryLogged: vi.fn(),
   deleteRewardCategory: vi.fn(),
   // The two reorder PUTs (lane R1). Every reorder test answers them or leaves them pending.
   reorderCreditCards: vi.fn(),
   reorderRewardCategories: vi.fn(),
 }))
+vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn() }))
 vi.mock('../api/spending', () => ({ fetchCategories: vi.fn(), fetchMatrix: vi.fn() }))
 vi.mock('../api/netWorth', () => ({
   fetchAccounts: vi.fn(),
@@ -73,6 +76,8 @@ import {
   createCardCredit,
   createCreditCard,
   createRewardCategory,
+  deleteCardCredit,
+  deleteLimitEvent,
   deleteCreditCard,
   deleteRewardCategory,
   fetchCreditCards,
@@ -83,9 +88,12 @@ import {
   reorderRewardCategories,
   updateCardCredit,
   updateCreditCard,
+  updateCreditCardLogged,
   updateRewardCategory,
+  updateRewardCategoryLogged,
 } from '../api/creditCards'
 import { fetchHousehold } from '../api/household'
+import { undoBatch } from '../api/lifecycle'
 import { fetchAccounts, fetchMonthBalances, fetchSummary } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
 import ToastProvider from '../components/ToastProvider'
@@ -335,6 +343,9 @@ beforeEach(() => {
   // next test's page before it has rendered a single chip.
   localStorage.clear()
   seedHappyPath()
+  vi.mocked(updateCreditCardLogged).mockImplementation(async (id, body) => ({ data: await updateCreditCard(id, body), batchId: 'archive-batch' }))
+  vi.mocked(updateRewardCategoryLogged).mockImplementation(async (id, body) => ({ data: await updateRewardCategory(id, body), batchId: 'hide-batch' }))
+  vi.mocked(undoBatch).mockResolvedValue({ batch_id: 'undone', label: 'Restored' } as Awaited<ReturnType<typeof undoBatch>>)
   // jsdom has no layout: a keyboard lift measures every row at y=0, so lane R0's hook asks the
   // page to scroll the landing slot clear of the top edge — and jsdom implements no scrollBy.
   window.scrollBy = vi.fn()
@@ -982,7 +993,7 @@ describe('CreditCardsPage — card ownership', () => {
   })
 
   it('UNDO after delete re-POSTs the card verbatim — person_id must survive', async () => {
-    vi.mocked(deleteCreditCard).mockResolvedValue({ batchId: null })
+    vi.mocked(deleteCreditCard).mockResolvedValue({ batchId: 'delete-batch' })
     vi.mocked(createCreditCard).mockResolvedValue(RH)
     render(
       <MemoryRouter initialEntries={['/credit-cards?section=manage']}>
@@ -995,8 +1006,8 @@ describe('CreditCardsPage — card ownership', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete RH Gold' }))
     const undo = await screen.findByRole('button', { name: 'Undo' })
     fireEvent.click(undo)
-    await waitFor(() => expect(createCreditCard).toHaveBeenCalled())
-    expect(vi.mocked(createCreditCard).mock.calls[0][0].person_id).toBe(2)
+    await waitFor(() => expect(undoBatch).toHaveBeenCalledWith('delete-batch'))
+    expect(createCreditCard).not.toHaveBeenCalled()
   })
 })
 
@@ -1485,7 +1496,7 @@ describe('CreditCardsPage — Categories & weights: late answers and overlapping
           }),
       )
       .mockImplementationOnce(async (ids) => categoriesIn(ids))
-    vi.mocked(deleteRewardCategory).mockResolvedValue({ batchId: null })
+    vi.mocked(deleteRewardCategory).mockResolvedValue({ batchId: 'delete-batch' })
     vi.mocked(createRewardCategory).mockResolvedValue(CATEGORIES[2])
     const rerenderWith = renderCategoriesPanel(onChanged[0])
     keyboardMove('Dining', 'ArrowUp')
@@ -1503,7 +1514,7 @@ describe('CreditCardsPage — Categories & weights: late answers and overlapping
     ) as HTMLElement
     rerenderWith(onChanged[3])
     fireEvent.click(within(deleted).getByRole('button', { name: 'Undo' }))
-    await screen.findByText('Restored Rent — multipliers were not restored')
+    await screen.findByText('Restored Rent and its multipliers')
     expect(onChanged.map((callback) => callback.mock.calls.length)).toEqual([0, 1, 2, 1])
   })
 
@@ -1596,9 +1607,9 @@ describe('CreditCardsPage — Categories & weights: the rows and the form around
       )
     grip('Dining').focus()
     fireEvent.keyDown(grip('Dining'), { key: ' ' })
-    expect(rowButtons().every((button) => button.disabled)).toBe(true)
+    expect(rowButtons().every((button) => button.getAttribute('aria-disabled') === 'true')).toBe(true)
     fireEvent.keyDown(grip('Dining'), { key: 'Escape' })
-    expect(rowButtons().every((button) => !button.disabled)).toBe(true)
+    expect(rowButtons().every((button) => button.getAttribute('aria-disabled') !== 'true')).toBe(true)
     expect(reorderRewardCategories).not.toHaveBeenCalled()
   })
 
@@ -1763,6 +1774,8 @@ describe('CreditCardsPage — reorder the card roster (2026-09-23 drag-to-reorde
     vi.mocked(fetchRewardCategories).mockResolvedValue([CATEGORIES[0], CATEGORIES[1], hidden])
     fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
     await screen.findByRole('button', { name: 'Show Rent' })
+    // Hide is optimistic now. Wait for the reload this test is about, not its early label.
+    await waitFor(() => expect(getSnapshot<{ categories: RewardCategoryOut[] }>('credit-cards')?.categories.find((row) => row.id === 12)?.is_active).toBe(false))
     expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
     // The PUT answers: the server's order stands until the page's next fetch.
     await act(async () => {
@@ -1912,9 +1925,9 @@ describe('CreditCardsPage — the card roster: the rows and the form around a dr
       )
     grip('SavorOne').focus()
     fireEvent.keyDown(grip('SavorOne'), { key: ' ' })
-    expect(rowButtons().every((button) => button.disabled)).toBe(true)
+    expect(rowButtons().every((button) => button.getAttribute('aria-disabled') === 'true')).toBe(true)
     fireEvent.keyDown(grip('SavorOne'), { key: 'Escape' })
-    expect(rowButtons().every((button) => !button.disabled)).toBe(true)
+    expect(rowButtons().every((button) => button.getAttribute('aria-disabled') !== 'true')).toBe(true)
     expect(reorderCreditCards).not.toHaveBeenCalled()
   })
 
@@ -1929,6 +1942,7 @@ describe('CreditCardsPage — the card roster: the rows and the form around a dr
     await screen.findByText('Moved Venture X')
     await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Edit Venture X' }))
+    fireEvent.change(screen.getByLabelText('Card notes'), { target: { value: 'Updated after reorder' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save card' }))
     await waitFor(() => expect(updateCreditCard).toHaveBeenCalledTimes(1))
     // Venture X loaded as 0 and now stands second, renumbered 1 by the server. The full-replace
@@ -1965,7 +1979,7 @@ describe('CreditCardsPage — the card roster: late answers and overlapping requ
           }),
       )
       .mockImplementationOnce(async (ids) => cardsIn(ids))
-    vi.mocked(deleteCreditCard).mockResolvedValue({ batchId: null })
+    vi.mocked(deleteCreditCard).mockResolvedValue({ batchId: 'delete-batch' })
     vi.mocked(createCreditCard).mockResolvedValue(RH)
     const rerenderWith = renderCardsPanel(onChanged[0])
     keyboardMove('Venture X', 'ArrowDown')
@@ -1981,7 +1995,7 @@ describe('CreditCardsPage — the card roster: late answers and overlapping requ
     const deleted = (await screen.findByText('Deleted RH Gold')).closest('.toast') as HTMLElement
     rerenderWith(onChanged[3])
     fireEvent.click(within(deleted).getByRole('button', { name: 'Undo' }))
-    await screen.findByText('Restored RH Gold — matrix multipliers were not restored')
+    await screen.findByText('Restored RH Gold')
     expect(onChanged.map((callback) => callback.mock.calls.length)).toEqual([0, 1, 2, 1])
   })
 
@@ -2153,5 +2167,93 @@ describe('CreditCardsPage — loads that overtake each other (lane R5 review)', 
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
     await act(async () => answerNewer([vx(), SAVOR, RH]))
     await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+  })
+})
+
+describe('Polish L7 — roster feedback', () => {
+  it.each([
+    ['RH Gold', 'Annual fee', 'Save card', '-1'],
+    ['Rent', 'Annual spend override', 'Save category', '-1'],
+  ])('focuses the named invalid field in the %s editor', async (name, label, save, invalid) => {
+    renderManage()
+    fireEvent.click(await screen.findByRole('button', { name: `Edit ${name}` }))
+    const field = screen.getByLabelText(label)
+    fireEvent.change(field, { target: { value: invalid } })
+    const button = screen.getByRole('button', { name: save })
+    button.focus()
+    fireEvent.click(button)
+    expect(document.activeElement).toBe(field)
+  })
+
+  it.each([
+    ['RH Gold', 'Card name', 'Save card'],
+    ['Rent', 'Category name', 'Save category'],
+  ])('reveals the %s editor and returns focus on Escape', async (name, label, save) => {
+    renderManage()
+    const edit = await screen.findByRole('button', { name: `Edit ${name}` })
+    fireEvent.click(edit)
+    const input = screen.getByLabelText(label)
+    expect(document.activeElement).toBe(input)
+    expect(edit.closest('tr')?.getAttribute('aria-current')).toBe('true')
+    expect(screen.getByRole('button', { name: save }).getAttribute('aria-disabled')).toBe('true')
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(document.activeElement).toBe(edit)
+    expect(screen.queryByRole('button', { name: save })).toBeNull()
+  })
+
+  it('deletes and restores the original card through its batch, without re-creating anything', async () => {
+    vi.mocked(deleteCreditCard).mockResolvedValue({ batchId: 'card-delete' })
+    vi.mocked(undoBatch).mockResolvedValue({ batch_id: 'undone', label: 'Restored RH Gold' } as Awaited<ReturnType<typeof undoBatch>>)
+    renderManage()
+    const button = await screen.findByRole('button', { name: 'Delete RH Gold' })
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx(), SAVOR])
+    button.focus()
+    fireEvent.click(button)
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    expect(screen.queryByRole('button', { name: 'Edit RH Gold' })).toBeNull()
+    expect(document.activeElement).not.toBe(document.body)
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx(), SAVOR, RH])
+    fireEvent.click(undo)
+    await screen.findByText('Restored RH Gold')
+    expect(undoBatch).toHaveBeenCalledWith('card-delete')
+    expect(createCreditCard).not.toHaveBeenCalled()
+    expect(createCardCredit).not.toHaveBeenCalled()
+    const restored = screen.getByRole('button', { name: 'Edit RH Gold' }).closest('tr')
+    expect(restored?.hasAttribute('data-flash')).toBe(true)
+    expect(restored?.contains(document.activeElement)).toBe(true)
+  })
+})
+
+describe('Polish L7 — card details', () => {
+  it('keeps credit validation under the credit form and clears it on input', async () => {
+    renderPage('/credit-cards?card=venture-x')
+    await screen.findByLabelText('Credit label')
+    fireEvent.change(screen.getByLabelText('Credit label'), { target: { value: 'New credit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add credit' }))
+    const error = await screen.findByText('Credit label and annual value are required')
+    expect(error.closest('.credit-add')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Credit annual value'), { target: { value: '80' } })
+    expect(screen.queryByText('Credit label and annual value are required')).toBeNull()
+  })
+
+  it.each([
+    ['the $300 travel credit credit', 'credit-delete', 'credits'],
+    ['the 2023-05-12 limit event', 'limit-delete', 'limit_events'],
+  ] as const)('restores %s using the exact deletion batch', async (name, batch, collection) => {
+    vi.mocked(deleteCardCredit).mockResolvedValue({ batchId: batch })
+    vi.mocked(deleteLimitEvent).mockResolvedValue({ batchId: batch })
+    render(<MemoryRouter initialEntries={['/credit-cards?card=venture-x']}><ToastProvider><CreditCardsPage /></ToastProvider></MemoryRouter>)
+    const button = await screen.findByRole('button', { name: `Delete ${name}` })
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx({ [collection]: [] }), SAVOR, RH])
+    button.focus()
+    fireEvent.click(button)
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    expect(document.activeElement).not.toBe(document.body)
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx(), SAVOR, RH])
+    fireEvent.click(undo)
+    await screen.findByText(`Restored ${name}`)
+    expect(undoBatch).toHaveBeenCalledWith(batch)
+    expect(createCardCredit).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(document.body)
   })
 })

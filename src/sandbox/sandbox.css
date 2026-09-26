@@ -209,3 +209,5 @@
   gap: 0.9rem 1.25rem;
   margin-top: 0.75rem;
 }
+
+.sandbox-pin-form { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }

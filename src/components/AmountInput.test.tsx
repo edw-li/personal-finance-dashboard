@@ -14,6 +14,15 @@ function Harness({ initial, kind }: { initial: string; kind?: AmountKind }) {
 
 const box = () => screen.getByLabelText('Amount') as HTMLInputElement
 
+it('combines a form rejection with its own numeric validation', () => {
+  const { rerender } = render(<AmountInput aria-label="Amount" value="-1" onValueChange={() => {}} aria-invalid />)
+  expect(box().getAttribute('aria-invalid')).toBe('true')
+  rerender(<AmountInput aria-label="Amount" value="not a number" onValueChange={() => {}} aria-invalid={false} />)
+  expect(box().getAttribute('aria-invalid')).toBe('true')
+  rerender(<AmountInput aria-label="Amount" value="80" onValueChange={() => {}} aria-invalid={false} />)
+  expect(box().getAttribute('aria-invalid')).toBeNull()
+})
+
 it('shows the formatted echo while blurred and the raw state while focused', () => {
   render(<Harness initial="1500.00" />)
   expect(box().value).toBe('$1,500.00')

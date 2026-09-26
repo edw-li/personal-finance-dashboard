@@ -1,4 +1,8 @@
-import type { RefObject } from 'react'
+import { useRef, type RefObject } from 'react'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import type { SaveState } from '../feedback/useSaveState'
+import { useEscapeCancel } from '../feedback/reveal'
 import type { CalendarDirection, CalendarRecurrence, PersonOut } from '../../types/api'
 import AmountInput from '../AmountInput'
 import { FeedBanner } from '../shell/Feed'
@@ -23,11 +27,12 @@ export interface AddEventFormProps {
   /** Primary first, then by id — the page orders them. One person → no picker. */
   people: PersonOut[]
   error: string | null
-  saving: boolean
+  saveState: SaveState
   onSave: () => void
   onCancel: () => void
   /** The date box, so the page can land the caret in it when the form opens. */
   dateRef: RefObject<HTMLInputElement | null>
+  titleRef: RefObject<HTMLInputElement | null>
   /** Where the form stands: the shell's detail panel (fluid two-up columns) or the page's card. */
   hosted: 'panel' | 'card'
 }
@@ -41,21 +46,23 @@ export default function AddEventForm({
   onField,
   people,
   error,
-  saving,
+  saveState,
   onSave,
   onCancel,
   dateRef,
+  titleRef,
   hosted,
 }: AddEventFormProps) {
+  const formRef = useRef<HTMLFormElement>(null)
+  useEscapeCancel(formRef, onCancel)
   return (
-    <>
-      <FeedBanner error={error} />
-      <div className={`cal-form${hosted === 'panel' ? ' cal-form-panel' : ''}`}>
+      <form ref={formRef} className={`cal-form${hosted === 'panel' ? ' cal-form-panel' : ''}`} onSubmit={(event) => { event.preventDefault(); onSave() }}>
         <label className="cal-form-field">
           Date
           <input
             type="date"
             ref={dateRef}
+            id="cal-event-date"
             className="field-input cal-form-input"
             value={fields.date}
             onChange={(e) => onField('date')(e.target.value)}
@@ -65,6 +72,8 @@ export default function AddEventForm({
           Title
           <input
             className="field-input cal-form-input"
+            ref={titleRef}
+            id="cal-event-title"
             value={fields.label}
             maxLength={120}
             onChange={(e) => onField('label')(e.target.value)}
@@ -99,6 +108,7 @@ export default function AddEventForm({
         <label className="cal-form-field">
           Amount (optional)
           <AmountInput
+            id="cal-event-amount"
             kind="money"
             className="cal-form-input"
             value={fields.amount}
@@ -136,6 +146,7 @@ export default function AddEventForm({
           <label className="cal-form-field">
             Until (optional)
             <input
+              id="cal-event-until"
               type="date"
               className="field-input cal-form-input"
               value={fields.until}
@@ -143,18 +154,17 @@ export default function AddEventForm({
             />
           </label>
         )}
-        <button
-          type="button"
-          className="button button-primary"
-          disabled={saving || fields.label.trim() === '' || fields.date === ''}
-          onClick={onSave}
-        >
+        <div className="cal-form-actions">
+        <FeedBanner error={error} />
+        <SaveButton type="submit" className="button button-primary" state={saveState}
+          aria-disabled={fields.label.trim() === '' || fields.date === '' || undefined}>
           {mode === 'add' ? 'Save event' : 'Save changes'}
-        </button>
+        </SaveButton>
+        {error === null && <SaveStatus state={saveState} />}
         <button type="button" className="button" onClick={onCancel}>
           Cancel
         </button>
-      </div>
-    </>
+        </div>
+      </form>
   )
 }

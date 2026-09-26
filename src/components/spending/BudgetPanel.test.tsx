@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import BudgetPanel from './BudgetPanel'
+import { ConfirmProvider } from '../feedback/confirm'
 
 vi.mock('../../api/spending', () => ({
   putCategoryBudget: vi.fn(),
@@ -115,15 +116,30 @@ afterEach(() => {
 
 function renderPanel(monthIndex: number) {
   return render(
-    <BudgetPanel matrix={matrix} monthIndex={monthIndex} onBudgetsChanged={onBudgetsChanged} />,
+    <ConfirmProvider><BudgetPanel matrix={matrix} monthIndex={monthIndex} onBudgetsChanged={onBudgetsChanged} /></ConfirmProvider>,
   )
 }
+
+it.each([['nope', 'Enter a number, e.g. 80'], ['-1', "Budgets can't be negative"]])('keeps %s validation inside the editor and clears it on input', async (value, message) => {
+  renderPanel(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
+  const amount = screen.getByLabelText('Food budget amount')
+  expect(document.activeElement).toBe(amount)
+  fireEvent.change(amount, { target: { value } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Food budget' }))
+  const error = await screen.findByText(message)
+  expect(error.closest('.budget-editor')).toBeTruthy()
+  expect(amount.getAttribute('aria-invalid')).toBe('true')
+  fireEvent.change(amount, { target: { value: '80' } })
+  expect(screen.queryByText(message)).toBeNull()
+  expect(amount.getAttribute('aria-invalid')).toBeNull()
+})
 
 // The seed button is DISABLED until the suggestions GET answers; a click before that lands on
 // a disabled button and seeds nothing (a race that shows on a loaded runner). Wait for it live.
 async function seedWhenReady(): Promise<HTMLButtonElement> {
   const button = (await screen.findByRole('button', { name: 'Start from my averages' })) as HTMLButtonElement
-  await waitFor(() => expect(button.disabled).toBe(false))
+  await waitFor(() => expect(button.getAttribute('aria-disabled')).not.toBe('true'))
   return button
 }
 
@@ -173,7 +189,7 @@ it('saves through the PUT (editor defaults to the FOCUSED month) and renders the
   expect(monthBox.value).toBe('2026-01')
   // The amount box prefills with the month's resolved budget.
   const amountBox = screen.getByLabelText('Food budget amount') as HTMLInputElement
-  expect(amountBox.value).toBe('$400.00') // AmountInput's blurred echo of '400.00'
+  expect(amountBox.value).toBe('400.00') // AmountInput's blurred echo of '400.00'
   fireEvent.change(amountBox, { target: { value: '425.00' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save Food budget' }))
   await waitFor(() =>
@@ -232,7 +248,7 @@ it('rejects a negative amount client-side without calling the API', () => {
   fireEvent.change(screen.getByLabelText('Food budget amount'), { target: { value: '-5' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save Food budget' }))
   expect(putCategoryBudget).not.toHaveBeenCalled()
-  expect(screen.getByRole('alert').textContent).toMatch(/non-negative/)
+  expect(screen.getByRole('alert').textContent).toMatch(/can't be negative/)
 })
 
 // --- seeded from averages (2026-09-07 spec §3) ---
@@ -242,7 +258,7 @@ it('offers Start from my averages in the empty state, seeds the FOCUSED month, r
   const button = (await screen.findByRole('button', {
     name: 'Start from my averages',
   })) as HTMLButtonElement
-  await waitFor(() => expect(button.disabled).toBe(false))
+  await waitFor(() => expect(button.getAttribute('aria-disabled')).not.toBe('true'))
   const hint = screen.getByText(/Writes a budget for 2 living categories/).textContent ?? ''
   expect(hint).toMatch(/effective from Jan 2026/)
   expect(hint).toMatch(/Feb 2025–Jan 2026/)
@@ -274,6 +290,20 @@ it('a seed that changed nothing offers no Undo', async () => {
   )
 })
 
+it('a refused seed Undo reports locally and hands focus back to the budget card', async () => {
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  const seedButton = await seedWhenReady()
+  fireEvent.click(seedButton)
+  const heading = screen.getByRole('heading', { name: /Budgets/ })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+  seedButton.focus()
+  vi.mocked(undoBatch).mockRejectedValueOnce(new Error('Undo refused'))
+  const options = vi.mocked(toast.success).mock.calls[0][1] as { action: { onAction: () => void } }
+  options.action.onAction()
+  await waitFor(() => expect(toast.error).toHaveBeenCalled())
+  expect(document.activeElement).toBe(heading)
+})
+
 it('disables the seed with the reason under three complete months', async () => {
   vi.mocked(fetchBudgetSuggestions).mockResolvedValue({
     ...suggestions,
@@ -282,7 +312,7 @@ it('disables the seed with the reason under three complete months', async () => 
   render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
   await screen.findByText(/needs at least three complete months of spending \(2 so far\)/)
   const button = screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement
-  expect(button.disabled).toBe(true)
+  expect(button.getAttribute('aria-disabled')).toBe('true')
 })
 
 it('degrades when the suggestions cannot load: seed disabled with the reason, editor intact, no chips', async () => {
@@ -290,8 +320,8 @@ it('degrades when the suggestions cannot load: seed disabled with the reason, ed
   render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
   await screen.findByText(/couldn't load the suggestions/)
   expect(
-    (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
-  ).toBe(true)
+    screen.getByRole('button', { name: 'Start from my averages' }).getAttribute('aria-disabled'),
+  ).toBe('true')
   fireEvent.click(screen.getByRole('button', { name: 'Set Food budget' }))
   expect(screen.getByLabelText('Food budget amount')).toBeDefined()
   expect(screen.queryByRole('button', { name: /^Use Food/ })).toBeNull()
@@ -301,9 +331,9 @@ it('the editor shows suggestion chips, a chip fills the amount box, and opening 
   renderPanel(0)
   fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Use Food median $390.00' }))
-  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('$390.00')
+  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('390.00')
   fireEvent.click(screen.getByRole('button', { name: 'Use Food suggested $413.00' }))
-  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('$413.00')
+  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('413.00')
   // One editor at a time (spec §16): Rent's opens, Food's closes.
   fireEvent.click(screen.getByRole('button', { name: 'Set Rent budget' }))
   expect(screen.queryByLabelText('Food budget amount')).toBeNull()
@@ -311,7 +341,7 @@ it('the editor shows suggestion chips, a chip fills the amount box, and opening 
   expect(screen.getByText(/^Steady — within 10% every month/)).toBeDefined()
   // Reopening Food brings back what was typed — the draft lives in `editors`, not in the DOM.
   fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
-  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('$413.00')
+  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('413.00')
   expect(screen.queryByLabelText('Rent budget amount')).toBeNull()
 })
 
@@ -323,17 +353,17 @@ it('re-seeding asks first, counting the budgets it rewrites, and only POSTs on C
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(screen.queryByText(/Rewrites 1 existing/)).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Re-seed from averages' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Re-seed budgets' }))
   await waitFor(() => expect(seedBudgets).toHaveBeenCalledWith('2026-01-01'))
   // The question is answered: the confirm line goes away with the POST, not with the response.
   await waitFor(() => expect(screen.queryByText(/Rewrites 1 existing/)).toBeNull())
 })
 
-it('a failed seed lands in the banner and refetches nothing', async () => {
+it('a failed seed toasts and refetches nothing', async () => {
   vi.mocked(seedBudgets).mockRejectedValue(new Error('down'))
   render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
   fireEvent.click(await seedWhenReady())
-  expect((await screen.findByRole('alert')).textContent).toMatch(/Failed to seed the budgets/)
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to seed the budgets'))
   expect(onBudgetsChanged).not.toHaveBeenCalled()
 })
 
@@ -365,8 +395,8 @@ it('says Nothing to seed when every category is dormant', async () => {
   render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
   await screen.findByText(/Nothing to seed — every category is dormant/)
   expect(
-    (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
-  ).toBe(true)
+    screen.getByRole('button', { name: 'Start from my averages' }).getAttribute('aria-disabled'),
+  ).toBe('true')
 })
 
 // --- 2026-09-23 spec §B5: the card opens where the budgets are -----------------------------
@@ -672,4 +702,29 @@ it('shows the unbudgeted list as an open plain section when the book has no budg
   const row = screen.getByText('No budgets yet.').closest('.budget-seed-row') as HTMLElement
   expect(within(row).getByRole('button', { name: 'Start from my averages' })).toBeDefined()
   await screen.findByText(/Writes a budget for 2 living categories/)
+})
+
+it('shows Saved by Save, flashes its meter and restores a deleted history row through its batch', async () => {
+  vi.mocked(deleteCategoryBudget).mockResolvedValue({ batchId: 'budget-delete' })
+  renderPanel(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
+  const save = screen.getByRole('button', { name: 'Save Food budget' })
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  fireEvent.change(screen.getByLabelText('Food budget amount'), { target: { value: '425.00' } })
+  fireEvent.click(save)
+  const status = await screen.findByText(/Saved/)
+  expect(status.closest('.budget-editor-form')).toBeTruthy()
+  await waitFor(() => expect(foodRow().hasAttribute('data-flash')).toBe(true))
+  const remove = screen.getByRole('button', { name: 'Delete the Mar 2026 budget row for Food' })
+  remove.focus()
+  fireEvent.click(remove)
+  await waitFor(() => expect(screen.queryByText('Mar 2026 — $425.00')).toBeNull())
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Deleted the Mar 2026 budget row for Food', expect.anything()))
+  const options = toast.success.mock.calls.find(([message]) => message === 'Deleted the Mar 2026 budget row for Food')?.[1] as { action: { onAction: () => void } }
+  options.action.onAction()
+  await screen.findByText('Mar 2026 — $425.00')
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Restored the Mar 2026 budget row for Food'))
+  expect(undoBatch).toHaveBeenCalledWith('budget-delete')
+  expect(putCategoryBudget).toHaveBeenCalledTimes(1)
+  expect(document.activeElement).not.toBe(document.body)
 })

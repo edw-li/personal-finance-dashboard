@@ -1,4 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
+import { useConfirm } from '../feedback/confirm'
+import { flashElement, revealEditor } from '../feedback/reveal'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import TableScroll from '../TableScroll'
@@ -69,6 +76,28 @@ export default function RewardsMatrix({
   const [error, setError] = useState<string | null>(null)
 
   const rateByKey = new Map(rates.map((r) => [cellKey(r.card_id, r.category_id), r]))
+  const ask = useConfirm()
+  const editorRef = useRef<HTMLFormElement>(null)
+  const editButtonRef = useRef<HTMLButtonElement>(null)
+  const amountKey = (value: string) => {
+    const text = value.trim()
+    return isAmount(text, { expressions: false }) ? Number(canonicalAmount(text, { expressions: false })) : text
+  }
+  const changedKeys = [...drafts].flatMap(([key, draft]) => {
+    const stored = rateByKey.get(key)
+    if (draft.multiplier.trim() === '') return stored ? [key] : []
+    return stored && amountKey(draft.multiplier) === amountKey(stored.multiplier)
+      && draft.note.trim() === (stored.note ?? '')
+      && amountKey(draft.monthly_cap) === amountKey(stored.monthly_cap ?? '') ? [] : [key]
+  })
+  const saveState = useSaveState({ dirty: editing && changedKeys.length > 0 })
+  const selectedCell = () => selected === null ? null
+    : document.getElementById(`mx-cell-${selected.cardId}-${selected.categoryId}`)?.querySelector<HTMLButtonElement>('button') ?? null
+  const returnToCell = () => selectedCell()?.focus({ preventScroll: true })
+  const pickCell = (cardId: number, categoryId: number, field = '#mx-mult') => {
+    flushSync(() => setSelected({ cardId, categoryId }))
+    revealEditor(editorRef.current, field)
+  }
 
   const startEditing = () => {
     const seeded = new Map<string, CellDraft>()
@@ -81,19 +110,34 @@ export default function RewardsMatrix({
     setDrafts(seeded)
     setSelected(null)
     setError(null)
+    saveState.clearError()
     setEditing(true)
   }
 
   const stopEditing = () => {
     setEditing(false)
+    setDrafts(new Map())
     setSelected(null)
     setError(null)
+  }
+
+  const cancel = async (anchor: HTMLButtonElement) => {
+    if (changedKeys.length > 0 && !(await ask({
+      anchor,
+      title: `Discard ${changedKeys.length} changed ${changedKeys.length === 1 ? 'cell' : 'cells'}?`,
+      body: 'Your multiplier edits have not been saved.',
+      confirmLabel: 'Discard changes',
+    }))) return
+    stopEditing()
+    requestAnimationFrame(() => editButtonRef.current?.focus())
   }
 
   const draftFor = (cardId: number, categoryId: number): CellDraft =>
     drafts.get(cellKey(cardId, categoryId)) ?? EMPTY_DRAFT
 
-  const setDraft = (cardId: number, categoryId: number, patch: Partial<CellDraft>) =>
+  const setDraft = (cardId: number, categoryId: number, patch: Partial<CellDraft>) => {
+    setError(null)
+    saveState.clearError()
     setDrafts((current) => {
       const key = cellKey(cardId, categoryId)
       const next = new Map(current)
@@ -102,8 +146,10 @@ export default function RewardsMatrix({
       next.set(key, { ...(current.get(key) ?? EMPTY_DRAFT), ...patch })
       return next
     })
+  }
 
   const save = () => {
+    if (busy || changedKeys.length === 0 || saveState.status === 'saving') return
     const puts: RewardRatePut[] = []
     for (const category of categories)
       for (const card of cards) {
@@ -130,6 +176,7 @@ export default function RewardsMatrix({
           Number(canonicalAmount(multiplier, { expressions: false })) <= 0
         ) {
           setError(`${category.name} × ${card.name}: multiplier must be a positive number`)
+          pickCell(card.id, category.id)
           return
         }
         if (
@@ -138,6 +185,7 @@ export default function RewardsMatrix({
             Number(canonicalAmount(cap, { expressions: false })) <= 0)
         ) {
           setError(`${category.name} × ${card.name}: monthly cap must be a positive amount`)
+          pickCell(card.id, category.id, '#mx-cap')
           return
         }
         const body: RewardRatePut = {
@@ -156,9 +204,14 @@ export default function RewardsMatrix({
         if (!unchanged) puts.push(body)
       }
     setError(null)
-    onSaveRates(puts)
-      .then(() => stopEditing())
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Save failed'))
+    void saveState.run(async () => {
+      await onSaveRates(puts)
+      stopEditing()
+      requestAnimationFrame(() => {
+        editButtonRef.current?.focus()
+        for (const put of puts) flashElement(document.getElementById(`mx-cell-${put.card_id}-${put.category_id}`))
+      })
+    })
   }
 
   const conditionText = (rate: RewardRateOut): string | null => {
@@ -193,23 +246,15 @@ export default function RewardsMatrix({
             </button>
           ))}
         </div>
-        {editing ? (
+        {!editing && (
           <>
-            <button type="button" className="button button-primary" disabled={busy} onClick={save}>
-              Save multipliers
-            </button>
-            <button type="button" className="button" disabled={busy} onClick={stopEditing}>
-              Cancel
-            </button>
+            <BusyButton ref={editButtonRef} type="button" className="button" inert={busy} onClick={startEditing}>
+              Edit multipliers
+            </BusyButton>
+            <SaveStatus state={saveState} />
           </>
-        ) : (
-          <button type="button" className="button" disabled={busy} onClick={startEditing}>
-            Edit multipliers
-          </button>
         )}
       </div>
-
-      <FeedBanner error={error} />
 
       <TableScroll className="matrix-scroll" label="Rewards matrix">
         <table className="data-table rewards-matrix">
@@ -263,12 +308,13 @@ export default function RewardsMatrix({
                       const isSelected =
                         selected?.cardId === card.id && selected?.categoryId === category.id
                       return (
-                        <td key={card.id} className="num">
+                        <td key={card.id} id={`mx-cell-${card.id}-${category.id}`} className="num">
                           <button
                             type="button"
                             className={`mx-cell-btn${isSelected ? ' is-editing' : ''}`}
                             aria-label={`Edit ${category.name} on ${card.name}`}
-                            onClick={() => setSelected({ cardId: card.id, categoryId: category.id })}
+                            aria-current={isSelected ? true : undefined}
+                            onClick={() => pickCell(card.id, category.id)}
                           >
                             {draft.multiplier.trim() === '' ? '—' : `${draft.multiplier}x`}
                           </button>
@@ -277,7 +323,7 @@ export default function RewardsMatrix({
                     }
                     if (!rate)
                       return (
-                        <td key={card.id} className="num mx-na">
+                        <td key={card.id} id={`mx-cell-${card.id}-${category.id}`} className="num mx-na">
                           —
                         </td>
                       )
@@ -297,6 +343,7 @@ export default function RewardsMatrix({
                     return (
                       <td
                         key={card.id}
+                        id={`mx-cell-${card.id}-${category.id}`}
                         className={`num mx-cell${best ? ' is-best' : ''}`}
                         data-best={best || undefined}
                         data-tie={tie || undefined}
@@ -332,11 +379,35 @@ export default function RewardsMatrix({
       </TableScroll>
 
       {editing && (
-        <div className="mx-inspector">
+        <form className="mx-editor-bar" ref={editorRef} onKeyDownCapture={(event) => {
+          // This editor keeps every changed cell. Escape returns to the picked cell before
+          // AmountInput's own Escape can replace its draft with the focus-time value.
+          if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing) return
+          event.preventDefault()
+          event.stopPropagation()
+          returnToCell()
+        }} onSubmit={(event) => {
+          event.preventDefault()
+          if (!selected || !selectedDraft) return
+          const mult = selectedDraft.multiplier.trim()
+          const cap = selectedDraft.monthly_cap.trim()
+          if (mult !== '' && (!isAmount(mult, { expressions: false }) || Number(canonicalAmount(mult, { expressions: false })) <= 0)) {
+            setError('Multiplier must be a positive number')
+            revealEditor(editorRef.current, '#mx-mult')
+            return
+          }
+          if (cap !== '' && (!isAmount(cap, { expressions: false }) || Number(canonicalAmount(cap, { expressions: false })) <= 0)) {
+            setError('Monthly cap must be a positive amount')
+            revealEditor(editorRef.current, '#mx-cap')
+            return
+          }
+          setError(null)
+          returnToCell()
+        }}>
           {selected && selectedDraft && selectedCard && selectedCategory ? (
             <>
-              <span className="mx-inspector-label">
-                {selectedCategory.name} × {selectedCard.name}
+              <span className="mx-editor-label">
+                Editing {selectedCategory.name} × {selectedCard.name}
               </span>
               <label>
                 Multiplier
@@ -366,6 +437,7 @@ export default function RewardsMatrix({
                 Monthly bonus cap
                 <AmountInput
                   kind="money"
+                  id="mx-cap"
                   value={selectedDraft.monthly_cap}
                   onValueChange={(v) =>
                     setDraft(selected.cardId, selected.categoryId, { monthly_cap: v })
@@ -373,6 +445,7 @@ export default function RewardsMatrix({
                   placeholder="none"
                 />
               </label>
+              <button type="submit" className="button">Apply cell</button>
               <button
                 type="button"
                 className="button"
@@ -382,9 +455,20 @@ export default function RewardsMatrix({
               </button>
             </>
           ) : (
-            <span className="mx-inspector-label">Click a cell above to edit it.</span>
+            <span className="mx-editor-label">Click a cell above to edit it.</span>
           )}
-        </div>
+          <div className="mx-editor-actions">
+            <span>{changedKeys.length} {changedKeys.length === 1 ? 'cell' : 'cells'} changed</span>
+            <SaveButton type="button" className="button button-primary" state={saveState} aria-disabled={busy || undefined} onClick={save}>
+              Save multipliers
+            </SaveButton>
+            <BusyButton type="button" className="button" inert={busy || saveState.status === 'saving'} onClick={(event) => void cancel(event.currentTarget)}>
+              Cancel
+            </BusyButton>
+            <FeedBanner error={error} />
+            {error === null && <SaveStatus state={saveState} />}
+          </div>
+        </form>
       )}
 
       <p className="drill-hint">

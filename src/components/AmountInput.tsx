@@ -40,6 +40,7 @@ export default function AmountInput({
   disabled,
   autoFocus,
   'aria-label': ariaLabel,
+  'aria-invalid': ariaInvalid,
   'aria-describedby': ariaDescribedBy,
 }: {
   value: string
@@ -51,6 +52,8 @@ export default function AmountInput({
   disabled?: boolean
   autoFocus?: boolean
   'aria-label'?: string
+  /** A form may reject a valid number (for example a negative budget). */
+  'aria-invalid'?: boolean
   /** A wrapper's validation sentence (SliderBox's alert) — the field's own description. */
   'aria-describedby'?: string
 }) {
@@ -151,7 +154,7 @@ export default function AmountInput({
       disabled={disabled}
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedBy}
-      aria-invalid={invalid ? true : undefined}
+      aria-invalid={invalid || ariaInvalid ? true : undefined}
       value={shown}
       onChange={(e) => onValueChange(e.target.value)}
       onFocus={() => {

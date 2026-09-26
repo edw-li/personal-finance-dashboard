@@ -28,6 +28,13 @@ const q3 = calendarEvent({
 })
 
 describe('EventDetails', () => {
+  it('focuses Your figure and returns to its control on Cancel', () => {
+    mount(q3)
+    fireEvent.click(screen.getByRole('button', { name: 'Your figure' }))
+    expect(document.activeElement).toBe(screen.getByLabelText('Amount you paid'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Your figure' }))
+  })
   it('shows the amount with its basis badge, the detail and the Open link', () => {
     mount(q3)
     expect(screen.getByText('Tax deadline · Sep 15, 2026')).toBeTruthy()

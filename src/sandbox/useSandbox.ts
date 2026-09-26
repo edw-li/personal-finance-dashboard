@@ -344,7 +344,7 @@ export function useSandbox<S extends object, R>(spec: SandboxSpec<S, R>): Sandbo
       const live = pendingRef.current?.next ?? s.encode(scenarioRef.current)
       if (s.isEmpty(s.decode(live))) return
       if (pins.length >= PIN_LIMIT) {
-        toast.info('Unpin one first')
+        toast.info('Unpin one to pin another')
         return
       }
       const text = label?.trim() || s.labelFor?.(s.decode(live)) || `Scenario ${pins.length + 1}`

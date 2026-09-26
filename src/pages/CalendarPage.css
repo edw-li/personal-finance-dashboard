@@ -625,3 +625,13 @@
     display: none;
   }
 }
+
+/* Feedback stays with the event form's verbs in the card and the dock. */
+.cal-form-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  grid-column: 1 / -1;
+}
+.cal-form-actions .error-banner { margin: 0; flex-basis: 100%; }

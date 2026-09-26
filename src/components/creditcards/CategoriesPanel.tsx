@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { ApiError, errorDetail } from '../../api/client'
 import {
@@ -6,7 +6,15 @@ import {
   deleteRewardCategory,
   reorderRewardCategories,
   updateRewardCategory,
+  updateRewardCategoryLogged,
 } from '../../api/creditCards'
+import { undoBatch } from '../../api/lifecycle'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { flashElement, revealEditor, revealRow, useEscapeCancel } from '../feedback/reveal'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
@@ -85,11 +93,43 @@ export default function CategoriesPanel({
   /** Per spending category, how many trailing-12 months are entered — the denominator
    *  behind `suggested`, named in the weight caption (rewardsMath.enteredMonthCounts). */
   enteredMonths: Map<number, number>
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<CategoryFormState>(EMPTY_CATEGORY)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [baseline, setBaseline] = useState(EMPTY_CATEGORY)
+  const saveState = useSaveState({ dirty: JSON.stringify(form) !== JSON.stringify(baseline) })
+  const formRef = useRef<HTMLFormElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
+  const editingRef = useLatest(editingId)
+  const deleteWithUndo = useDeleteWithUndo()
+  const [rowBusy, setRowBusy] = useState<Set<number>>(new Set())
+  const [activeOverrides, setActiveOverrides] = useState<Map<number, boolean>>(new Map())
+  const rowFor = (id: number) => document.getElementById(`reward-category-row-${id}`)
+  const focusRow = (id: number, flash = false) => {
+    const row = rowFor(id)
+    if (!row) { formRef.current?.querySelector<HTMLInputElement>('input')?.focus(); return }
+    revealRow(row)
+    if (flash) flashElement(row)
+    row.querySelector<HTMLElement>('[data-row-edit]')?.focus({ preventScroll: true })
+  }
+  const resetForm = () => {
+    // Blur an AmountInput before resetting: its blur commit belongs to the old draft.
+    formRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+    setEditingId(null)
+    setForm(EMPTY_CATEGORY)
+    setBaseline(EMPTY_CATEGORY)
+    setError(null)
+    saveState.clearError()
+  }
+  const cancelEdit = () => {
+    const id = editingRef.current
+    resetForm()
+    if (id !== null) focusRow(id)
+  }
+  useEscapeCancel(formRef, cancelEdit, editingId !== null)
+
   // Requests in flight — counted, never flagged (lane R3 review): a toast's Undo clicked while
   // a later drop's PUT is out settles on its own, and whichever answers first must not wake
   // the grips while the other is still out. Every request runs through `track`, its whole
@@ -119,31 +159,44 @@ export default function CategoriesPanel({
     setLastCategories(categories)
     setSavedOrder(null)
   }
-  const ordered = pendingOrder ?? savedOrder ?? categories
+  const ordered = (pendingOrder ?? savedOrder ?? categories).map((row) =>
+    activeOverrides.has(row.id) ? { ...row, is_active: activeOverrides.get(row.id)! } : row,
+  )
+  const orderedRef = useLatest(ordered)
   const categoryById = new Map(ordered.map((category) => [category.id, category]))
 
   const activeCards = cards.filter((c) => c.is_active)
   const spendingName = new Map(spendingCategories.map((c) => [c.id, c.name]))
   const cardName = new Map(cards.map((c) => [c.id, c.name]))
 
-  const set = (field: keyof CategoryFormState) => (value: string) =>
+  const set = (field: keyof CategoryFormState) => (value: string) => {
+    setError(null)
+    saveState.clearError()
     setForm((f) => ({ ...f, [field]: value }))
+  }
 
   const startEdit = (category: RewardCategoryOut) => {
-    setEditingId(category.id)
-    setForm({
-      name: category.name,
-      annual_spend: category.annual_spend ?? '',
-      spending_category_id:
-        category.spending_category_id === null ? '' : String(category.spending_category_id),
+    const next = {
+      name: category.name, annual_spend: category.annual_spend ?? '',
+      spending_category_id: category.spending_category_id === null ? '' : String(category.spending_category_id),
       pinned_card_id: category.pinned_card_id === null ? '' : String(category.pinned_card_id),
+    }
+    flushSync(() => {
+      setEditingId(category.id)
+      setForm(next)
+      setBaseline(next)
+      setError(null)
+      saveState.clearError()
     })
+    revealEditor(formRef.current, '#reward-category-name')
   }
 
   const submit = () => {
+    if (busy || saveState.status === 'clean' || saveState.status === 'saved' || saveState.status === 'saving') return
     const name = form.name.trim()
     if (!name) {
       setError('Category name is required')
+      revealEditor(formRef.current, '#reward-category-name')
       return
     }
     const spend = form.annual_spend.trim()
@@ -153,6 +206,7 @@ export default function CategoriesPanel({
         Number(canonicalAmount(spend, { expressions: false })) < 0)
     ) {
       setError('annual_spend must be non-negative')
+      revealEditor(formRef.current, '#reward-category-spend')
       return
     }
     // ALL FOUR keys, every time: a blank box must CLEAR the column, and PATCH treats an
@@ -165,72 +219,66 @@ export default function CategoriesPanel({
       pinned_card_id: form.pinned_card_id === '' ? null : Number(form.pinned_card_id),
     }
     setError(null)
-    const request =
-      editingId !== null
-        ? updateRewardCategory(editingId, body)
-        : // No position: the server appends a new row after the last one (2026-09-23 reorder
-          // spec §3.3). A number worked out here from the props could lag a reorder whose
-          // reload has not landed yet.
-          createRewardCategory(body)
-    void track(() =>
-      request
-        .then(() => {
-          document.getElementById('reward-category-name')?.focus()
-          setForm(EMPTY_CATEGORY)
-          setEditingId(null)
-          reload()
-        })
-        .catch((err: unknown) => setError(message(err, 'Save failed'))),
-    )
+    void saveState.run(() => track(async () => {
+      const saved = await (editingId !== null ? updateRewardCategory(editingId, body) : createRewardCategory(body))
+      resetForm()
+      await reload()
+      requestAnimationFrame(() => focusRow(saved.id, true))
+    }))
   }
 
-  // ONLY is_active on the wire: the row's weight, mapping and pin are untouched columns
-  // here, and sending them back would let a stale render overwrite a concurrent edit.
+  const lockRow = (id: number, locked: boolean) => setRowBusy((current) => {
+    const next = new Set(current)
+    if (locked) next.add(id)
+    else next.delete(id)
+    return next
+  })
+  const clearOverride = (id: number) => setActiveOverrides((current) => {
+    const next = new Map(current)
+    next.delete(id)
+    return next
+  })
+
   const toggleActive = (category: RewardCategoryOut) => {
-    setError(null)
-    void track(() =>
-      updateRewardCategory(category.id, { is_active: !category.is_active })
-        .then(() => reload())
-        .catch((err: unknown) => setError(message(err, 'Update failed'))),
-    )
+    if (rowBusy.has(category.id)) return
+    lockRow(category.id, true)
+    setActiveOverrides((current) => new Map(current).set(category.id, !category.is_active))
+    void updateRewardCategoryLogged(category.id, { is_active: !category.is_active }).then(async ({ batchId }) => {
+      await reload()
+      toast.success(`${category.is_active ? 'Hid' : 'Showed'} ${category.name}`, batchId === null ? undefined : {
+        action: { label: 'Undo', onAction: () => {
+          lockRow(category.id, true)
+          void undoBatch(batchId).then(async () => {
+            await reload()
+            requestAnimationFrame(() => focusRow(category.id, true))
+            toast.success(`Restored ${category.name}`)
+          }).catch((err: unknown) => { toast.error(errorDetail(err)); focusRow(category.id) })
+            .finally(() => lockRow(category.id, false))
+        } },
+      })
+    }).catch((err: unknown) => toast.error(errorDetail(err))).finally(() => {
+      clearOverride(category.id)
+      lockRow(category.id, false)
+    })
   }
 
   const remove = (category: RewardCategoryOut) => {
-    setError(null)
-    void track(() =>
-      deleteRewardCategory(category.id)
-        .then(() => {
-          if (category.id === editingId) {
-            setEditingId(null)
-            setForm(EMPTY_CATEGORY)
-          }
-          reload()
-          toast.success(`Deleted ${category.name} and its multipliers`, {
-            action: {
-              label: 'Undo',
-              onAction: () => {
-                // The row only — its cells cascaded away and are not restorable here. Counted
-                // like any request of the panel, so no drop races the row coming back.
-                void track(() =>
-                  createRewardCategory({
-                    name: category.name,
-                    sort_order: category.sort_order,
-                    annual_spend: category.annual_spend,
-                    spending_category_id: category.spending_category_id,
-                    pinned_card_id: category.pinned_card_id,
-                  })
-                    .then(() => {
-                      reload()
-                      toast.info(`Restored ${category.name} — multipliers were not restored`)
-                    })
-                    .catch(() => toast.error(`Could not restore ${category.name}`)),
-                )
-              },
-            },
-          })
-        })
-        .catch((err: unknown) => setError(message(err, 'Delete failed'))),
-    )
+    const rows = orderedRef.current
+    const at = rows.findIndex((row) => row.id === category.id)
+    const neighbour = rows[at + 1] ?? rows[at - 1]
+    void track(() => deleteWithUndo({
+      name: `${category.name} and its multipliers`,
+      row: rowFor(category.id),
+      request: () => deleteRewardCategory(category.id),
+      onDeleted: async () => {
+        if (editingRef.current === category.id) resetForm()
+        await reload()
+      },
+      focusAfter: () => (neighbour ? rowFor(neighbour.id)?.querySelector<HTMLElement>('[data-row-edit]') : null)
+        ?? formRef.current?.querySelector<HTMLElement>('input') ?? null,
+      onRestored: () => track(async () => { await reload() }),
+      restoredRow: () => rowFor(category.id),
+    }))
   }
 
   // A failed save puts the rows back (spec §7, as §4.1). Moving them can blur the grip a
@@ -324,7 +372,7 @@ export default function CategoriesPanel({
     // Any request of the panel in flight — a save, a hide, a delete, the seed, a reorder —
     // leaves the grips focusable but inert (lane R0 consumer rule 4), so a drop never races
     // a save.
-    disabled: busy,
+    disabled: busy || rowBusy.size > 0,
     onCommit: saveOrder,
   })
 
@@ -374,12 +422,11 @@ export default function CategoriesPanel({
   }
 
   return (
-    <section className="card span-12">
+    <section className="card span-12" ref={panelRef}>
       <h2 className="eyebrow">
         Categories &amp; weights
         <InfoHint text="Matrix rows. Weight = estimated annual spend: blank uses the mapped spending category's trailing-12-month figure; a typed amount overrides it. Pin forces the 'use which card' answer for a row." />
       </h2>
-      <FeedBanner error={error} />
       {/* The rows on screen decide, as in CardsPanel: the empty note and the table read
           `ordered` — the list a reorder layer may be showing — never the props beneath it. */}
       {ordered.length === 0 && (
@@ -391,6 +438,7 @@ export default function CategoriesPanel({
         </p>
       )}
       <form
+        ref={formRef}
         className="categories-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -409,6 +457,7 @@ export default function CategoriesPanel({
         <label>
           Annual spend override
           <AmountInput
+            id="reward-category-spend"
             kind="money"
             value={form.annual_spend}
             onValueChange={set('annual_spend')}
@@ -446,18 +495,17 @@ export default function CategoriesPanel({
           </select>
         </label>
         <div className="categories-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
+          <FeedBanner error={error} />
+          <SaveButton type="submit" className="button button-primary" state={saveState} aria-disabled={busy || undefined}>
             {editingId !== null ? 'Save category' : 'Add category'}
-          </button>
+          </SaveButton>
+          {error === null && <SaveStatus state={saveState} />}
           {editingId !== null && (
             <button
               type="button"
               className="button"
               aria-label="Cancel the category edit"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY_CATEGORY)
-              }}
+              onClick={cancelEdit}
             >
               Cancel
             </button>
@@ -491,6 +539,8 @@ export default function CategoriesPanel({
                 {ordered.map((category) => (
                   <tr
                     key={category.id}
+                    id={`reward-category-row-${category.id}`}
+                    aria-current={category.id === editingId ? true : undefined}
                     {...reorder.itemProps(category.id)}
                     className={category.id === editingId ? 'is-editing' : undefined}
                   >
@@ -516,35 +566,37 @@ export default function CategoriesPanel({
                     {/* Shut while a row is lifted, as during a save (lane R0 consumer rule 5): a
                         click mid-drag would act on a row that is about to move. */}
                     <td className="row-actions">
-                      <button
+                      <BusyButton
                         type="button"
                         className="button"
+                        data-row-edit
                         aria-label={`Edit ${category.name}`}
-                        disabled={busy || reorder.active}
+                        inert={busy || rowBusy.has(category.id) || reorder.active}
                         onClick={() => startEdit(category)}
                       >
                         Edit
-                      </button>
-                      <button
+                      </BusyButton>
+                      <BusyButton
                         type="button"
                         className="button"
                         aria-label={
                           category.is_active ? `Hide ${category.name}` : `Show ${category.name}`
                         }
-                        disabled={busy || reorder.active}
+                        busy={rowBusy.has(category.id)}
+                        inert={busy || reorder.active}
                         onClick={() => toggleActive(category)}
                       >
                         {category.is_active ? 'Hide' : 'Show'}
-                      </button>
-                      <button
+                      </BusyButton>
+                      <BusyButton
                         type="button"
                         className="button"
                         aria-label={`Delete ${category.name}`}
-                        disabled={busy || reorder.active}
+                        inert={busy || rowBusy.has(category.id) || reorder.active}
                         onClick={() => remove(category)}
                       >
                         Delete
-                      </button>
+                      </BusyButton>
                     </td>
                   </tr>
                 ))}

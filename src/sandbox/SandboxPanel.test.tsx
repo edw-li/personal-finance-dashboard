@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import SandboxPanel from './SandboxPanel'
+import SandboxPanel, { PinRow } from './SandboxPanel'
 import type { Sandbox } from './useSandbox'
 
 const toast = { success: vi.fn(), info: vi.fn(), error: vi.fn() }
@@ -58,6 +58,40 @@ afterEach(() => {
 })
 
 describe('SandboxPanel', () => {
+  it('keeps the typed name at capacity and refuses button and Enter submissions', () => {
+    const sb = sandbox({ pins: [1, 2, 3].map((n) => ({ id: `p${n}`, label: `Pin ${n}`, createdAt: 't', entries: ['a:1'] })) })
+    mount(sb)
+    const input = screen.getByLabelText('Pin label')
+    fireEvent.change(input, { target: { value: 'My next scenario' } })
+    const pin = screen.getByRole('button', { name: 'Pin this scenario' })
+    expect(pin.getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByText('Unpin one to pin another')).toBeTruthy()
+    fireEvent.click(pin)
+    fireEvent.submit(input.closest('form')!)
+    expect(sb.pin).not.toHaveBeenCalled()
+    expect((input as HTMLInputElement).value).toBe('My next scenario')
+  })
+
+  it('pins through Enter and focuses the neighbour after Unpin', async () => {
+    const sb = sandbox({ pins: [1, 2].map((n) => ({ id: `p${n}`, label: `Pin ${n}`, createdAt: 't', entries: ['a:1'] })) })
+    const view = render(<PinRow sandbox={sb} />)
+    const input = screen.getByLabelText('Pin label')
+    fireEvent.change(input, { target: { value: 'Next' } })
+    fireEvent.submit(input.closest('form')!)
+    expect(sb.pin).toHaveBeenCalledWith('Next')
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Pin 1' }))
+    view.rerender(<PinRow sandbox={{ ...sb, pins: sb.pins.slice(1) }} />)
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Unpin Pin 2' })))
+  })
+
+  it('focuses the neighbour when the comparison table unpins, and the label after the last pin', async () => {
+    const sb = sandbox({ pins: [1, 2].map((n) => ({ id: `p${n}`, label: `Pin ${n}`, createdAt: 't', entries: ['a:1'] })) })
+    const view = render(<PinRow sandbox={sb} />)
+    view.rerender(<PinRow sandbox={{ ...sb, pins: sb.pins.slice(1) }} />)
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Unpin Pin 2' })))
+    view.rerender(<PinRow sandbox={{ ...sb, pins: [] }} />)
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Pin label')))
+  })
   it('closed: eyebrow, toggle with aria-expanded=false, the closed hint, nothing else', () => {
     const onToggle = mount(sandbox(), { open: false, closedHint: <p>Try a scenario.</p> })
     expect(screen.getByRole('heading', { name: /What if — 2026/ })).toBeTruthy()
@@ -85,7 +119,7 @@ describe('SandboxPanel', () => {
   it('empty scenario: Reset disabled, Pin and Copy link disabled, no Apply slot', () => {
     mount(sandbox({ empty: true, entries: [], scenario: {} }))
     expect((screen.getByRole('button', { name: 'Reset to actual' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: 'Pin this scenario' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Pin this scenario' }).getAttribute('aria-disabled')).toBe('true')
     expect((screen.getByRole('button', { name: 'Copy link' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: 'Apply 1 override' })).toBeNull()
   })
@@ -99,7 +133,7 @@ describe('SandboxPanel', () => {
     expect(reset.disabled).toBe(false)
     fireEvent.click(reset)
     expect(sb.reset).toHaveBeenCalledTimes(1)
-    expect((screen.getByRole('button', { name: 'Pin this scenario' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Pin this scenario' }).getAttribute('aria-disabled')).toBe('true')
     expect((screen.getByRole('button', { name: 'Copy link' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: 'Apply 1 override' })).toBeNull()
   })

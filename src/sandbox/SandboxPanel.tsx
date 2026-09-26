@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import BusyButton from '../components/feedback/BusyButton'
+import { PIN_LIMIT } from './pins'
 import type { ReactNode } from 'react'
 import InfoHint from '../components/InfoHint'
 import Feed from '../components/shell/Feed'
@@ -117,6 +119,27 @@ export default function SandboxPanel<S extends object, R extends NonNullable<unk
  *  of a link; Copy link copies the LIVE scenario's URL. Exported for the page tests. */
 export function PinRow<S extends object, R>({ sandbox }: { sandbox: Sandbox<S, R> }) {
   const [label, setLabel] = useState('')
+  const pinRowRef = useRef<HTMLDivElement>(null)
+  const labelRef = useRef<HTMLInputElement>(null)
+  const previousPins = useRef(sandbox.pins)
+  const full = sandbox.pins.length >= PIN_LIMIT
+  const pin = () => {
+    if (sandbox.empty || full) return
+    sandbox.pin(label)
+    setLabel('')
+  }
+  // Both the chips and the comparison table can unpin. Wait for the resulting list so
+  // either control hands focus to the same neighbour, or to the label after the last pin.
+  useEffect(() => {
+    const before = previousPins.current
+    previousPins.current = sandbox.pins
+    const removed = before.findIndex((pin) => !sandbox.pins.some((saved) => saved.id === pin.id))
+    if (removed < 0) return
+    const neighbour = sandbox.pins[removed] ?? sandbox.pins[removed - 1]
+    const next = Array.from(pinRowRef.current?.querySelectorAll<HTMLButtonElement>('[data-pin-remove]') ?? [])
+      .find((button) => button.dataset.pinRemove === neighbour?.id)
+    ;(next ?? labelRef.current)?.focus()
+  }, [sandbox.pins])
   const toast = useToast()
   const copy = () => {
     const url = `${window.location.origin}${sandbox.link}`
@@ -131,29 +154,26 @@ export function PinRow<S extends object, R>({ sandbox }: { sandbox: Sandbox<S, R
     )
   }
   return (
-    <div className="sandbox-pins">
+    <div className="sandbox-pins" ref={pinRowRef}>
+      <form className="sandbox-pin-form" onSubmit={(event) => { event.preventDefault(); pin() }}>
       <input
+        ref={labelRef}
         className="field-input"
         aria-label="Pin label"
         placeholder="Name this scenario"
         value={label}
         onChange={(e) => setLabel(e.target.value)}
       />
-      <button
-        type="button"
-        className="button"
-        disabled={sandbox.empty}
-        onClick={() => {
-          sandbox.pin(label)
-          setLabel('')
-        }}
-      >
+      <BusyButton type="submit" className="button" aria-disabled={sandbox.empty || full || undefined}
+        aria-describedby={full ? 'sandbox-pin-limit' : undefined}>
         Pin this scenario
-      </button>
+      </BusyButton>
+      {full && <span id="sandbox-pin-limit" className="drill-hint">Unpin one to pin another</span>}
+      </form>
       {sandbox.pins.map((pin) => (
         <span key={pin.id} className="chip sandbox-pin-chip">
           {pin.label}
-          <button type="button" aria-label={`Unpin ${pin.label}`} onClick={() => sandbox.unpin(pin.id)}>
+          <button type="button" aria-label={`Unpin ${pin.label}`} data-pin-remove={pin.id} onClick={() => sandbox.unpin(pin.id)}>
             ×
           </button>
         </span>
