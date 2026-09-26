@@ -71,6 +71,7 @@ from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.coverage import load_coverage
+from app.services.day_labels import long_day
 from app.services.espp_calc import OfferingInfo, StoredPeriod
 from app.services.living_estimate import living_estimates
 from app.services.money import MONEY_MAX_ABS_12_2, quantize_money
@@ -761,15 +762,67 @@ def _override_out(row: CalendarEventOverride) -> OverrideOut:
     )
 
 
+async def _event_name(db: AsyncSession, key: str) -> str:
+    """How an Activity label names the event an override sits on: the calendar's own label and
+    the day in its key — "Payday of Sep 15, 2026". Composed for that day as GET /calendar would,
+    before any write; the overdue monthly reminder sits on today while its key keeps the nominal
+    day, so a ritual key's window runs on to today. A key no event carries (or a day no calendar
+    has — KEY_RE admits 2026-02-30) is named by the key itself. The label is the only reason an
+    override route composes anything."""
+    source, _ref, day_text = key.split(":")
+    try:
+        day = date.fromisoformat(day_text)
+    except ValueError:
+        return f"calendar event {key}"
+    today = clock.product_today()
+    end = max(day, today) if source == "ritual" else day
+    if (end - day).days <= MAX_SPAN_DAYS:
+        events, _health, _quoted_at = await _compose_for(db, day, end, today)
+        for event in events:
+            if event.key == key:
+                return f"{event.label} of {long_day(day)}"
+    return f"calendar event {key}"
+
+
+# The overlay a first PUT is judged against: what "no override row" means.
+_NO_OVERRIDE: dict[str, object] = {"done_at": None, "hidden": False, "note": None, "amount": None}
+
+
+def _override_label(before: dict[str, object] | None, after: dict[str, object], name: str) -> str:
+    """The Activity sentence for one override write, read off its images: the drawer sends one
+    verb at a time (Mark done, Hide, "Your figure" — which carries its note — and "Use the
+    estimate"), so one change names its verb; several at once read as an edit."""
+    was = before or _NO_OVERRIDE
+    verbs: list[str] = []
+    if (was["done_at"] is None) != (after["done_at"] is None):
+        verbs.append(f"Marked {name} done" if after["done_at"] is not None else f"Reopened {name}")
+    if was["hidden"] != after["hidden"]:
+        verbs.append(f"Hid {name}" if after["hidden"] else f"Unhid {name}")
+    if was["amount"] != after["amount"]:
+        verbs.append(
+            f"Set your figure for {name}"
+            if after["amount"] is not None
+            else f"Cleared your figure for {name}"
+        )
+    if not verbs and was["note"] != after["note"]:
+        verbs.append(f"Edited the note on {name}")
+    return verbs[0] if len(verbs) == 1 else f"Edited {name}"
+
+
 @router.put("/overrides/{key}", response_model=OverrideOut)
 async def put_override(
     body: OverrideIn,
+    response: Response,
     key: str = Path(pattern=KEY_PATTERN, max_length=120),
     db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> OverrideOut:
-    """Upsert, full replace (the house law): a PUT without an amount clears the figure."""
+    """Upsert, full replace (the house law): a PUT without an amount clears the figure.
+    Logged as the one row's insert or update, so its Undo puts the overlay back as it was."""
     amount = _validated_amount(body.amount)
+    name = await _event_name(db, key)
     row = await _find_override(db, key)
+    before = None if row is None else row_image(row)
     if row is None:
         row = CalendarEventOverride(event_key=key)
         db.add(row)
@@ -782,20 +835,36 @@ async def put_override(
     row.hidden = body.hidden
     row.note = body.note
     row.amount = amount
-    await db.commit()
+    await db.flush()
+    # updated_at is the server's (a default on insert, onupdate on update): the flush leaves
+    # it expired and an async lazy load would raise, so read the row back before imaging it.
+    await db.refresh(row)
+    after = row_image(row)
+    if before is None:
+        batch.record_insert(row)
+    else:
+        batch.record_update(row, before)
+    batch.label = _override_label(before, after, name)
+    response.headers.update(batch_header(await batch.commit()))
     return _override_out(row)
 
 
 @router.delete("/overrides/{key}", status_code=204)
 async def delete_override(
-    key: str = Path(pattern=KEY_PATTERN, max_length=120), db: AsyncSession = Depends(get_db)
+    key: str = Path(pattern=KEY_PATTERN, max_length=120),
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> Response:
+    """No client calls this today (the drawer PUTs a cleared overlay instead); logged all the
+    same, so every write in the router answers to an Undo."""
     row = await _find_override(db, key)
     if row is None:
         raise HTTPException(status_code=404, detail="override not found")
+    batch.label = f"Cleared your edits on {await _event_name(db, key)}"
+    batch.record_delete(row)
     await db.delete(row)
-    await db.commit()
-    return Response(status_code=204)
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 # --- 5. ICS: the download, the token feed, the tokens (spec §11) — Lane B --------------
