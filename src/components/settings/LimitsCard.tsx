@@ -1,20 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, describeError } from '../../api/client'
+import { describeError } from '../../api/client'
 import { cloneLimits, fetchLimits, putLimits } from '../../api/limits'
 import type { LimitsOut } from '../../types/api'
 import { currentYear } from '../../utils/months'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
-import { useToast } from '../ToastProvider'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
 import SettingsGhost, { SETTINGS_CARD_CHROME_PX } from './SettingsGhost'
 import { WARM, warmSource } from './settingsPrefetch'
-
-function message(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback
-}
 
 // The boxes a payload seeds, as pure string math at MODULE scope (SettingsPage's rule):
 // the load chain, the PUT echo and the clone echo all apply it, and a component-scope
@@ -43,11 +42,11 @@ export default function LimitsCard() {
   // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [savedNote, setSavedNote] = useState(false)
+  const [savedBoxes, setSavedBoxes] = useState<Record<string, string>>({})
+  const saveState = useSaveState({ dirty: JSON.stringify(boxes) !== JSON.stringify(savedBoxes) })
+  const cloneState = useSaveState({ dirty: false })
+  const busy = saveState.status === 'saving' || cloneState.status === 'saving'
   const seqRef = useRef(0)
-  const toast = useToast()
 
   // A plain function over stable setters, called from the effect and from Retry — a
   // useCallback here would trip preserve-manual-memoization (SettingsPage's wall).
@@ -58,6 +57,7 @@ export default function LimitsCard() {
         if (seq !== seqRef.current) return
         setItems(payload.items)
         setBoxes(boxesFor(payload))
+        setSavedBoxes(boxesFor(payload))
         setLoadError(null)
       })
       .catch((err: unknown) => {
@@ -77,8 +77,8 @@ export default function LimitsCard() {
 
   const pickYear = (next: number) => {
     if (next === year) return
-    setSavedNote(false)
-    setFormError(null)
+    saveState.clearError()
+    cloneState.clearError()
     setLoadError(null)
     setYear(next)
   }
@@ -87,8 +87,8 @@ export default function LimitsCard() {
     setBoxes((current) => ({ ...current, [key]: value }))
     // Every keystroke retires the sentence under the form: it describes the values that
     // WERE in the boxes (SettingsPage's rule).
-    setSavedNote(false)
-    setFormError(null)
+    saveState.clearError()
+    cloneState.clearError()
   }
 
   const save = () => {
@@ -102,36 +102,20 @@ export default function LimitsCard() {
         return [item.key, typed === '' ? null : typed]
       }),
     )
-    setBusy(true)
-    setFormError(null)
-    setSavedNote(false)
-    putLimits(year, { values })
-      .then((payload) => {
-        // Re-seeded from the RESPONSE: the server answers with what it stored (quantized
-        // to cents), and boxes holding the typed text would read as unsaved work against
-        // values that are already in the database.
-        setItems(payload.items)
-        setBoxes(boxesFor(payload))
-        setSavedNote(true)
-      })
-      .catch((err: unknown) => setFormError(message(err, 'Could not save the limits.')))
-      .finally(() => setBusy(false))
+    void saveState.run(async () => {
+      const payload = await putLimits(year, { values })
+      setItems(payload.items)
+      setBoxes(boxesFor(payload))
+      setSavedBoxes(boxesFor(payload))
+    })
   }
 
-  const clone = () => {
-    setBusy(true)
-    setFormError(null)
-    setSavedNote(false)
-    cloneLimits(year, year - 1)
-      .then((payload) => {
-        setItems(payload.items)
-        setBoxes(boxesFor(payload))
-      })
-      // The 404/409 sentences are the server's and they are about the YEAR rather than
-      // any one box, so they ride the toast layer (AccountsCard's delete posture).
-      .catch((err: unknown) => toast.error(message(err, 'Clone failed')))
-      .finally(() => setBusy(false))
-  }
+  const clone = () => void cloneState.run(async () => {
+    const payload = await cloneLimits(year, year - 1)
+    setItems(payload.items)
+    setBoxes(boxesFor(payload))
+    setSavedBoxes(boxesFor(payload))
+  })
 
   return (
     <section className="card span-6" id="limits" role="region" aria-label="Contribution limits">
@@ -190,19 +174,13 @@ export default function LimitsCard() {
             year&apos;s value.
           </p>
           <div className="settings-card-actions">
-            <button type="submit" className="button button-primary" disabled={busy}>
-              {busy ? 'Saving…' : 'Save limits'}
-            </button>
-            <button type="button" className="button" disabled={busy} onClick={clone}>
+            <SaveButton type="submit" className="button button-primary" state={saveState} aria-disabled={cloneState.status === 'saving'}>Save limits</SaveButton>
+            <BusyButton type="button" className="button" busy={cloneState.status === 'saving'} inert={saveState.status === 'saving'} onClick={clone}>
               {`Clone from ${year - 1}`}
-            </button>
+            </BusyButton>
+            <SaveStatus state={saveState} />
+            <SaveStatus state={cloneState} />
           </div>
-          <FeedBanner error={formError} />
-          {savedNote && (
-            <p className="settings-note" role="status">
-              Saved.
-            </p>
-          )}
         </form>
       )}
     </section>

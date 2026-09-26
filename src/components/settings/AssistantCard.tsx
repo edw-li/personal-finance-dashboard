@@ -7,6 +7,10 @@ import {
 } from '../../api/assistant'
 import type { AssistantModelsOut, AssistantSettingsOut } from '../../types/api'
 import InfoHint from '../InfoHint'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
@@ -39,11 +43,11 @@ export default function AssistantCard() {
   // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
   const [keyBox, setKeyBox] = useState('')
   const [modelBox, setModelBox] = useState('kimi-k3')
-  const [busy, setBusy] = useState(false)
-  const [savedNote, setSavedNote] = useState(false)
+  const saveState = useSaveState({ dirty: keyBox.trim() !== '' || (settings !== null && modelBox !== settings.default_model) })
+  const removeState = useSaveState({ dirty: false })
+  const busy = saveState.status === 'saving' || removeState.status === 'saving'
   const [probe, setProbe] = useState<AssistantModelsOut | null>(null)
   const [probing, setProbing] = useState(false)
   const [probeError, setProbeError] = useState<string | null>(null)
@@ -90,32 +94,16 @@ export default function AssistantCard() {
     if (keyBox.trim() !== '') body.api_key = keyBox.trim()
     if (modelBox !== settings.default_model) body.default_model = modelBox
     if (Object.keys(body).length === 0) return
-    setBusy(true)
-    setFormError(null)
-    setSavedNote(false)
-    putAssistantSettings(body)
-      .then((payload) => {
-        adopt(payload)
-        setSavedNote(true)
-        setProbe(null) // a new key invalidates the last probe's verdict
-      })
-      .catch((err: unknown) => setFormError(message(err, 'Could not save assistant settings.')))
-      .finally(() => setBusy(false))
+    void saveState.run(async () => {
+      adopt(await putAssistantSettings(body))
+      setProbe(null)
+    })
   }
 
-  const removeOverride = () => {
-    setBusy(true)
-    setFormError(null)
-    setSavedNote(false)
-    putAssistantSettings({ api_key: null })
-      .then((payload) => {
-        adopt(payload)
-        setSavedNote(true)
-        setProbe(null)
-      })
-      .catch((err: unknown) => setFormError(message(err, 'Could not remove the saved key.')))
-      .finally(() => setBusy(false))
-  }
+  const removeOverride = () => void removeState.run(async () => {
+    adopt(await putAssistantSettings({ api_key: null }))
+    setProbe(null)
+  })
 
   const testKey = () => {
     setProbing(true)
@@ -162,14 +150,15 @@ export default function AssistantCard() {
               disabled={busy}
               onChange={(event) => {
                 setKeyBox(event.target.value)
-                setSavedNote(false)
+                saveState.clearError()
+                removeState.clearError()
               }}
             />
           </label>
           {key.source === 'override' && (
-            <button type="button" className="button" disabled={busy} onClick={removeOverride}>
+            <BusyButton type="button" className="button" busy={removeState.status === 'saving'} inert={saveState.status === 'saving'} onClick={removeOverride}>
               Remove saved key
-            </button>
+            </BusyButton>
           )}
           {key.source === 'override' && (
             <p className="settings-note">
@@ -185,7 +174,8 @@ export default function AssistantCard() {
               disabled={busy}
               onChange={(event) => {
                 setModelBox(event.target.value)
-                setSavedNote(false)
+                saveState.clearError()
+                removeState.clearError()
               }}
             >
               {MODEL_OPTIONS.map((option) => (
@@ -201,24 +191,19 @@ export default function AssistantCard() {
             home for the key is the server&apos;s <code>.env</code>.
           </p>
           <div className="settings-card-actions">
-            <button type="submit" className="button button-primary" disabled={busy}>
-              {busy ? 'Saving…' : 'Save assistant settings'}
-            </button>
-            <button
+            <SaveButton type="submit" className="button button-primary" state={saveState} aria-disabled={removeState.status === 'saving'}>Save assistant settings</SaveButton>
+            <SaveStatus state={saveState} />
+            <BusyButton
               type="button"
               className="button"
-              disabled={probing || !key.configured}
+              busy={probing}
+              inert={busy || !key.configured}
               onClick={testKey}
             >
-              {probing ? 'Testing…' : 'Test key'}
-            </button>
+              Test key
+            </BusyButton>
+            <SaveStatus state={removeState} />
           </div>
-          <FeedBanner error={formError} />
-          {savedNote && (
-            <p className="settings-note" role="status">
-              Saved.
-            </p>
-          )}
           <FeedBanner error={probeError} />
           {probe !== null && (
             <div role="status">

@@ -24,7 +24,7 @@ const SETTINGS = {
 function mount() {
   return render(
     <ToastProvider>
-      <CalendarFeedCard />
+        <CalendarFeedCard />
     </ToastProvider>,
   )
 }
@@ -125,7 +125,7 @@ describe('CalendarFeedCard', () => {
     fireEvent.change(box, { target: { value: '5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save reminder day' }))
     await waitFor(() => expect(putAppSettings).toHaveBeenCalledWith({ calendar_update_due_day: 5 }))
-    expect(await screen.findByText('Saved.')).toBeTruthy()
+    expect(await screen.findByText(/^Saved/)).toBeTruthy()
   })
 
   it('sends the day alone, so nothing this card cannot see is re-written', async () => {
@@ -151,4 +151,12 @@ describe('CalendarFeedCard', () => {
     expect(announced.join(' ')).toContain('between 1 and 28')
     expect(putAppSettings).not.toHaveBeenCalled()
   })
+})
+
+
+it('keeps the saved form quiet without removing its Save control from the tab order', async () => {
+  mount()
+  const save = await screen.findByRole('button', { name: 'Save reminder day' })
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  expect(save.hasAttribute('disabled')).toBe(false)
 })

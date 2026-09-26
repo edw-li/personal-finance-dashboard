@@ -6,6 +6,9 @@ import { ApiError, describeError } from '../api/client'
 import { importXlsx } from '../api/importer'
 import { fetchAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
+import { SaveButton } from '../components/feedback/SaveButton'
+import { SaveStatus } from '../components/feedback/SaveStatus'
+import { useSaveState } from '../components/feedback/useSaveState'
 import AccountsCard from '../components/settings/AccountsCard'
 import PortfolioAccountsCard from '../components/settings/PortfolioAccountsCard'
 import ActivityCard from '../components/settings/ActivityCard'
@@ -49,8 +52,7 @@ export default function SettingsPage() {
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
   const [pwError, setPwError] = useState<string | null>(null)
-  const [pwBusy, setPwBusy] = useState(false)
-  const [pwChanged, setPwChanged] = useState(false)
+  const pwState = useSaveState({ dirty: currentPw !== '' || newPw !== '' || confirmPw !== '' })
   // Import card — the chosen File, the last report ABOUT that file, one busy flag for both
   // requests (dry run and apply are the same upload with the flag flipped).
   const [file, setFile] = useState<File | null>(null)
@@ -189,7 +191,7 @@ export default function SettingsPage() {
   const editPassword = (setBox: (value: string) => void) => (value: string) => {
     setBox(value)
     setPwError(null)
-    setPwChanged(false)
+    pwState.clearError()
   }
 
   const submitPassword = () => {
@@ -198,23 +200,13 @@ export default function SettingsPage() {
       setPwError('New passwords do not match.')
       return
     }
-    setPwBusy(true)
     setPwError(null)
-    setPwChanged(false)
-    changePassword(currentPw, newPw)
-      .then(() => {
-        // Only a SUCCESS clears the boxes — a wrong current password would otherwise cost
-        // the user the new one they had already typed twice.
-        setCurrentPw('')
-        setNewPw('')
-        setConfirmPw('')
-        setPwChanged(true)
-      })
-      .catch((err: unknown) => {
-        // "Current password is incorrect" / the min-length 422 speak for themselves.
-        setPwError(err instanceof ApiError ? err.message : 'Could not change the password.')
-      })
-      .finally(() => setPwBusy(false))
+    void pwState.run(async () => {
+      await changePassword(currentPw, newPw)
+      setCurrentPw('')
+      setNewPw('')
+      setConfirmPw('')
+    })
   }
 
   const pickFile = (chosen: File | null) => {
@@ -360,6 +352,7 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="current-password"
                       value={currentPw}
+                        readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setCurrentPw)(e.target.value)}
                     />
                   </label>
@@ -370,6 +363,7 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="new-password"
                       value={newPw}
+                        readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setNewPw)(e.target.value)}
                     />
                   </label>
@@ -380,20 +374,14 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="new-password"
                       value={confirmPw}
+                        readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setConfirmPw)(e.target.value)}
                     />
                   </label>
                   <div className="settings-actions">
-                    <button type="submit" className="button button-primary" disabled={pwBusy}>
-                      {pwBusy ? 'Changing…' : 'Change password'}
-                    </button>
+                    <SaveButton type="submit" className="button button-primary" state={pwState}>Change password</SaveButton>
+                    {pwError ? <span role="alert" className="save-status save-status-error">{pwError}</span> : <SaveStatus state={pwState} />}
                   </div>
-                  <FeedBanner error={pwError} />
-                  {pwChanged && (
-                    <p className="settings-note" role="status">
-                      Password changed.
-                    </p>
-                  )}
                 </form>
               </section>}
 </LocalSectionPanel>

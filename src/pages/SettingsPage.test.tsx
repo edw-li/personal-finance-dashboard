@@ -458,7 +458,7 @@ describe('SettingsPage — password', () => {
     await waitFor(() =>
       expect(vi.mocked(changePassword)).toHaveBeenCalledWith('old-pw', 'new-pw-12345'),
     )
-    expect(await screen.findByText('Password changed.')).toBeTruthy()
+    expect(await screen.findByText(/^Saved/)).toBeTruthy()
     // What the change DOES is said once, in the heading's (i) (2026-09-13 spec §14, audit S-11):
     // the note under the form repeated that sentence word for word.
     expect(screen.queryByText('Other devices are signed out; this one stays signed in.')).toBeNull()
@@ -481,7 +481,7 @@ describe('SettingsPage — password', () => {
     // Only a SUCCESS clears: retyping a correct new password to fix a wrong current one
     // would be a punishment for the server's answer.
     expect(newPwBox().value).toBe('new-pw-12345')
-    expect(screen.queryByText('Password changed.')).toBeNull()
+    expect(screen.queryByText(/^Saved/)).toBeNull()
   })
 
   it('disables each submit while its OWN request is in flight', async () => {
@@ -492,29 +492,30 @@ describe('SettingsPage — password', () => {
     renderPage('planning')
     await screen.findByLabelText('Withdrawal rate (% / year)')
 
+    fireEvent.change(screen.getByLabelText('Withdrawal rate (% / year)'), { target: { value: '5' } })
     fireEvent.click(saveButton())
-    await waitFor(() => expect(saveButton().disabled).toBe(true))
+    await waitFor(() => expect(saveButton().getAttribute('aria-busy') === 'true').toBe(true))
     // Two cards, two flags: a settings save must not lock the password form.
     fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
     await screen.findByLabelText('Current password')
-    expect(pwButton().disabled).toBe(false)
+    expect(pwButton().getAttribute('aria-busy') === 'true').toBe(false)
     await act(async () => {
       put.resolve(SETTINGS)
     })
     fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
-    await waitFor(() => expect(saveButton().disabled).toBe(false))
+    await waitFor(() => expect(saveButton().getAttribute('aria-busy') === 'true').toBe(false))
 
     fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
     fillPasswords('old-pw', 'new-pw-12345', 'new-pw-12345')
     fireEvent.click(pwButton())
-    await waitFor(() => expect(pwButton().disabled).toBe(true))
+    await waitFor(() => expect(pwButton().getAttribute('aria-busy') === 'true').toBe(true))
     fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
-    expect(saveButton().disabled).toBe(false)
+    expect(saveButton().getAttribute('aria-busy') === 'true').toBe(false)
     await act(async () => {
       change.resolve(undefined)
     })
     fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
-    await waitFor(() => expect(pwButton().disabled).toBe(false))
+    await waitFor(() => expect(pwButton().getAttribute('aria-busy') === 'true').toBe(false))
   })
 })
 
@@ -1143,7 +1144,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
       // its sliding indicator under the selected tab with another (2026-09-13 polish §2.4). The
       // chase is picked by WHAT it watches — the whole body — because construction order is an
       // accident of which effect runs first, and this test is about the page's arrival.
-      expect(resizeObservers).toHaveLength(3)
+      expect(resizeObservers.filter((observer) => observer.targets.includes(document.body))).toHaveLength(1)
       const chase = bodyObserver()
       expect(chase).toBeDefined()
       if (chase === undefined) throw new Error('the arrival chase never observed the body')

@@ -5,6 +5,9 @@ import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import type { AppSettingsOut, FeedTokenOut } from '../../types/api'
 import { formatDate, formatDateTime } from '../../utils/format'
 import InfoHint from '../InfoHint'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
@@ -33,7 +36,7 @@ export default function CalendarFeedCard() {
   const [fresh, setFresh] = useState<{ label: string; url: string } | null>(null)
   const [dayBox, setDayBox] = useState('')
   const [dayError, setDayError] = useState<string | null>(null)
-  const [savedNote, setSavedNote] = useState(false)
+  const dayState = useSaveState({ dirty: settings !== null && dayBox !== String(settings.calendar_update_due_day) })
   const [busy, setBusy] = useState(false)
   const seqRef = useRef(0)
   const toast = useToast()
@@ -108,24 +111,12 @@ export default function CalendarFeedCard() {
       setDayError(`Pick a day between ${MIN_DAY} and ${MAX_DAY} — every month has one.`)
       return
     }
-    setBusy(true)
     setDayError(null)
-    setSavedNote(false)
-    // The PUT is PARTIAL now (2026-09-06 spec §3.5): the server reads it with exclude_unset, so
-    // an absent key leaves the stored value. The day travels alone, and the re-read this card
-    // used to make — to avoid reverting a withdrawal rate the App settings card had changed a
-    // minute ago — has nothing left to protect against.
-    putAppSettings({ calendar_update_due_day: day })
-      .then((saved) => {
-        // Re-seeded from the RESPONSE, like every other settings form here: the server
-        // answers with what it stored, and a box holding the typed text would read as
-        // unsaved work against a value that is already in the database.
-        setSettings(saved)
-        setDayBox(String(saved.calendar_update_due_day))
-        setSavedNote(true)
-      })
-      .catch((err: unknown) => setDayError(message(err, 'Could not save the reminder day.')))
-      .finally(() => setBusy(false))
+    void dayState.run(async () => {
+      const saved = await putAppSettings({ calendar_update_due_day: day })
+      setSettings(saved)
+      setDayBox(String(saved.calendar_update_due_day))
+    })
   }
 
   return (
@@ -219,13 +210,13 @@ export default function CalendarFeedCard() {
                     aria-label="Monthly update reminder day"
                     inputMode="numeric"
                     value={dayBox}
-                    disabled={busy}
+                    readOnly={dayState.status === 'saving'}
                     onChange={(e) => {
                       setDayBox(e.target.value)
                       // Every keystroke retires both sentences under the form: they describe
                       // the value that WAS in the box (SettingsPage's rule).
                       setDayError(null)
-                      setSavedNote(false)
+                      dayState.clearError()
                     }}
                   />
                 </label>
@@ -241,16 +232,9 @@ export default function CalendarFeedCard() {
                   has one.
                 </p>
                 <div className="settings-card-actions">
-                  <button type="submit" className="button button-primary" disabled={busy}>
-                    Save reminder day
-                  </button>
+                  <SaveButton type="submit" className="button button-primary" state={dayState}>Save reminder day</SaveButton>
+                  {dayError ? <span role="alert" className="save-status save-status-error">{dayError}</span> : <SaveStatus state={dayState} />}
                 </div>
-                <FeedBanner error={dayError} />
-                {savedNote && (
-                  <p className="settings-note" role="status">
-                    Saved.
-                  </p>
-                )}
               </form>
             )}
           </div>

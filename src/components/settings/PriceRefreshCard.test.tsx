@@ -74,7 +74,7 @@ describe('PriceRefreshCard', () => {
     expect(vi.mocked(putAppSettings).mock.calls[0][0]).toEqual({
       price_refresh_cron: '30 14 * * mon-fri',
     })
-    expect(await screen.findByText('Saved — the schedule is applied immediately.')).toBeTruthy()
+    expect(await screen.findByText(/^Saved/)).toBeTruthy()
     // The save HOT-APPLIES the schedule, so "Next scheduled run" has just moved.
     await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalledTimes(2))
     // The FACTS alone: the box is already re-seeded from the PUT's own response, and a second
@@ -85,10 +85,11 @@ describe('PriceRefreshCard', () => {
   it('retires the saved note on the next keystroke', async () => {
     render(<PriceRefreshCard />)
     await waitFor(() => expect(cronBox().value).toBe('10 13 * * mon-fri'))
+    fireEvent.change(cronBox(), { target: { value: '30 14 * * mon-fri' } })
     fireEvent.click(saveButton())
-    expect(await screen.findByText('Saved — the schedule is applied immediately.')).toBeTruthy()
+    expect(await screen.findByText(/^Saved/)).toBeTruthy()
     fireEvent.change(cronBox(), { target: { value: '30 15 * * mon-fri' } })
-    expect(screen.queryByText('Saved — the schedule is applied immediately.')).toBeNull()
+    expect(screen.queryByText(/^Saved/)).toBeNull()
   })
 
   it('runs a refresh, reports what it did and re-reads the facts', async () => {
@@ -102,7 +103,7 @@ describe('PriceRefreshCard', () => {
     expect(await screen.findByText(/1 updated in 2s/)).toBeTruthy()
     await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalledTimes(2))
     expect(fetchAppSettings).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false))
+    await waitFor(() => expect(refreshButton().getAttribute('aria-disabled') === 'true').toBe(false))
   })
 
   it('leaves a half-typed cron alone when Refresh now re-reads the facts', async () => {
@@ -134,12 +135,12 @@ describe('PriceRefreshCard', () => {
     // The prices are in, but the numbers beside the button still describe the run BEFORE it.
     await waitFor(() => expect(refreshPrices).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalledTimes(2))
-    expect(refreshButton().hasAttribute('disabled')).toBe(true)
+    expect(refreshButton().getAttribute('aria-disabled') === 'true').toBe(true)
 
     await act(async () => {
       settle({ ...STATUS, prices: { ...STATUS.prices, scheduler_running: false } })
     })
-    await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false))
+    await waitFor(() => expect(refreshButton().getAttribute('aria-disabled') === 'true').toBe(false))
     expect(screen.getByText('Not running')).toBeTruthy()
   })
 
@@ -151,9 +152,10 @@ describe('PriceRefreshCard', () => {
     render(<PriceRefreshCard />)
     await waitFor(() => expect(cronBox().value).toBe('10 13 * * mon-fri'))
 
+    fireEvent.change(cronBox(), { target: { value: '30 14 * * mon-fri' } })
     fireEvent.click(saveButton())
     expect(await screen.findByText('cron must not fire more often than hourly')).toBeTruthy()
-    expect(screen.queryByText('Saved — the schedule is applied immediately.')).toBeNull()
+    expect(screen.queryByText(/^Saved/)).toBeNull()
 
     fireEvent.click(refreshButton())
     expect(await screen.findByText('provider unavailable')).toBeTruthy()
@@ -170,4 +172,12 @@ describe('PriceRefreshCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading the refresh schedule' }))
     expect(await screen.findByText('Next scheduled run')).toBeTruthy()
   })
+})
+
+
+it('keeps the saved form quiet without removing its Save control from the tab order', async () => {
+  render(<PriceRefreshCard />)
+  const save = await screen.findByRole('button', { name: 'Save schedule' })
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  expect(save.hasAttribute('disabled')).toBe(false)
 })

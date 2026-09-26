@@ -83,12 +83,12 @@ it('saves the marriage date and sends an explicit null when cleared', async () =
   fireEvent.change(screen.getByLabelText('Marriage date'), { target: { value: '2026-09-19' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save marriage date' }))
   await waitFor(() => expect(vi.mocked(putMarriageDate)).toHaveBeenCalledWith('2026-09-19'))
-  expect(await screen.findByText('Marriage date saved.')).toBeTruthy()
+  expect(await screen.findByText(/^Saved/)).toBeTruthy()
 
   vi.mocked(putMarriageDate).mockResolvedValue({ marriage_date: null })
   fireEvent.change(screen.getByLabelText('Marriage date'), { target: { value: '' } })
   // The sentence describes the date that WAS saved — the next keystroke moves on.
-  expect(screen.queryByText('Marriage date saved.')).toBeNull()
+  expect(screen.queryByText(/^Saved/)).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Save marriage date' }))
   await waitFor(() => expect(vi.mocked(putMarriageDate)).toHaveBeenLastCalledWith(null))
 })
@@ -128,7 +128,7 @@ it('banners a failed load and refetches on Retry', async () => {
 it('renders a validation error inline with no Retry beside it (motion spec §9)', async () => {
   render(<HouseholdCard onPeopleChange={vi.fn()} />)
   await screen.findByText('Me')
-  fireEvent.click(screen.getByRole('button', { name: 'Add member' }))
+  fireEvent.submit(screen.getByRole('button', { name: 'Add member' }).closest('form')!)
 
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('Enter a name for the new household member.')
@@ -140,4 +140,39 @@ it('is a span-4 card: a two-field form beside the wide categories table (2026-09
   render(<HouseholdCard onPeopleChange={vi.fn()} />)
   await screen.findByRole('button', { name: 'Add member' })
   expect((document.getElementById('household') as HTMLElement).classList.contains('span-4')).toBe(true)
+})
+
+
+it('keeps the saved form quiet without removing its Save control from the tab order', async () => {
+  render(<HouseholdCard onPeopleChange={vi.fn()} />)
+  const save = await screen.findByRole('button', { name: 'Save marriage date' })
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  expect(save.hasAttribute('disabled')).toBe(false)
+})
+
+it('selects an inline rename and Escape restores its Rename button without leaking its error', async () => {
+  vi.mocked(updatePerson).mockRejectedValueOnce(new ApiError('Name is taken', 409))
+  render(<HouseholdCard onPeopleChange={vi.fn()} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Rename Me' }))
+  const box = screen.getByLabelText('New name for Me') as HTMLInputElement
+  expect(document.activeElement).toBe(box)
+  expect(box.selectionStart).toBe(0)
+  expect(box.selectionEnd).toBe(2)
+  fireEvent.change(box, { target: { value: 'Partner' } })
+  fireEvent.submit(box.closest('form')!)
+  expect(await screen.findByText('Name is taken')).toBeTruthy()
+  fireEvent.keyDown(box, { key: 'Escape' })
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename Me' }))
+  expect(screen.queryByText('Name is taken')).toBeNull()
+})
+
+it('adding a member leaves a separately edited marriage date intact', async () => {
+  render(<HouseholdCard onPeopleChange={vi.fn()} />)
+  const date = await screen.findByLabelText('Marriage date') as HTMLInputElement
+  fireEvent.change(date, { target: { value: '2027-01-01' } })
+  fireEvent.change(screen.getByLabelText('Add a household member'), { target: { value: 'Partner' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add member' }))
+  await waitFor(() => expect(fetchHousehold).toHaveBeenCalledTimes(2))
+  expect(date.value).toBe('2027-01-01')
+  expect(screen.getByRole('button', { name: 'Save marriage date' }).getAttribute('aria-disabled')).toBeNull()
 })

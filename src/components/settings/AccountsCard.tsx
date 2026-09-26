@@ -17,6 +17,9 @@ import type {
 } from '../../types/api'
 import InfoHint from '../InfoHint'
 import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
 import { flashElement, revealEditor, revealRow, useEscapeCancel } from '../feedback/reveal'
 import { useLatest } from '../reorder/useLatest'
@@ -67,10 +70,6 @@ const PARENT_NEEDS_COMPONENT =
 // grip · Account · Owner · Roll-up · Status · actions — a group heading spans all six.
 const ROSTER_COLUMNS = 6
 
-function message(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback
-}
-
 /**
  * The Settings Accounts card (2026-08-26 spec §6): the roster manager the app has never
  * had. The backend CRUD has existed since Plan 3 with no caller, which is exactly why
@@ -102,6 +101,15 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [pendingOrder, setPendingOrder] = useState<AccountOut[] | null>(null)
   const [lastAccounts, setLastAccounts] = useState(accounts)
   const seqRef = useRef(0)
+  const storedAccount = accounts.find((row) => row.id === editingId)
+  const savedForm = storedAccount === undefined ? EMPTY_ACCOUNT : {
+    name: storedAccount.name,
+    group: storedAccount.group,
+    person_id: storedAccount.person_id === null ? '' : String(storedAccount.person_id),
+    parent_account_id: storedAccount.parent_account_id === null ? '' : String(storedAccount.parent_account_id),
+    is_component: storedAccount.is_component,
+  }
+  const saveState = useSaveState({ dirty: JSON.stringify(form) !== JSON.stringify(savedForm) })
   const toast = useToast()
   const formRef = useRef<HTMLFormElement>(null)
   const landingId = useRef<number | null>(null)
@@ -154,11 +162,13 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     (field: 'name' | 'person_id' | 'parent_account_id') => (value: string) => {
       setForm((f) => ({ ...f, [field]: value }))
       setFormError(null)
+    saveState.clearError()
     }
 
   const startEdit = (account: AccountOut) => {
     setEditingId(account.id)
     setFormError(null)
+    saveState.clearError()
     setForm({
       name: account.name,
       group: account.group,
@@ -174,6 +184,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     setEditingId(null)
     setForm(EMPTY_ACCOUNT)
     setFormError(null)
+    saveState.clearError()
   }
   useEscapeCancel(formRef, cancelEdit, editingId !== null)
   const latest = useLatest({ editingId, cancelEdit, load, rows: accounts })
@@ -205,17 +216,14 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       parent_account_id: form.parent_account_id === '' ? null : Number(form.parent_account_id),
     }
     setFormError(null)
-    const request = editingId !== null ? updateAccount(editingId, body) : createAccount(body)
-    void track(() =>
-      request
-        .then((saved) => {
-          landingId.current = saved.id
-          setEditingId(null)
-          setForm(EMPTY_ACCOUNT)
-          return load()
-        })
-        .catch((err: unknown) => setFormError(message(err, 'Save failed'))),
-    )
+    saveState.clearError()
+    void saveState.run(() => track(async () => {
+      const saved = await (editingId !== null ? updateAccount(editingId, body) : createAccount(body))
+      landingId.current = saved.id
+      setEditingId(null)
+      setForm(EMPTY_ACCOUNT)
+      await load()
+    }))
   }
 
   // One-click changes draw at once. Grips wait for the reload; only this row's controls wait.
@@ -566,20 +574,21 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                 onChange={(e) => {
                   setForm((f) => ({ ...f, is_component: e.target.checked }))
                   setFormError(null)
+    saveState.clearError()
                 }}
               />
               Component of the parent
             </label>
             <div className="settings-card-actions">
-              <BusyButton type="submit" className="button button-primary" busy={busy && Object.keys(rowUpdates).length === 0} inert={busy}>
+              <SaveButton type="submit" className="button button-primary" state={saveState} aria-disabled={busy}>
                 {editingId !== null ? 'Save account' : 'Add account'}
-              </BusyButton>
+              </SaveButton>
               {editingId !== null && (
                 <button type="button" className="button" onClick={cancelEdit}>
                   Cancel
                 </button>
               )}
-              {formError && <span role="alert" className="save-status is-error">{formError}</span>}
+              {formError ? <span role="alert" className="save-status save-status-error">{formError}</span> : <SaveStatus state={saveState} />}
             </div>
           </form>
           {accounts.length === 0 ? (

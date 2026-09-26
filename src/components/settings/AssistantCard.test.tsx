@@ -213,3 +213,12 @@ describe('AssistantCard', () => {
     expect(within(alert).queryByRole('button')).toBeNull()
   })
 })
+
+
+it('keeps the saved form quiet without removing its Save control from the tab order', async () => {
+  fetchAssistantSettings.mockResolvedValue({ key: { configured: false, source: null }, default_model: 'kimi-k3' })
+  render(<AssistantCard />)
+  const save = await screen.findByRole('button', { name: 'Save assistant settings' })
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  expect(save.hasAttribute('disabled')).toBe(false)
+})

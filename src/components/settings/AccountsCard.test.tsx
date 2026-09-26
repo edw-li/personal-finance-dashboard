@@ -263,6 +263,7 @@ it('reveals the account editor, saves back to the row and cancels with Escape', 
   fireEvent.keyDown(name, { key: 'Escape' })
   expect(document.activeElement).toBe(edit)
   fireEvent.click(edit)
+  fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'Fidelity HSA (renamed)' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save account' }))
   await waitFor(() => expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true))
   expect(document.activeElement).toBe(edit)
@@ -627,7 +628,7 @@ it('clears the refusal as soon as the pair is fixed', async () => {
 it('renders a validation error inline with no Retry beside it (motion spec §9)', async () => {
   render(<AccountsCard people={[ME]} />)
   await screen.findByRole('table', { name: 'Net-worth accounts' })
-  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+  fireEvent.submit(screen.getByRole('button', { name: 'Add account' }).closest('form')!)
 
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('Account name is required.')
@@ -995,6 +996,7 @@ it('keeps the grips parked until the reload a write started has landed — no dr
 
   // Saving an edit answers at once; the roster it changed is still on the wire.
   fireEvent.click(screen.getByRole('button', { name: 'Edit Fidelity HSA' }))
+  fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'Fidelity HSA (renamed)' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save account' }))
   await waitFor(() => expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(2))
   expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBe('true')

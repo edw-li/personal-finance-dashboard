@@ -354,7 +354,7 @@ it('toasts a refused kind change and leaves the row on its old kind', async () =
 it('renders a validation error inline with no Retry beside it (motion spec §9)', async () => {
   render(<CategoriesCard />)
   await screen.findByRole('table')
-  fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+  fireEvent.submit(screen.getByRole('button', { name: 'Add category' }).closest('form')!)
 
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('Category name is required.')
