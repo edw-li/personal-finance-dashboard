@@ -69,6 +69,7 @@ from app.services.calendar.generators.taxes import TaxFacts
 from app.services.calendar.ics import render
 from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.coverage import load_coverage
 from app.services.espp_calc import OfferingInfo, StoredPeriod
 from app.services.living_estimate import living_estimates
@@ -675,7 +676,10 @@ def _validated_amount(value: Decimal | None) -> Decimal | None:
 
 @router.post("/events", response_model=CustomEventOut, status_code=201)
 async def create_custom_event(
-    body: CustomEventIn, db: AsyncSession = Depends(get_db)
+    body: CustomEventIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CustomEventOut:
     row = CustomEvent(
         event_date=body.date,
@@ -688,34 +692,55 @@ async def create_custom_event(
         until=body.until,
     )
     db.add(row)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(row)
+    batch.label = f"Added calendar event {row.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return _custom_out(row)
 
 
 @router.patch("/events/{event_id}", response_model=CustomEventOut)
 async def update_custom_event(
-    event_id: int, body: CustomEventIn, db: AsyncSession = Depends(get_db)
+    event_id: int,
+    body: CustomEventIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> CustomEventOut:
     """Full replace — the form always submits every field. Whole-series edits only: a
     recurring row is one row, so this moves every occurrence at once (spec §2)."""
     row = await _get_custom_event(db, event_id)
-    row.person_id = await _validated_person_id(db, body.person_id)
+    person_id = await _validated_person_id(db, body.person_id)
+    amount = _validated_amount(body.amount)
+    before = row_image(row)
+    row.person_id = person_id
     row.event_date = body.date
     row.label = body.label
     row.detail = body.detail
-    row.amount = _validated_amount(body.amount)
+    row.amount = amount
     row.direction = body.direction
     row.recurrence = body.recurrence
     row.until = body.until
-    await db.commit()
+    batch.record_update(row, before)
+    batch.label = f"Edited calendar event {row.label}"
+    response.headers.update(batch_header(await batch.commit()))
     return _custom_out(row)
 
 
 @router.delete("/events/{event_id}", status_code=204)
-async def delete_custom_event(event_id: int, db: AsyncSession = Depends(get_db)) -> Response:
-    await db.delete(await _get_custom_event(db, event_id))
-    await db.commit()
-    return Response(status_code=204)
+async def delete_custom_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Imaged, so an Undo brings the row back under its id — and any override keyed
+    `custom:<id>:<date>`, which this leaves standing, matches it again."""
+    row = await _get_custom_event(db, event_id)
+    batch.record_delete(row)
+    batch.label = f"Deleted calendar event {row.label}"
+    await db.delete(row)
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 # --- 4. overrides: the user's edits on generated events (spec §13) ----------------------
