@@ -209,6 +209,21 @@ async def refuse_when_depended_on(db: AsyncSession, table: Table, image: dict[st
                 raise UndoRefused(409, DEPENDENT_REFUSAL)
 
 
+async def lock_parent[M](db: AsyncSession, model: type[M], pk: object) -> M | None:
+    """The row a delete with dependents removes, read FOR UPDATE: the delete's FIRST read
+    (2026-09-25 polish spec §6.1, lane L3c). A child row's foreign key takes FOR KEY SHARE on
+    its parent, which FOR UPDATE blocks: a child another tab writes while the delete runs waits
+    for it (and then fails its FK), and one already in flight makes this read wait, after which
+    the dependents' read sees it. Either way no child reaches the parent's DELETE unimaged, to
+    be removed or unlinked by the FK's ON DELETE. populate_existing: the image is the row as
+    locked, even in a session that already holds it.
+
+    Accepted: a writer that already holds the month-review table locks and then needs this row
+    (a month save racing the delete of its own account) can deadlock with the delete; Postgres
+    aborts one of the two, and neither is half-written."""
+    return await db.get(model, pk, with_for_update=True, populate_existing=True)
+
+
 async def _undo_links(db: AsyncSession) -> dict[UUID, UUID]:
     """Every Undo that went through, as the batch it reversed -> its own batch, read from the
     `undo` runs' reports. In run order, the first claim of a batch kept, so every reader walks

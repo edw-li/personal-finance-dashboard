@@ -40,7 +40,7 @@ from app.schemas.spending import (
 )
 from app.services import clock
 from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
-from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.changelog import ChangeBatch, batch_header, change_batch, lock_parent, row_image
 from app.services.metrics import average_evidence, category_amounts, category_comparison
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -153,8 +153,15 @@ async def create_category(
     return category
 
 
-async def _get_category(db: AsyncSession, category_id: int) -> SpendingCategory:
-    category = await db.get(SpendingCategory, category_id)
+async def _get_category(
+    db: AsyncSession, category_id: int, *, lock: bool = False
+) -> SpendingCategory:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    category = (
+        await lock_parent(db, SpendingCategory, category_id)
+        if lock
+        else await db.get(SpendingCategory, category_id)
+    )
     if category is None:
         raise HTTPException(status_code=404, detail="category not found")
     return category
@@ -216,8 +223,10 @@ async def delete_category(
     category goes first — reward categories' links nulled, the budget history deleted — each
     imaged through the ORM rather than left to the FKs' ON DELETE, then the category LAST, so
     an Undo (which replays in reverse) brings the category back first and then everything
-    that hung off it, ids included (2026-09-25 polish spec §6.1)."""
-    category = await _get_category(db, category_id)
+    that hung off it, ids included (2026-09-25 polish spec §6.1). The category is read FOR
+    UPDATE first, so a month row, budget or reward link another tab writes meanwhile waits
+    rather than leaving with the cascade unimaged."""
+    category = await _get_category(db, category_id, lock=True)
     row_count = (
         await db.execute(
             select(func.count())

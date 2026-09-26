@@ -26,7 +26,7 @@ from app.schemas.net_worth import (
 )
 from app.schemas.ordering import OrderIn
 from app.services import clock
-from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.changelog import ChangeBatch, batch_header, change_batch, lock_parent, row_image
 from app.services.money import mom_pct, require_first_of_month
 from app.services.month_review import load_review_book
 from app.services.month_writes import write_balances
@@ -231,8 +231,11 @@ async def create_account(
     return account
 
 
-async def _get_account(db: AsyncSession, account_id: int) -> Account:
-    account = await db.get(Account, account_id)
+async def _get_account(db: AsyncSession, account_id: int, *, lock: bool = False) -> Account:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    account = (
+        await lock_parent(db, Account, account_id) if lock else await db.get(Account, account_id)
+    )
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
     return account
@@ -316,8 +319,10 @@ async def delete_account(
     the account are nulled first — its components' parent_account_id and credit cards'
     account_id, the end state the FKs' SET NULL left — each imaged through the ORM, then the
     account LAST, so an Undo (which replays in reverse) brings the account back and relinks
-    them (2026-09-25 polish spec §6.1)."""
-    account = await _get_account(db, account_id)
+    them (2026-09-25 polish spec §6.1). The account is read FOR UPDATE first, so a balance,
+    component or card link another tab writes meanwhile waits rather than leaving with the
+    cascade unimaged."""
+    account = await _get_account(db, account_id, lock=True)
     balance_count = (
         await db.execute(
             select(func.count())

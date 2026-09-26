@@ -56,6 +56,7 @@ from app.services.changelog import (
     ChangeBatch,
     batch_header,
     change_batch,
+    lock_parent,
     row_image,
 )
 from app.services.day_labels import long_day
@@ -264,8 +265,13 @@ async def create_security(
     return security
 
 
-async def _get_security(db: AsyncSession, security_id: int) -> Security:
-    security = await db.get(Security, security_id)
+async def _get_security(db: AsyncSession, security_id: int, *, lock: bool = False) -> Security:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    security = (
+        await lock_parent(db, Security, security_id)
+        if lock
+        else await db.get(Security, security_id)
+    )
     if security is None:
         raise HTTPException(status_code=404, detail="security not found")
     return security
@@ -323,8 +329,10 @@ async def delete_security(
     ORM rather than left to ON DELETE CASCADE, then the security LAST, so an Undo (which
     replays in reverse) restores the security and then every row that hung off it, ids
     included. Accepted (spec §6.1): once the ticker is created again, that Undo refuses
-    (REPLAY_REFUSAL) — the ticker is taken."""
-    security = await _get_security(db, security_id)
+    (REPLAY_REFUSAL) — the ticker is taken. The security is read FOR UPDATE first, so a
+    transaction, dividend or price another tab or the refresh writes meanwhile waits rather than
+    leaving with the cascade unimaged."""
+    security = await _get_security(db, security_id, lock=True)
     txn_count = (
         await db.execute(
             select(func.count())

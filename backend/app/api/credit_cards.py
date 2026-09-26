@@ -45,7 +45,7 @@ from app.schemas.credit_cards import (
     RewardRatePut,
 )
 from app.schemas.ordering import OrderIn
-from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.changelog import ChangeBatch, batch_header, change_batch, lock_parent, row_image
 from app.services.day_labels import long_day
 from app.services.money import (
     MONEY_MAX_ABS_8_2,
@@ -117,8 +117,15 @@ def _reorder_label(
 # --- reward categories (matrix rows) ------------------------------------------------------
 
 
-async def _get_reward_category(db: AsyncSession, category_id: int) -> RewardCategory:
-    category = await db.get(RewardCategory, category_id)
+async def _get_reward_category(
+    db: AsyncSession, category_id: int, *, lock: bool = False
+) -> RewardCategory:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    category = (
+        await lock_parent(db, RewardCategory, category_id)
+        if lock
+        else await db.get(RewardCategory, category_id)
+    )
     if category is None:
         raise HTTPException(status_code=404, detail="reward category not found")
     return category
@@ -290,8 +297,10 @@ async def delete_reward_category(
 ) -> Response:
     """Deletes the row AND its matrix cells — the cells by their own explicit DELETEs, each
     imaged, so the Activity card's Undo restores them with the row. Unlike spending categories
-    there is no monthly history to orphan — cells are cheap to re-enter — so no guard."""
-    category = await _get_reward_category(db, category_id)
+    there is no monthly history to orphan — cells are cheap to re-enter — so no guard. The row
+    is read FOR UPDATE first, so no cell another tab adds meanwhile can leave with the cascade
+    unimaged."""
+    category = await _get_reward_category(db, category_id, lock=True)
     cells = (
         (
             await db.execute(
@@ -422,8 +431,9 @@ async def put_reward_rates(
 # --- cards --------------------------------------------------------------------------------
 
 
-async def _get_card(db: AsyncSession, card_id: int) -> CreditCard:
-    card = await db.get(CreditCard, card_id)
+async def _get_card(db: AsyncSession, card_id: int, *, lock: bool = False) -> CreditCard:
+    """`lock`: a dependent delete's first read, FOR UPDATE (changelog.lock_parent)."""
+    card = await lock_parent(db, CreditCard, card_id) if lock else await db.get(CreditCard, card_id)
     if card is None:
         raise HTTPException(status_code=404, detail="card not found")
     return card
@@ -649,8 +659,9 @@ async def delete_credit_card(
     card's Undo restores all of it with the same ids: the categories pinned to the card are
     unpinned first (updates to NULL), then its credits, cells and limit history go, and the
     card goes LAST — undo replays in reverse, so the card is back before anything that points
-    at it."""
-    card = await _get_card(db, card_id)
+    at it. The card is read FOR UPDATE first, so nothing another tab points at it meanwhile can
+    leave with the cascade unimaged."""
+    card = await _get_card(db, card_id, lock=True)
     pinned = (
         (
             await db.execute(
