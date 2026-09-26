@@ -2760,3 +2760,73 @@ formatted`.
 | pin test: four modules in LOGGED with every committing function | 1, 2, 3, 6 |
 | exempt entries | none in these four routers |
 | full suite `-n 4` green, ruff clean, "As built" | 7 |
+
+---
+
+## As built (2026-09-25)
+
+**Branch `feat/polish-undo-b`, cut from main @657e3d62. Seven commits, not pushed, not merged:**
+
+| Commit | Task |
+|---|---|
+| `b353f7cb` docs(plan): lane L3b — exact undo for the card, ESPP, paycheck and comp routers | plan |
+| `578f5afc` feat(comp): focal events and RSU grants are change-logged, and a delete undoes exactly | 1 |
+| `d44267ed` feat(espp): lots, purchase periods and offerings are change-logged, and a delete undoes exactly | 2 |
+| `401dbb30` feat(paycheck): profile writes are change-logged, and a delete undoes exactly | 3 |
+| `bca21353` feat(credit-cards): reward categories and the matrix save are change-logged; a category delete brings its cells back | 4 |
+| `c6b660df` feat(credit-cards): cards, credits and limit history are change-logged; a card delete undoes with its pins and children | 5 |
+| `ffe3dae3` feat(credit-cards): the card and reward-category reorders are change-logged, and their Undo waits for the list's lock | 6 |
+
+(plus this "As built" commit.)
+
+**The contract table above is what shipped, route for route** — all 32 committing functions (credit_cards 14, espp 9,
+comp 6, paycheck 3) record through their ChangeBatch, answer `X-Change-Batch` when they recorded a row and no header
+when they did not, and carry the labels in the table. Every label, op sequence and header is asserted by a test; so is
+the exact undo of every delete (rows compared through a Core SELECT before and after, ids included).
+
+**Gates (on `ffe3dae3`):**
+- Full backend suite, `FINANCE_TEST_DB=finance_test_l3b … pytest -n 4`: **2,781 passed, 4 skipped** in 91 s, exit 0
+  (baseline on 657e3d62: 2,747 passed, 4 skipped). No SQLAlchemy warnings in the log.
+- `ruff check app tests`: All checks passed. `ruff format --check app tests`: 309 files already formatted.
+- New tests: **34** — `test_changelog_comp.py` 6, `test_changelog_espp.py` 7, `test_changelog_paycheck.py` 3,
+  `test_changelog_credit_cards.py` 18. Existing tests changed, not added: `test_reorder_credit_cards_api.py` (2
+  assertions), `test_reorder_serialization.py` (the card race's 2 direct calls), `test_changelog_pin.py` (4 entries).
+- Every red run matched the plan's prediction: Task 1 `6 failed, 2 passed`; Task 2 `8 failed, 1 passed`; Task 3
+  `4 failed, 1 passed`; Task 4 `4 failed`; Task 5 `7 failed, 4 passed`; Task 6 `11 failed, 44 passed`.
+
+**Proofs recorded along the way:**
+- **The flush before a parent's DELETE is load-bearing (decision 5).** Each exact-undo test was run once with the flush
+  left out: the category delete emitted `DELETE FROM reward_categories` (statement 2) before `DELETE FROM reward_rates`
+  (statement 3), and the card delete emitted `DELETE FROM credit_cards` (8) before `DELETE FROM credit_limit_events`
+  (9) — the FK cascade was doing the work. With the flush both SQL-order assertions pass.
+- **Why the reorders had to be logged.** In Task 6's red run the two overlap tests failed with `200 == 409`: with the
+  reorder still unlogged, the older edit's Undo went through and put the row's old `sort_order` back — the silent move
+  the spec names. Logged, it is the overlap refusal.
+
+**Deviations from the code above (all cosmetic):**
+- `ruff format` re-wrapped three spots: the `RewardRate(… note="portal")` seed in the card-delete test (one keyword per
+  line), `sort_orders`' `select` (onto one line) and `delete_card_credit`'s label (the two f-strings joined — the line
+  fits 100 columns).
+- `test_the_label_names_whose_profile_when_two_share_a_date` compares the two labels as one list instead of two
+  wrapped asserts (one of those lines was 101 columns).
+- Task 6's predicted TypeError text was "takes 2 positional arguments"; Python's actual wording is "takes from 1 to 2
+  positional arguments but 4 were given" (the old `db` had a default).
+
+**Files outside the four routers (both in the plan's decisions 7 and 8):**
+- `backend/app/services/ordering.py` — `LOGGED_LISTS = (*ORDERED_LISTS, CreditCard, RewardCategory)`;
+  `order_locks_for` walks it. `ORDERED_LISTS` (the importer's three) is unchanged.
+- `backend/app/services/changelog.py` — one comment (names `LOGGED_LISTS`); no code change.
+
+**For the coordinator and the wave-2 lanes:**
+- `tests/test_changelog_pin.py`: my four modules sit at the TOP of `LOGGED` (before `net_worth.py`), so L3a's entries
+  should merge as a disjoint hunk; union both.
+- `tests/test_reorder_serialization.py`: only `test_a_card_created_during_a_reorder_lands_after_it_not_on_its_numbers`
+  changed (lines ~145–152), away from the ledger race L3a may touch.
+- `tests/changelog_asserts.py` is new and lane-local in name; L3a's helpers, if any, should not collide.
+- L4/L7: every delete client in C2's list for these routers (`deleteCreditCard`, `deleteCardCredit`,
+  `deleteLimitEvent`, `deleteRewardCategory`, `deleteLot`, `deleteOffering`, `deletePeriod`, `deleteProfile`,
+  `deleteEvent`, `deleteRsuGrant`) now gets a batch id; `updateCreditCardLogged` / `updateRewardCategoryLogged` get
+  one from the PATCHes. The card page's re-create Undo can retire. The two reorder clients' own "re-send the previous
+  order" Undo still works (it is simply another logged reorder).
+
+**Nothing in scope left undone.** Out of this lane: the Activity card's ⓘ copy listing the new kinds (frontend).
