@@ -114,7 +114,7 @@ it('re-seeds the boxes from the PUT response, not from what was typed', async ()
       '$24,111.00',
     ),
   )
-  expect(screen.getByText('Saved.')).toBeTruthy()
+  expect(screen.getByText(/^Saved/)).toBeTruthy()
 })
 
 it('freezes the year chips while a save is in flight', async () => {
@@ -123,6 +123,7 @@ it('freezes the year chips while a save is in flight', async () => {
   render(<LimitsCard />)
   await screen.findByLabelText('401(k) elective deferral')
 
+  fireEvent.change(screen.getByLabelText('401(k) elective deferral'), { target: { value: '25000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save limits' }))
 
   // A chip pressed here would refetch the new year AND then let the in-flight PUT's echo
@@ -153,7 +154,7 @@ it('clones from the prior year and shows the cloned values', async () => {
   )
 })
 
-it('surfaces a 409 clone as a toast and leaves the boxes alone', async () => {
+it('surfaces a 409 clone beside its action and leaves the boxes alone', async () => {
   vi.mocked(cloneLimits).mockRejectedValue(
     new ApiError(`${YEAR} already has 2 contribution limits`, 409),
   )
@@ -167,7 +168,7 @@ it('surfaces a 409 clone as a toast and leaves the boxes alone', async () => {
   fireEvent.click(screen.getByRole('button', { name: `Clone from ${YEAR - 1}` }))
 
   const toast = await screen.findByText(`${YEAR} already has 2 contribution limits`)
-  expect(toast.className).toBe('toast-message')
+  expect(toast.getAttribute('role')).toBe('alert')
   expect((screen.getByLabelText('401(k) elective deferral') as HTMLInputElement).value).toBe(
     '$24,500.00',
   )
@@ -178,6 +179,7 @@ it('banners a save 422 verbatim', async () => {
   render(<LimitsCard />)
   await screen.findByLabelText('401(k) elective deferral')
 
+  fireEvent.change(screen.getByLabelText('401(k) elective deferral'), { target: { value: '25000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save limits' }))
 
   expect(await screen.findByText('limit_hsa_self must be positive')).toBeTruthy()
@@ -213,10 +215,34 @@ it('renders a refused save inline with no Retry beside it (motion spec §9)', as
   vi.mocked(putLimits).mockRejectedValue(new ApiError('limit must be positive', 422))
   render(<LimitsCard />)
   await screen.findByLabelText('401(k) elective deferral')
+  fireEvent.change(screen.getByLabelText('401(k) elective deferral'), { target: { value: '25000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save limits' }))
 
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('limit must be positive')
   // Retry re-runs the FETCH — it cannot fix a write the server refused.
   expect(within(alert).queryByRole('button')).toBeNull()
+})
+
+
+it('keeps the saved form quiet without removing its Save control from the tab order', async () => {
+  render(<LimitsCard />)
+  const save = await screen.findByRole('button', { name: 'Save limits' })
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  expect(save.hasAttribute('disabled')).toBe(false)
+})
+
+it('shows busy only on Clone and holds its Save sibling without changing its label', async () => {
+  const pending = deferred<LimitsOut>()
+  vi.mocked(cloneLimits).mockReturnValueOnce(pending.promise)
+  render(<LimitsCard />)
+  const save = await screen.findByRole('button', { name: 'Save limits' })
+  const clone = screen.getByRole('button', { name: `Clone from ${YEAR - 1}` })
+  clone.focus()
+  fireEvent.click(clone)
+  expect(clone.getAttribute('aria-busy')).toBe('true')
+  expect(save.getAttribute('aria-busy')).toBeNull()
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  expect(document.activeElement).toBe(clone)
+  await act(async () => pending.resolve(payload(YEAR)))
 })

@@ -7,6 +7,11 @@ import {
 } from '../../api/assistant'
 import type { AssistantModelsOut, AssistantSettingsOut } from '../../types/api'
 import InfoHint from '../InfoHint'
+import { useConfirm } from '../feedback/confirm'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
@@ -39,15 +44,17 @@ export default function AssistantCard() {
   // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
   const [keyBox, setKeyBox] = useState('')
   const [modelBox, setModelBox] = useState('kimi-k3')
-  const [busy, setBusy] = useState(false)
-  const [savedNote, setSavedNote] = useState(false)
+  const saveState = useSaveState({ dirty: keyBox.trim() !== '' || (settings !== null && modelBox !== settings.default_model) })
+  const removeState = useSaveState({ dirty: false })
+  const busy = saveState.status === 'saving' || removeState.status === 'saving'
   const [probe, setProbe] = useState<AssistantModelsOut | null>(null)
   const [probing, setProbing] = useState(false)
   const [probeError, setProbeError] = useState<string | null>(null)
   const seqRef = useRef(0)
+  const saveRef = useRef<HTMLButtonElement>(null)
+  const ask = useConfirm()
 
   // What a payload seeds, applied from the two WRITE echoes. The load chain below spells
   // the same three setters out instead of calling this: a component-scope helper would make
@@ -90,31 +97,24 @@ export default function AssistantCard() {
     if (keyBox.trim() !== '') body.api_key = keyBox.trim()
     if (modelBox !== settings.default_model) body.default_model = modelBox
     if (Object.keys(body).length === 0) return
-    setBusy(true)
-    setFormError(null)
-    setSavedNote(false)
-    putAssistantSettings(body)
-      .then((payload) => {
-        adopt(payload)
-        setSavedNote(true)
-        setProbe(null) // a new key invalidates the last probe's verdict
-      })
-      .catch((err: unknown) => setFormError(message(err, 'Could not save assistant settings.')))
-      .finally(() => setBusy(false))
+    void saveState.run(async () => {
+      adopt(await putAssistantSettings(body))
+      setProbe(null)
+    })
   }
 
-  const removeOverride = () => {
-    setBusy(true)
-    setFormError(null)
-    setSavedNote(false)
-    putAssistantSettings({ api_key: null })
-      .then((payload) => {
-        adopt(payload)
-        setSavedNote(true)
-        setProbe(null)
-      })
-      .catch((err: unknown) => setFormError(message(err, 'Could not remove the saved key.')))
-      .finally(() => setBusy(false))
+  const removeOverride = async (anchor: HTMLElement) => {
+    if (!await ask({
+      anchor,
+      title: 'Remove the saved assistant key?',
+      body: "The saved key is removed permanently. The assistant falls back to the server's environment key if one is configured — this can't be undone.",
+      confirmLabel: 'Remove key',
+    })) return
+    await removeState.run(async () => {
+      adopt(await putAssistantSettings({ api_key: null }))
+      setProbe(null)
+      saveRef.current?.focus()
+    })
   }
 
   const testKey = () => {
@@ -129,7 +129,7 @@ export default function AssistantCard() {
   const key = settings?.key ?? null
 
   return (
-    <section className="card span-6" id="assistant" role="region" aria-label="Assistant">
+    <section className="card span-12" id="assistant" role="region" aria-label="Assistant">
       <h2 className="eyebrow">
         Assistant
         <InfoHint text="The ✦ assistant is powered by NVIDIA's API catalog under your key. .env's NVIDIA_API_KEY is the baseline; a key saved here overrides it." />
@@ -145,6 +145,7 @@ export default function AssistantCard() {
           className="settings-card-form"
           onSubmit={(event) => {
             event.preventDefault()
+            saveRef.current?.focus()
             save()
           }}
         >
@@ -162,14 +163,15 @@ export default function AssistantCard() {
               disabled={busy}
               onChange={(event) => {
                 setKeyBox(event.target.value)
-                setSavedNote(false)
+                saveState.clearError()
+                removeState.clearError()
               }}
             />
           </label>
           {key.source === 'override' && (
-            <button type="button" className="button" disabled={busy} onClick={removeOverride}>
+            <BusyButton type="button" className="button" busy={removeState.status === 'saving'} inert={saveState.status === 'saving'} onClick={(event) => void removeOverride(event.currentTarget)}>
               Remove saved key
-            </button>
+            </BusyButton>
           )}
           {key.source === 'override' && (
             <p className="settings-note">
@@ -185,7 +187,8 @@ export default function AssistantCard() {
               disabled={busy}
               onChange={(event) => {
                 setModelBox(event.target.value)
-                setSavedNote(false)
+                saveState.clearError()
+                removeState.clearError()
               }}
             >
               {MODEL_OPTIONS.map((option) => (
@@ -201,24 +204,19 @@ export default function AssistantCard() {
             home for the key is the server&apos;s <code>.env</code>.
           </p>
           <div className="settings-card-actions">
-            <button type="submit" className="button button-primary" disabled={busy}>
-              {busy ? 'Saving…' : 'Save assistant settings'}
-            </button>
-            <button
+            <SaveButton ref={saveRef} type="submit" className="button button-primary" state={saveState} aria-disabled={removeState.status === 'saving'}>Save assistant settings</SaveButton>
+            <SaveStatus state={saveState} />
+            <BusyButton
               type="button"
               className="button"
-              disabled={probing || !key.configured}
+              busy={probing}
+              inert={busy || !key.configured}
               onClick={testKey}
             >
-              {probing ? 'Testing…' : 'Test key'}
-            </button>
+              Test key
+            </BusyButton>
+            <SaveStatus state={removeState} />
           </div>
-          <FeedBanner error={formError} />
-          {savedNote && (
-            <p className="settings-note" role="status">
-              Saved.
-            </p>
-          )}
           <FeedBanner error={probeError} />
           {probe !== null && (
             <div role="status">

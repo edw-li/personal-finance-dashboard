@@ -168,7 +168,7 @@ export default function BackupsCard({ revision = 0 }: { revision?: number } = {}
   )
 
   return (
-    <section className="card span-6" id="backups" role="region" aria-label="Backups & snapshots">
+    <section className="card span-12" id="backups" role="region" aria-label="Backups & snapshots">
       <h2 className="eyebrow">
         Backups &amp; snapshots
         <InfoHint text="Nightly at 23:30 PT the app writes its own export ZIP to the data volume and keeps the newest fourteen; each can be restored from the Restore card. Snapshot now writes one immediately. Every restore and import first saves a restore point of the data it replaces — download it or restore it here. The host's database dump is separate and described on the System card." />

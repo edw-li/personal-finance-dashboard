@@ -3,8 +3,13 @@ import { ApiError } from '../../api/client'
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import { fetchSystemStatus } from '../../api/system'
 import type { SystemStatus } from '../../types/api'
-import { formatDateTime } from '../../utils/format'
+import { formatDateTime, localDateKey } from '../../utils/format'
+import { todayIso } from '../../utils/months'
 import InfoHint from '../InfoHint'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 import { FeedBanner } from '../shell/Feed'
 import { usePriceRefresh } from '../usePriceRefresh'
 import '../panels.css'
@@ -23,18 +28,16 @@ function refreshLine(status: SystemStatus): string {
   }`
 }
 
-function refreshRunsLine(status: SystemStatus): string {
-  const runs = status.refresh_runs ?? []
-  if (runs.length === 0) return '—'
-  return runs
-    .slice(0, 5)
-    .map(
-      (run) =>
-        `${formatDateTime(run.at)} ${run.updated} updated${
-          run.failed_count > 0 ? `, ${run.failed_count} failed` : ''
-        }`,
-    )
-    .join(' · ')
+function RefreshRuns({ status }: { status: SystemStatus }) {
+  const runs = (status.refresh_runs ?? []).slice(0, 5)
+  if (runs.length === 0) return <>—</>
+  return <ul className="system-fact-list">{runs.map((run, index) => (
+    <li key={`${run.at}:${index}`} className={run.failed_count > 0 ? 'system-overdue' : undefined}>
+      {localDateKey(run.at) === todayIso()
+        ? `Today ${new Date(run.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+        : formatDateTime(run.at)} · {run.updated} updated{run.failed_count > 0 ? ` · ${run.failed_count} failed` : ''}
+    </li>
+  ))}</ul>
 }
 
 /**
@@ -47,9 +50,9 @@ export default function PriceRefreshCard() {
   const [status, setStatus] = useState<SystemStatus | null>(null)
   const [cronBox, setCronBox] = useState('')
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [savedNote, setSavedNote] = useState(false)
+  const [savedCron, setSavedCron] = useState('')
+  const saveState = useSaveState({ dirty: cronBox !== savedCron })
+  const saving = saveState.status === 'saving'
   const seqRef = useRef(0)
   const { refreshing, note, error: refreshError, refresh } = usePriceRefresh()
 
@@ -82,6 +85,7 @@ export default function PriceRefreshCard() {
         if (seq !== seqRef.current) return
         setStatus(current)
         setCronBox(stored.price_refresh_cron)
+        setSavedCron(stored.price_refresh_cron)
         setLoadError(null)
       })
       .catch((err: unknown) => {
@@ -95,30 +99,15 @@ export default function PriceRefreshCard() {
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
-  const save = () => {
-    setSaving(true)
-    setFormError(null)
-    setSavedNote(false)
-    // The cron ALONE (spec §3.5): this card shows no other field, and a full form would revert
-    // whatever Plan assumptions or Calendar feed saved a minute ago.
-    putAppSettings({ price_refresh_cron: cronBox })
-      .then((saved) => {
-        // Re-seeded from the RESPONSE (the server strips it), and the facts are re-read because
-        // the save hot-applies the schedule — "Next scheduled run" has just moved.
-        setCronBox(saved.price_refresh_cron)
-        setSavedNote(true)
-        // The FACTS, not the whole card: the box is already re-seeded from this very response,
-        // and a second GET /settings behind every save would only be a second opinion on it.
-        loadStatus()
-      })
-      .catch((err: unknown) => {
-        setFormError(err instanceof ApiError ? err.message : 'Could not save the schedule.')
-      })
-      .finally(() => setSaving(false))
-  }
+  const save = () => void saveState.run(async () => {
+    const saved = await putAppSettings({ price_refresh_cron: cronBox })
+    setCronBox(saved.price_refresh_cron)
+    setSavedCron(saved.price_refresh_cron)
+    await loadStatus()
+  })
 
   return (
-    <section className="card span-6" id="price-refresh" role="region" aria-label="Price refresh">
+    <section className="card span-12" id="price-refresh" role="region" aria-label="Price refresh">
       <h2 className="eyebrow">
         Price refresh
         <InfoHint text="5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied to the live schedule on save. Must not fire more often than hourly. The Monday run also records the weekly performance point — keep Mondays covered." />
@@ -133,6 +122,7 @@ export default function PriceRefreshCard() {
           className="settings-card-form"
           onSubmit={(e) => {
             e.preventDefault()
+            e.currentTarget.querySelector<HTMLButtonElement>('button[type="submit"]')?.focus()
             save()
           }}
         >
@@ -147,31 +137,23 @@ export default function PriceRefreshCard() {
                 setCronBox(e.target.value)
                 // Every keystroke retires both sentences: they describe the value that WAS in
                 // the box (the settings family's rule).
-                setSavedNote(false)
-                setFormError(null)
+                saveState.clearError()
               }}
             />
           </label>
           <div className="settings-card-actions">
-            <button type="submit" className="button button-primary" disabled={saving}>
-              {saving ? 'Saving…' : 'Save schedule'}
-            </button>
-            <button
+            <SaveButton type="submit" className="button button-primary" state={saveState}>Save schedule</SaveButton>
+            <SaveStatus state={saveState} />
+            <BusyButton
               type="button"
               className="button"
-              disabled={refreshing}
+              busy={refreshing}
               onClick={() => refresh({ after: loadStatus })}
             >
-              {refreshing ? 'Refreshing…' : 'Refresh now'}
-            </button>
+              Refresh now
+            </BusyButton>
           </div>
-          <FeedBanner error={formError} />
           <FeedBanner error={refreshError} />
-          {savedNote && (
-            <p className="settings-note" role="status">
-              Saved — the schedule is applied immediately.
-            </p>
-          )}
           {note.text !== '' && (
             <p className="settings-note" role="status" title={note.detail || undefined}>
               {note.text}
@@ -197,7 +179,7 @@ export default function PriceRefreshCard() {
           </div>
           <div className="system-fact">
             <dt>Recent refreshes</dt>
-            <dd>{refreshRunsLine(status)}</dd>
+            <dd><RefreshRuns status={status} /></dd>
           </div>
         </dl>
       )}

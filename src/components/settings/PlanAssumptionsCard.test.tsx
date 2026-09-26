@@ -152,11 +152,11 @@ describe('PlanAssumptionsCard', () => {
       espp_ticker: 'msft',
       espp_discount_pct: '0.1',
     })
-    expect(await screen.findByText('Saved.')).toBeTruthy()
+    expect(await screen.findByText(/^Saved/)).toBeTruthy()
 
     // The sentence is about the values that WERE saved — the next keystroke moves on.
     type(box('ESPP ticker'), 'nvda')
-    expect(screen.queryByText('Saved.')).toBeNull()
+    expect(screen.queryByText(/^Saved/)).toBeNull()
   })
 
   it('re-seeds the boxes from the PUT RESPONSE, not from what was typed', async () => {
@@ -216,7 +216,7 @@ describe('PlanAssumptionsCard', () => {
     // Absent, not null: under the partial PUT an absent key keeps the stored year.
     expect(Object.keys(body)).not.toContain('plan_until_year')
     expect(body.swr_pct).toBe('0.035')
-    expect(await screen.findByText('Saved.')).toBeTruthy()
+    expect(await screen.findByText(/^Saved/)).toBeTruthy()
   })
 
   it('sends plan_until_year: null EXPLICITLY when the box is emptied — the clear', async () => {
@@ -251,7 +251,7 @@ describe('PlanAssumptionsCard', () => {
     fireEvent.click(save())
     await waitFor(() => expect(putAppSettings).toHaveBeenCalledTimes(1))
     expect(vi.mocked(putAppSettings).mock.calls[0][0].plan_until_year).toBe(2027)
-    await screen.findByText('Saved.')
+    await screen.findByText(/^Saved/)
 
     type(box('Plan until (year)'), ' 2085 ')
     fireEvent.click(save())
@@ -311,7 +311,7 @@ describe('PlanAssumptionsCard', () => {
     // Form-level on purpose: the ticker 422 is NOT field-prefixed, so there is nothing
     // reliable to map the message onto a single box with.
     expect(await screen.findByText(detail)).toBeTruthy()
-    expect(screen.queryByText('Saved.')).toBeNull()
+    expect(screen.queryByText(/^Saved/)).toBeNull()
   })
 
   it('banners a failed load and refetches on Retry, offering no form to save', async () => {
@@ -330,4 +330,12 @@ describe('PlanAssumptionsCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading the plan assumptions' }))
     expect(await screen.findByLabelText('ESPP ticker')).toBeTruthy()
   })
+})
+
+
+it('keeps the saved form quiet without removing its Save control from the tab order', async () => {
+  mount()
+  const save = await screen.findByRole('button', { name: 'Save assumptions' })
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  expect(save.hasAttribute('disabled')).toBe(false)
 })

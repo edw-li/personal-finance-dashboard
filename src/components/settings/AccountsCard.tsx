@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, describeError, errorDetail } from '../../api/client'
 import { undoBatch } from '../../api/lifecycle'
 import {
@@ -7,16 +7,22 @@ import {
   fetchAccounts,
   reorderAccounts,
   updateAccount,
+  updateAccountLogged,
 } from '../../api/netWorth'
-import { fetchPortfolioAccounts, patchPortfolioAccount } from '../../api/portfolio'
 import { GROUP_LABELS, GROUP_ORDER } from '../../charts/theme'
 import type {
   AccountGroup,
   AccountOut,
   PersonOut,
-  PortfolioAccountOut,
 } from '../../types/api'
 import InfoHint from '../InfoHint'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { flashElement, revealEditor, revealRow, useEscapeCancel } from '../feedback/reveal'
+import { useLatest } from '../reorder/useLatest'
 import DragHandle from '../reorder/DragHandle'
 import {
   ORDER_RESTORED,
@@ -64,10 +70,6 @@ const PARENT_NEEDS_COMPONENT =
 // grip · Account · Owner · Roll-up · Status · actions — a group heading spans all six.
 const ROSTER_COLUMNS = 6
 
-function message(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback
-}
-
 /**
  * The Settings Accounts card (2026-08-26 spec §6): the roster manager the app has never
  * had. The backend CRUD has existed since Plan 3 with no caller, which is exactly why
@@ -84,7 +86,6 @@ function message(err: unknown, fallback: string): string {
 export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [accounts, setAccounts] = useState<AccountOut[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [settled, setSettled] = useState(false) // both mount fetches answered, either way
   // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -100,18 +101,39 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [pendingOrder, setPendingOrder] = useState<AccountOut[] | null>(null)
   const [lastAccounts, setLastAccounts] = useState(accounts)
   const seqRef = useRef(0)
-  // The portfolio labels get their OWN fetch, error slot, busy flag and seq guard —
-  // deliberately not folded into the roster's above. Two tables from two routers, and one
-  // being down must not empty the other (SystemCard's per-card posture).
-  const [portfolioAccounts, setPortfolioAccounts] = useState<PortfolioAccountOut[]>([])
-  const [portfolioLoaded, setPortfolioLoaded] = useState(false)
-  const [portfolioError, setPortfolioError] = useState<string | null>(null)
-  // The roster's loadError/formError split, for the second feed: a retag the server
-  // REFUSED is not fixed by asking for the labels again (2026-09-05 motion spec §9).
-  const [portfolioFormError, setPortfolioFormError] = useState<string | null>(null)
-  const [portfolioBusy, setPortfolioBusy] = useState(false)
-  const portfolioSeqRef = useRef(0)
+  const storedAccount = accounts.find((row) => row.id === editingId)
+  const savedForm = storedAccount === undefined ? EMPTY_ACCOUNT : {
+    name: storedAccount.name,
+    group: storedAccount.group,
+    person_id: storedAccount.person_id === null ? '' : String(storedAccount.person_id),
+    parent_account_id: storedAccount.parent_account_id === null ? '' : String(storedAccount.parent_account_id),
+    is_component: storedAccount.is_component,
+  }
+  const saveState = useSaveState({ dirty: JSON.stringify(form) !== JSON.stringify(savedForm) })
   const toast = useToast()
+  const formRef = useRef<HTMLFormElement>(null)
+  const revealRequested = useRef(false)
+  const landingId = useRef<number | null>(null)
+  const [rowUpdates, setRowUpdates] = useState<Record<number, Partial<AccountOut>>>({})
+  const deleteWithUndo = useDeleteWithUndo()
+  const findRow = (id: number) => document.querySelector<HTMLElement>(`#accounts [data-settings-row="${id}"]`)
+
+  useLayoutEffect(() => {
+    if (!revealRequested.current) return
+    revealRequested.current = false
+    revealEditor(formRef.current, 'input')
+  })
+  useLayoutEffect(() => {
+    if (busy || landingId.current === null) return
+    const row = findRow(landingId.current)
+    if (row === null) return
+    landingId.current = null
+    revealRow(row)
+    flashElement(row)
+    // Single-add lists hand focus to the row; the page follows if its inner scroller is offscreen.
+    row.querySelector<HTMLButtonElement>('[data-edit]')?.focus()
+  }, [accounts, busy])
+
 
   if (lastAccounts !== accounts) {
     setLastAccounts(accounts)
@@ -136,51 +158,22 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       })
   }
 
-  const loadPortfolio = (initial = false) => {
-    const seq = ++portfolioSeqRef.current
-    return warmSource(initial)(WARM.portfolioAccounts, fetchPortfolioAccounts)
-      .then((rows) => {
-        if (seq !== portfolioSeqRef.current) return
-        setPortfolioAccounts(rows)
-        setPortfolioError(null)
-        setPortfolioLoaded(true)
-      })
-      .catch((err: unknown) => {
-        if (seq !== portfolioSeqRef.current) return
-        setPortfolioError(describeError(err, 'the portfolio accounts'))
-      })
-  }
-
-  // ON CHANGE, one field on the wire — the card's toggleActive idiom. person_id is the only
-  // column this control owns (labels are immutable server-side this batch), and the value
-  // travels EXPLICITLY: an omitted key means "leave the owner alone", so clearing the
-  // select has to send null on purpose.
-  const retagPortfolioAccount = (account: PortfolioAccountOut, value: string) => {
-    setPortfolioBusy(true)
-    setPortfolioFormError(null)
-    patchPortfolioAccount(account.id, { person_id: value === '' ? null : Number(value) })
-      .then(() => loadPortfolio())
-      .catch((err: unknown) => setPortfolioFormError(message(err, 'Could not retag the account.')))
-      .finally(() => setPortfolioBusy(false))
-  }
-
   useEffect(() => {
-    // ONE render when both feeds have SETTLED (2026-09-13 spec §9): the card used to grow twice —
-    // the roster landing 76ms before the portfolio labels pushed the second table 1118px down the
-    // page (audit S-5). Settled, not fulfilled: a feed that failed still lets the other render.
-    void Promise.allSettled([load(true), loadPortfolio(true)]).then(() => setSettled(true))
-    // mount-only: two plain functions over stable setters (house idiom)
+    load(true)
   }, [])
 
   const setText =
     (field: 'name' | 'person_id' | 'parent_account_id') => (value: string) => {
       setForm((f) => ({ ...f, [field]: value }))
       setFormError(null)
+      saveState.clearError()
     }
 
   const startEdit = (account: AccountOut) => {
+    revealRequested.current = true
     setEditingId(account.id)
     setFormError(null)
+    saveState.clearError()
     setForm({
       name: account.name,
       group: account.group,
@@ -192,22 +185,30 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   }
 
   const cancelEdit = () => {
+    if (editingId !== null) findRow(editingId)?.querySelector<HTMLButtonElement>('[data-edit]')?.focus()
     setEditingId(null)
     setForm(EMPTY_ACCOUNT)
+    setFormError(null)
+    saveState.clearError()
   }
+  useEscapeCancel(formRef, cancelEdit, editingId !== null)
+  const latest = useLatest({ editingId, cancelEdit, load, rows: accounts })
 
   const submit = () => {
     const name = form.name.trim()
     if (!name) {
       setFormError('Account name is required.')
+      revealEditor(formRef.current, 'input')
       return
     }
     if (form.is_component && form.parent_account_id === '') {
       setFormError(COMPONENT_NEEDS_PARENT)
+      revealEditor(formRef.current, 'select[name="parent_account_id"]')
       return
     }
     if (!form.is_component && form.parent_account_id !== '') {
       setFormError(PARENT_NEEDS_COMPONENT)
+      revealEditor(formRef.current, 'input[type="checkbox"]')
       return
     }
     // ALL FIVE keys, every time: a blank owner or parent must CLEAR the column, and PATCH
@@ -223,40 +224,67 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       parent_account_id: form.parent_account_id === '' ? null : Number(form.parent_account_id),
     }
     setFormError(null)
-    const request = editingId !== null ? updateAccount(editingId, body) : createAccount(body)
-    void track(() =>
-      request
-        .then(() => {
-          cancelEdit()
-          return load()
-        })
-        .catch((err: unknown) => setFormError(message(err, 'Save failed'))),
-    )
+    saveState.clearError()
+    void saveState.run(() => track(async () => {
+      const saved = await (editingId !== null ? updateAccount(editingId, body) : createAccount(body))
+      landingId.current = saved.id
+      setEditingId(null)
+      setForm(EMPTY_ACCOUNT)
+      await load()
+    }))
   }
 
-  // ONLY is_active on the wire: every other column is untouched here, and sending the
-  // whole row back would let a stale render overwrite a concurrent edit (CardsPanel's rule).
-  const toggleActive = (account: AccountOut) => {
-    setFormError(null)
-    void track(() =>
-      updateAccount(account.id, { is_active: !account.is_active })
-        .then(() => load())
-        .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
-    )
+  // One-click changes draw at once. Grips wait for the reload; only this row's controls wait.
+  const changeRow = (account: AccountOut, patch: Partial<AccountOut>, label: string) => {
+    if (rowUpdates[account.id] !== undefined) return
+    setRowUpdates((current) => ({ ...current, [account.id]: patch }))
+    void track(async () => {
+      try {
+        const { batchId } = await updateAccountLogged(account.id, patch)
+        await latest.current.load()
+        toast.success(label, batchId === null ? undefined : { action: { label: 'Undo', onAction: () => {
+          void track(async () => {
+            try {
+              await undoBatch(batchId)
+              landingId.current = account.id
+              await latest.current.load()
+              toast.success(`Restored ${account.name}`)
+            } catch (err) {
+              toast.error(errorDetail(err))
+              findRow(account.id)?.querySelector<HTMLButtonElement>('[data-edit]')?.focus()
+            }
+          })
+        } } })
+      } catch (err) {
+        toast.error(errorDetail(err))
+      } finally {
+        setRowUpdates((current) => { const next = { ...current }; delete next[account.id]; return next })
+      }
+    })
   }
+
+  const toggleActive = (account: AccountOut) => changeRow(
+    account, { is_active: !account.is_active }, `${account.is_active ? 'Retired' : 'Restored'} ${account.name}`,
+  )
 
   const remove = (account: AccountOut) => {
-    // The guard sentence belongs to the SERVER ("account has N balance rows — deactivate it
-    // instead") and it is about a row far down the table, so it rides the toast layer
-    // rather than the form-level banner above the form.
-    void track(() =>
-      deleteAccount(account.id)
-        .then(() => {
-          if (account.id === editingId) cancelEdit()
-          return load()
-        })
-        .catch((err: unknown) => toast.error(message(err, 'Delete failed'))),
-    )
+    const rows = [...document.querySelectorAll<HTMLElement>('#accounts [data-settings-row]')]
+    const index = rows.findIndex((row) => row === findRow(account.id))
+    const neighbour = rows[index + 1] ?? rows[index - 1]
+    void track(() => deleteWithUndo({
+      name: `account ${account.name}`,
+      row: findRow(account.id),
+      request: () => deleteAccount(account.id),
+      onDeleted: async () => {
+        if (latest.current.editingId === account.id) latest.current.cancelEdit()
+        await latest.current.load()
+      },
+      focusAfter: () => neighbour?.isConnected
+        ? neighbour.querySelector<HTMLButtonElement>('[data-delete]')
+        : formRef.current?.querySelector<HTMLInputElement>('input') ?? null,
+      onRestored: () => latest.current.load(),
+      restoredRow: () => findRow(account.id),
+    }))
   }
 
   const ownerName = new Map(people.map((p) => [p.id, p.name]))
@@ -315,14 +343,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // An account may not parent itself (the server 422s it); leaving it out of the select
   // means the UI never offers the mistake.
   const parentOptions = accounts.filter((a) => a.id !== editingId)
-  // Named in the hint below: the get-or-create on a new transaction label owns it to the
-  // primary person, and this table is the only place that can be undone.
-  const primaryName = people.find((p) => p.is_primary)?.name ?? 'the primary person'
-
   // What the table draws: the dropped order while its save is in flight, else the server's —
   // grouped the way the Monthly update walks it, and the hook's items derived from exactly those
   // rows every render (./accountsRoster.ts).
-  const shown = pendingOrder ?? accounts
+  const shown = (pendingOrder ?? accounts).map((row) => ({ ...row, ...rowUpdates[row.id] }))
   const groups = rosterGroups(shown)
   const items = rosterItems(groups)
 
@@ -411,17 +435,20 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
 
   // A lifted row holds the roster: the row buttons wait for the drop, as they wait for a request
   // (spec §2.3) — an Edit or a Delete must not land on a row that is in the air.
-  const locked = busy || reorder.active
+  const locked = (busy && Object.keys(rowUpdates).length === 0) || reorder.active
 
   /** One roster row. `nested` rows are components drawn under their parent: panels.css's
    *  `.component-row` register, with the indent moved to the Account cell (settings.css). */
   const rosterRow = (account: AccountOut, nested: boolean) => {
+    const rowLocked = locked || rowUpdates[account.id] !== undefined
     const classes = [nested ? 'component-row' : null, account.id === editingId ? 'is-editing' : null]
       .filter((name) => name !== null)
       .join(' ')
     return (
       <tr
         key={account.id}
+        data-settings-row={account.id}
+        aria-current={account.id === editingId ? true : undefined}
         className={classes === '' ? undefined : classes}
         {...reorder.itemProps(account.id)}
       >
@@ -442,33 +469,35 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
           <span className="badge">{account.is_active ? 'Active' : 'Retired'}</span>
         </td>
         <td className="row-actions">
-          <button
+          <BusyButton
             type="button"
             className="button"
+            data-edit
             aria-label={`Edit ${account.name}`}
-            disabled={locked}
+            inert={rowLocked}
             onClick={() => startEdit(account)}
           >
             Edit
-          </button>
-          <button
+          </BusyButton>
+          <BusyButton
             type="button"
             className="button"
             aria-label={account.is_active ? `Retire ${account.name}` : `Restore ${account.name}`}
-            disabled={locked}
+            inert={rowLocked}
             onClick={() => toggleActive(account)}
           >
             {account.is_active ? 'Retire' : 'Restore'}
-          </button>
-          <button
+          </BusyButton>
+          <BusyButton
             type="button"
             className="button"
+            data-delete
             aria-label={`Delete ${account.name}`}
-            disabled={locked}
+            inert={rowLocked}
             onClick={() => remove(account)}
           >
             Delete
-          </button>
+          </BusyButton>
         </td>
       </tr>
     )
@@ -481,10 +510,11 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key. Drag a row by its grip to reorder accounts within their group; a parent brings its components with it." />
       </h2>
       <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the accounts" />
-      {!settled && <SettingsGhost height={1114} />}
-      {settled && loaded && (
+      {!loaded && loadError === null && <SettingsGhost height={1114} />}
+      {loaded && (
         <>
           <form
+            ref={formRef}
             className="accounts-form"
             onSubmit={(e) => {
               e.preventDefault()
@@ -504,9 +534,11 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
               <select
                 className="field-input"
                 value={form.group}
-                onChange={(e) =>
+                onChange={(e) => {
                   setForm((f) => ({ ...f, group: e.target.value as AccountGroup }))
-                }
+                  setFormError(null)
+                  saveState.clearError()
+                }}
               >
                 {GROUP_ORDER.map((group) => (
                   <option key={group} value={group}>
@@ -535,6 +567,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
               <select
                 className="field-input"
                 value={form.parent_account_id}
+                name="parent_account_id"
                 onChange={(e) => setText('parent_account_id')(e.target.value)}
               >
                 <option value="">— none —</option>
@@ -552,21 +585,22 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                 onChange={(e) => {
                   setForm((f) => ({ ...f, is_component: e.target.checked }))
                   setFormError(null)
+                  saveState.clearError()
                 }}
               />
               Component of the parent
             </label>
             <div className="settings-card-actions">
-              <button type="submit" className="button button-primary" disabled={busy}>
+              <SaveButton type="submit" className="button button-primary" state={saveState} aria-disabled={busy}>
                 {editingId !== null ? 'Save account' : 'Add account'}
-              </button>
+              </SaveButton>
               {editingId !== null && (
                 <button type="button" className="button" onClick={cancelEdit}>
                   Cancel
                 </button>
               )}
+              {formError ? <span role="alert" className="save-status save-status-error">{formError}</span> : <SaveStatus state={saveState} />}
             </div>
-            <FeedBanner error={formError} />
           </form>
           {accounts.length === 0 ? (
             <p className="empty-note">No accounts yet — add the first one above.</p>
@@ -627,79 +661,6 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         </>
       )}
 
-      {settled && (
-        <>
-        {/* Portfolio accounts (2026-08-28 spec §5): the labels behind the positions ledger,
-            and the ONE place their ownership is edited. Gated on `settled`, never on the roster's
-            `loaded` — a net-worth GET that failed says nothing about the portfolio router, and
-            both tables arrive in the same render (2026-09-13 spec §9). */}
-        <h3 className="eyebrow portfolio-accounts-heading">
-          Portfolio accounts
-          <InfoHint text="The account labels your transactions and dividends are filed under. Owner blank = joint; a person's Portfolio view is their own labels plus the joint ones. Labels are fixed here — they are the positions' identity." />
-        </h3>
-        <FeedBanner
-          error={portfolioError}
-          retry={() => loadPortfolio()}
-          retryLabel="Retry loading the portfolio accounts"
-        />
-        {portfolioLoaded &&
-          (portfolioAccounts.length === 0 ? (
-            <p className="empty-note">
-              No portfolio accounts yet — one appears the first time a transaction or dividend
-              names an account.
-            </p>
-          ) : (
-            <>
-              <div className="settings-scroll">
-                <table
-                  className="data-table portfolio-accounts-table"
-                  aria-label="Portfolio accounts"
-                >
-                  <thead>
-                    <tr>
-                      <th>Label</th>
-                      <th>Owner</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {portfolioAccounts.map((account) => (
-                      <tr key={account.id}>
-                        {/* Read-only text, not an input: renaming a label would orphan every
-                            position filed under it, and the server refuses it. */}
-                        <td>{account.label}</td>
-                        <td>
-                          <select
-                            className="field-input"
-                            aria-label={`Owner for ${account.label}`}
-                            value={account.person_id === null ? '' : String(account.person_id)}
-                            disabled={portfolioBusy}
-                            onChange={(e) => retagPortfolioAccount(account, e.target.value)}
-                          >
-                            <option value="">Joint</option>
-                            {people.map((person) => (
-                              <option key={person.id} value={String(person.id)}>
-                                {person.name}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {/* Inline under the table the select lives in, and with NO Retry: the failure is a
-                  write the server refused, which asking for the labels again cannot fix. */}
-              <FeedBanner error={portfolioFormError} />
-              <p className="settings-note">
-                A new account label typed on a transaction or dividend is created owned by{' '}
-                {primaryName} — re-tag it here. The labels themselves are fixed: they identify
-                the positions.
-              </p>
-            </>
-          ))}
-        </>
-      )}
     </section>
   )
 }

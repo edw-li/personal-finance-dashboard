@@ -10,6 +10,9 @@ import {
 import type { RestoreReport, SnapshotEntry } from '../../types/api'
 import { formatBytes, formatDateTime, formatInstantDate, localDateKey } from '../../utils/format'
 import InfoHint from '../InfoHint'
+import { useConfirm } from '../feedback/confirm'
+import BusyButton from '../feedback/BusyButton'
+import { useLatest } from '../reorder/useLatest'
 import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import { useArrivalValue } from '../useArrivalParam'
@@ -58,7 +61,6 @@ export default function RestoreCard({
   const [reported, setReported] = useState<Reported | null>(null)
   const [busy, setBusy] = useState<'dry' | 'apply' | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [armText, setArmText] = useState('')
   const seqRef = useRef(0)
   // The runs have a sequence of their own: `load`'s guards the LIST, and a result must be
   // dropped when it is no longer the newest run of the card, not the newest fetch.
@@ -69,6 +71,8 @@ export default function RestoreCard({
   const focusReportRef = useRef(false)
   const toast = useToast()
   const navigate = useNavigate()
+  const ask = useConfirm()
+  const latestSelection = useLatest({ source, reported })
 
   // The house's load recipe (inline chain, seqRef), but memoized: the arrival callback
   // below calls it too, and a fresh identity every render would make that callback fresh
@@ -107,7 +111,6 @@ export default function RestoreCard({
     setSource(next)
     setReported(null)
     setError(null)
-    setArmText('')
   }
 
   // ?restore=<name> from the Backups card's Restore… link: pre-select once the list has
@@ -140,7 +143,6 @@ export default function RestoreCard({
         setSource({ kind: 'stored', name })
         setReported(null)
         setError(null)
-        setArmText('')
         return true
       },
       [stored, busy, load],
@@ -162,7 +164,6 @@ export default function RestoreCard({
         if (seq !== runSeqRef.current) return
         setReported({ source: target, report: result })
         if (result.applied) {
-          setArmText('')
           // Focus is moved in the effect below, once the applied report is on the page.
           focusReportRef.current = true
           const when =
@@ -220,10 +221,7 @@ export default function RestoreCard({
   // (formatDateTime). The stamp's text is UTC, so the 23:30 PT nightly listed as "Sep 3,
   // 11:30 PM" would otherwise demand "2026-09-04" here.
   const snapshotDate = report === null ? null : localDateKey(report.exported_at)
-  // The arm input appears after a dry run of the current selection that named a date — a
-  // report whose schema is incompatible (or that carries errors) still gets the box, with
-  // the button dead beside it: "this is what would arm it, and why it will not".
-  const armable = report !== null && report.dry_run && snapshotDate !== null
+  // Only a clean, compatible dry run can ask the typed-date question.
   const canRestore =
     source !== null &&
     report !== null &&
@@ -231,17 +229,20 @@ export default function RestoreCard({
     report.errors.length === 0 &&
     report.schema.compatible &&
     snapshotDate !== null &&
-    armText.trim() === snapshotDate &&
     busy === null
 
-  const restore = () => {
-    if (!canRestore || report === null || report.exported_at === null) return
-    const ok = window.confirm(
-      `Restore the snapshot from ${formatInstantDate(report.exported_at)}? A restore point of ` +
-        'the current database is written first (kept with the last three), then every exported ' +
-        'table is replaced. Other pages reload on their next visit.',
-    )
-    if (!ok) return
+  const restore = async (anchor: HTMLElement) => {
+    if (!canRestore || report === null || report.exported_at === null || snapshotDate === null) return
+    const selected = source
+    const reading = reported
+    const accepted = await ask({
+      anchor,
+      title: `Restore the snapshot from ${formatInstantDate(report.exported_at)}?`,
+      body: 'A restore point of the current database is written first (kept with the last three), then every exported table is replaced. Other pages reload on their next visit.',
+      confirmLabel: 'Restore snapshot',
+      typedArm: { expected: snapshotDate, prompt: "Type the snapshot's date (YYYY-MM-DD) to confirm" },
+    })
+    if (!accepted || latestSelection.current.source !== selected || latestSelection.current.reported !== reading) return
     run(false)
   }
 
@@ -254,7 +255,7 @@ export default function RestoreCard({
   )
 
   return (
-    <section className="card span-6" id="restore" role="region" aria-label="Restore">
+    <section className="card span-12" id="restore" role="region" aria-label="Restore">
       <h2 className="eyebrow">
         Restore
         <InfoHint text="Replaces every exported table from a snapshot ZIP — one this app wrote, at this server's schema. Dry run shows what would change and writes nothing. Restore first saves a restore point of the current data — it is listed under Restore points below the snapshots, so the step back is one more restore. Your login, the operational trails and this server's backup markers are never touched." />
@@ -301,14 +302,15 @@ export default function RestoreCard({
       </div>
       <FeedBanner error={loadError} retry={load} retryLabel="Retry loading stored snapshots" />
       <div className="settings-card-actions">
-        <button
+        <BusyButton
           type="button"
           className="button"
-          disabled={source === null || busy !== null}
+          inert={source === null || busy === 'apply'}
+          busy={busy === 'dry'}
           onClick={() => run(true)}
         >
-          {busy === 'dry' ? 'Dry run…' : 'Dry run'}
-        </button>
+          Dry run
+        </BusyButton>
       </div>
       <FeedBanner error={error} />
       {report !== null && (
@@ -318,33 +320,18 @@ export default function RestoreCard({
           <RestoreReportView report={report} />
         </div>
       )}
-      {/* One row, always present, so the state is legible: a disabled Restore says "dry-run
-          first" as plainly as the armed one says "type the date". The BUTTON is the same
-          element on both sides of that toggle — two branches would remount it and drop
-          focus mid-flow. */}
+      {/* The same button survives the dry run and its typed-date question, keeping the
+          confirmation anchored to the action that opened it. */}
       <div className="restore-arm">
-        {armable && (
-          <label>
-            Type the snapshot&apos;s date (YYYY-MM-DD) to confirm
-            <input
-              className="field-input"
-              type="text"
-              aria-label="Type the snapshot's date (YYYY-MM-DD) to confirm"
-              value={armText}
-              placeholder={snapshotDate ?? undefined}
-              disabled={busy !== null}
-              onChange={(e) => setArmText(e.target.value)}
-            />
-          </label>
-        )}
-        <button
+        <BusyButton
           type="button"
           className="button danger-button"
-          disabled={!canRestore}
-          onClick={restore}
+          inert={!canRestore}
+          busy={busy === 'apply'}
+          onClick={(event) => void restore(event.currentTarget)}
         >
-          {busy === 'apply' ? 'Restoring…' : 'Restore'}
-        </button>
+          Restore
+        </BusyButton>
       </div>
     </section>
   )

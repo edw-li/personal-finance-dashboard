@@ -6,7 +6,14 @@ import { ApiError, describeError } from '../api/client'
 import { importXlsx } from '../api/importer'
 import { fetchAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
+import { useConfirm } from '../components/feedback/confirm'
+import { useLatest } from '../components/reorder/useLatest'
+import { SaveButton } from '../components/feedback/SaveButton'
+import BusyButton from '../components/feedback/BusyButton'
+import { SaveStatus } from '../components/feedback/SaveStatus'
+import { useSaveState } from '../components/feedback/useSaveState'
 import AccountsCard from '../components/settings/AccountsCard'
+import PortfolioAccountsCard from '../components/settings/PortfolioAccountsCard'
 import ActivityCard from '../components/settings/ActivityCard'
 import AppearanceCard from '../components/settings/AppearanceCard'
 import AssistantCard from '../components/settings/AssistantCard'
@@ -48,8 +55,7 @@ export default function SettingsPage() {
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
   const [pwError, setPwError] = useState<string | null>(null)
-  const [pwBusy, setPwBusy] = useState(false)
-  const [pwChanged, setPwChanged] = useState(false)
+  const pwState = useSaveState({ dirty: currentPw !== '' || newPw !== '' || confirmPw !== '' })
   // Import card — the chosen File, the last report ABOUT that file, one busy flag for both
   // requests (dry run and apply are the same upload with the flag flipped).
   const [file, setFile] = useState<File | null>(null)
@@ -62,6 +68,8 @@ export default function SettingsPage() {
   const [people, setPeople] = useState<PersonOut[]>([])
   const seqRef = useRef(0)
   const toast = useToast()
+  const ask = useConfirm()
+  const latestImport = useLatest({ file, report })
   const navigate = useNavigate()
   // Bumped whenever an apply may have written a restore point (2026-09-23 spec §B3): the Backups
   // and Restore cards each hold their own reading of the volume, and both are stale the moment an
@@ -188,7 +196,7 @@ export default function SettingsPage() {
   const editPassword = (setBox: (value: string) => void) => (value: string) => {
     setBox(value)
     setPwError(null)
-    setPwChanged(false)
+    pwState.clearError()
   }
 
   const submitPassword = () => {
@@ -197,23 +205,13 @@ export default function SettingsPage() {
       setPwError('New passwords do not match.')
       return
     }
-    setPwBusy(true)
     setPwError(null)
-    setPwChanged(false)
-    changePassword(currentPw, newPw)
-      .then(() => {
-        // Only a SUCCESS clears the boxes — a wrong current password would otherwise cost
-        // the user the new one they had already typed twice.
-        setCurrentPw('')
-        setNewPw('')
-        setConfirmPw('')
-        setPwChanged(true)
-      })
-      .catch((err: unknown) => {
-        // "Current password is incorrect" / the min-length 422 speak for themselves.
-        setPwError(err instanceof ApiError ? err.message : 'Could not change the password.')
-      })
-      .finally(() => setPwBusy(false))
+    void pwState.run(async () => {
+      await changePassword(currentPw, newPw)
+      setCurrentPw('')
+      setNewPw('')
+      setConfirmPw('')
+    })
   }
 
   const pickFile = (chosen: File | null) => {
@@ -274,18 +272,17 @@ export default function SettingsPage() {
       })
   }
 
-  const applyImport = () => {
-    // The one thing a dry run cannot show, said before the write: within a year the SHEET
-    // wins, so taxes work done in the UI for sheet-covered years is about to be replaced. And
-    // the honest way back (2026-09-23 spec §B3): the apply saves a restore point first, which
-    // the Restore card lists — "This cannot be undone" had stopped being true.
-    const ok = window.confirm(
-      'Apply this workbook to the live database? Sheet values overwrite imported rows — ' +
-        'taxes inputs and brackets you edited in the UI for sheet-covered years WILL be ' +
-        'reset to the sheet. A restore point of your current data is saved first — you can ' +
-        'roll back from Settings › Data › Restore.',
-    )
-    if (!ok) return
+  const applyImport = async (anchor: HTMLElement) => {
+    if (!canApply) return
+    const chosen = file
+    const checked = report
+    const accepted = await ask({
+      anchor,
+      title: 'Apply this workbook to the live database?',
+      body: 'Sheet values overwrite imported rows — taxes inputs and brackets you edited in the UI for sheet-covered years WILL be reset to the sheet. A restore point of your current data is saved first — you can roll back from Settings › Data › Restore.',
+      confirmLabel: 'Apply workbook',
+    })
+    if (!accepted || latestImport.current.file !== chosen || latestImport.current.report !== checked) return
     runImport(false)
   }
 
@@ -328,6 +325,7 @@ export default function SettingsPage() {
 <LocalSectionPanel state={views} section="household" className="span-12 card-grid">
 {loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-household">Household</h2>
 <HouseholdCard onPeopleChange={setPeople} />
+<PortfolioAccountsCard people={people} />
 <CategoriesCard />
 <AccountsCard people={people} /></>}
 </LocalSectionPanel>
@@ -339,7 +337,7 @@ export default function SettingsPage() {
 <LocalSectionPanel state={views} section="account" className="span-12 card-grid">
 <h2 className="settings-section visually-hidden" id="sec-account">Account</h2>
 <AppearanceCard />
-{loadedOnce && <section className="card span-6" id="password">
+{loadedOnce && <section className="card span-12" id="password">
                 <h2 className="eyebrow">
                   Password
                   <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
@@ -358,6 +356,7 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="current-password"
                       value={currentPw}
+                      readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setCurrentPw)(e.target.value)}
                     />
                   </label>
@@ -368,6 +367,7 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="new-password"
                       value={newPw}
+                      readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setNewPw)(e.target.value)}
                     />
                   </label>
@@ -378,20 +378,14 @@ export default function SettingsPage() {
                       type="password"
                       autoComplete="new-password"
                       value={confirmPw}
+                      readOnly={pwState.status === 'saving'}
                       onChange={(e) => editPassword(setConfirmPw)(e.target.value)}
                     />
                   </label>
                   <div className="settings-actions">
-                    <button type="submit" className="button button-primary" disabled={pwBusy}>
-                      {pwBusy ? 'Changing…' : 'Change password'}
-                    </button>
+                    <SaveButton type="submit" className="button button-primary" state={pwState}>Change password</SaveButton>
+                    {pwError ? <span role="alert" className="save-status save-status-error">{pwError}</span> : <SaveStatus state={pwState} />}
                   </div>
-                  <FeedBanner error={pwError} />
-                  {pwChanged && (
-                    <p className="settings-note" role="status">
-                      Password changed.
-                    </p>
-                  )}
                 </form>
               </section>}
 </LocalSectionPanel>
@@ -427,22 +421,24 @@ export default function SettingsPage() {
                     edited here for sheet-covered years are reset to the sheet.
                   </p>
                   <div className="settings-actions">
-                    <button
+                    <BusyButton
                       type="button"
                       className="button"
-                      disabled={file === null || importBusy !== null}
+                      inert={file === null || importBusy === 'apply'}
+                      busy={importBusy === 'dry'}
                       onClick={() => runImport(true)}
                     >
-                      {importBusy === 'dry' ? 'Dry run…' : 'Dry run'}
-                    </button>
-                    <button
+                      Dry run
+                    </BusyButton>
+                    <BusyButton
                       type="button"
                       className="button button-primary"
-                      disabled={!canApply}
-                      onClick={applyImport}
+                      inert={!canApply}
+                      busy={importBusy === 'apply'}
+                      onClick={(event) => void applyImport(event.currentTarget)}
                     >
-                      {importBusy === 'apply' ? 'Applying…' : 'Apply import'}
-                    </button>
+                      Apply import
+                    </BusyButton>
                   </div>
                 </div>
                 {importError && (

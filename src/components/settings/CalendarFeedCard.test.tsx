@@ -12,6 +12,7 @@ import { createFeedToken, fetchFeedTokens, revokeFeedToken } from '../../api/cal
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import ToastProvider from '../ToastProvider'
 import CalendarFeedCard from './CalendarFeedCard'
+import { ConfirmProvider } from '../feedback/confirm'
 
 const SETTINGS = {
   swr_pct: '0.040000',
@@ -23,9 +24,9 @@ const SETTINGS = {
 
 function mount() {
   return render(
-    <ToastProvider>
-      <CalendarFeedCard />
-    </ToastProvider>,
+    <ToastProvider><ConfirmProvider>
+        <CalendarFeedCard />
+    </ConfirmProvider></ToastProvider>,
   )
 }
 
@@ -68,6 +69,7 @@ describe('CalendarFeedCard', () => {
     await waitFor(() => expect(createFeedToken).toHaveBeenCalledWith('watch'))
     const url = (await screen.findByLabelText('Feed URL')) as HTMLInputElement
     expect(url.value).toBe(`${window.location.origin}/api/v1/calendar/feed.ics?token=tok-abc`)
+    expect(document.activeElement).toBe(url)
     expect(screen.getByText(/shown once/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
     expect(writeText).toHaveBeenCalledWith(url.value)
@@ -78,6 +80,7 @@ describe('CalendarFeedCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     await waitFor(() => expect(screen.queryByLabelText('Feed URL')).toBeNull())
     expect(await screen.findByText('watch')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByLabelText('Label for the new link'))
     vi.unstubAllGlobals()
   })
 
@@ -86,8 +89,12 @@ describe('CalendarFeedCard', () => {
     mount()
     await screen.findByText('phone')
     fireEvent.click(screen.getByRole('button', { name: 'Revoke the phone link' }))
+    expect((await screen.findByRole('alertdialog')).textContent).toContain("Calendars using it stop updating — this can't be undone")
+    expect(revokeFeedToken).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke link' }))
     await waitFor(() => expect(revokeFeedToken).toHaveBeenCalledWith(1))
     await waitFor(() => expect(fetchFeedTokens).toHaveBeenCalledTimes(2))
+    expect(document.activeElement).toBe(screen.getByLabelText('Label for the new link'))
   })
 
   it('stands the token form and the reminder-day form side by side', async () => {
@@ -125,7 +132,7 @@ describe('CalendarFeedCard', () => {
     fireEvent.change(box, { target: { value: '5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save reminder day' }))
     await waitFor(() => expect(putAppSettings).toHaveBeenCalledWith({ calendar_update_due_day: 5 }))
-    expect(await screen.findByText('Saved.')).toBeTruthy()
+    expect(await screen.findByText(/^Saved/)).toBeTruthy()
   })
 
   it('sends the day alone, so nothing this card cannot see is re-written', async () => {
@@ -151,4 +158,12 @@ describe('CalendarFeedCard', () => {
     expect(announced.join(' ')).toContain('between 1 and 28')
     expect(putAppSettings).not.toHaveBeenCalled()
   })
+})
+
+
+it('keeps the saved form quiet without removing its Save control from the tab order', async () => {
+  mount()
+  const save = await screen.findByRole('button', { name: 'Save reminder day' })
+  expect(save.getAttribute('aria-disabled')).toBe('true')
+  expect(save.hasAttribute('disabled')).toBe(false)
 })

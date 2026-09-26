@@ -129,6 +129,10 @@ function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: Cov
         <dd className="system-mono">{status.database.alembic_head ?? '—'}</dd>
       </div>
       <div className="system-fact">
+        <dt>Build</dt>
+        <dd className="system-mono">{__BUILD_HASH__}</dd>
+      </div>
+      <div className="system-fact">
         <dt>Environment</dt>
         <dd className="system-mono">{status.environment}</dd>
       </div>
@@ -180,7 +184,7 @@ export default function SystemCard() {
   }, [])
 
   return (
-    <section className="card span-6" id="system">
+    <section className="card span-12" id="system">
       <h2 className="eyebrow">
         System
         <InfoHint text="Operational status: the date each hand-entered feed reaches and what is due or overdue, the nightly backup marker recorded by the backup script — with whether last night's dump restored — and the database's size and migration head. The refresh schedule lives on the Price refresh card; snapshots and downloads on Backups." />

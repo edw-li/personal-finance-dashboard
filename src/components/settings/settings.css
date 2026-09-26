@@ -45,17 +45,12 @@
    not tiles to compare, so a single-column dl, not the kpi grid. */
 .system-facts {
   margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.45rem 0.75rem;
 }
 
-.system-fact {
-  display: grid;
-  grid-template-columns: minmax(140px, 200px) 1fr;
-  gap: 0.75rem;
-  align-items: baseline;
-}
+.system-fact { display: contents; }
 
 .system-fact dt {
   font-size: 0.72rem;
@@ -94,31 +89,6 @@
 .system-fact dd.system-mono {
   font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
   font-size: 0.8rem;
-}
-
-@media (max-width: 720px) {
-  .system-fact {
-    grid-template-columns: 1fr;
-    gap: 0.15rem;
-  }
-}
-
-/* Six facts down a half-width card is a long thin list; two columns fill it (spec §3.3), and
-   the label track has to give inside the narrower column. A list-valued fact takes both. */
-@media (min-width: 721px) {
-  .system-facts {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem 1.5rem;
-  }
-
-  .system-facts .system-fact {
-    grid-template-columns: minmax(110px, 40%) 1fr;
-  }
-
-  .system-facts .system-fact-wide {
-    grid-column: 1 / -1;
-  }
 }
 
 /* One line per value (audit S-8): timestamps and feed clauses, never a " · "-joined paragraph. */
@@ -194,6 +164,8 @@
 }
 
 .settings-card-actions {
+  margin-top: auto;
+  flex-wrap: wrap;
   display: flex;
   align-items: flex-end;
   gap: 0.5rem;
@@ -274,15 +246,16 @@
   margin-bottom: 0.75rem;
 }
 
-/* The Accounts card's SECOND table (2026-08-28 spec §5). Its heading needs the top gap the
-   single-table layout never had, and the owner select needs a floor width or the longest
-   name reflows the column on every retag. */
+/* Ownership has its own card; a floor width keeps the longest name from reflowing the
+   column on every retag. */
 .portfolio-accounts-heading {
-  margin-top: 1.25rem;
+  margin-top: 0;
 }
 
 .portfolio-accounts-table select.field-input {
+  width: auto;
   min-width: 9rem;
+  max-width: 14rem;
 }
 
 /* --- appearance card (2026-09-03 shell spec §11) --- */
@@ -313,6 +286,8 @@
    Scoped to .settings-page: only its cards are ever highlighted, and .card is app-wide
    vocabulary that must not grow an outline (or a transition) everywhere. */
 .settings-page .card {
+  display: flex;
+  flex-direction: column;
   outline: 2px solid transparent;
   outline-offset: 2px;
   /* The same inset the section bands carry (below): the chip rail rides PageFrame's sticky
@@ -381,7 +356,7 @@
   margin-bottom: 0.75rem;
 }
 
-/* The typed-date arm and the red button, side by side (the wizard's danger-row shape). */
+/* Restore keeps a stable action row below its report; the date arm lives in the question. */
 .restore-arm {
   display: flex;
   flex-wrap: wrap;
@@ -392,7 +367,6 @@
 
 /* The source picker's labels wear the same form register as every other label on the page
    (audit S-6): 16px body text over a select read as a sentence, not a field. */
-.restore-arm label,
 .restore-source label {
   display: flex;
   flex-direction: column;
@@ -402,13 +376,6 @@
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--muted);
-}
-
-/* .danger-button is the monthly-update wizard's class; the same rule lives here so the
-   Restore card is self-sufficient rather than importing that page's sheet. */
-.settings-page .danger-button:not(:disabled) {
-  border-color: var(--negative);
-  color: var(--negative);
 }
 
 /* --- activity and data health cards (2026-09-03 data-lifecycle spec §9, §11) --- */
@@ -639,4 +606,21 @@
 .data-table.accounts-table tr.component-row > td.accounts-name-cell {
   padding-left: 1.6rem;
   color: var(--muted);
+}
+
+.settings-field > .segmented { align-self: flex-start; }
+.settings-page .settings-actions { margin-top: auto; }
+#price-refresh .system-facts { grid-template-columns: 1fr; }
+#price-refresh .system-fact { display: block; }
+.system-fact dd .system-overdue { color: var(--negative); }
+
+.household-rename { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.activity-report { flex-basis: 100%; min-width: 0; }
+
+/* This last form carries the Household card's bottom action alongside the ownership list. */
+.household-date {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 1rem;
 }

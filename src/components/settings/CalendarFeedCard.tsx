@@ -1,10 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createFeedToken, feedUrl, fetchFeedTokens, revokeFeedToken } from '../../api/calendarFeed'
 import { ApiError } from '../../api/client'
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import type { AppSettingsOut, FeedTokenOut } from '../../types/api'
 import { formatDate, formatDateTime } from '../../utils/format'
 import InfoHint from '../InfoHint'
+import { useConfirm } from '../feedback/confirm'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
@@ -33,22 +38,35 @@ export default function CalendarFeedCard() {
   const [fresh, setFresh] = useState<{ label: string; url: string } | null>(null)
   const [dayBox, setDayBox] = useState('')
   const [dayError, setDayError] = useState<string | null>(null)
-  const [savedNote, setSavedNote] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const dayState = useSaveState({ dirty: settings !== null && dayBox !== String(settings.calendar_update_due_day) })
+  const [pending, setPending] = useState<'create' | number | null>(null)
+  const busy = pending !== null
   const seqRef = useRef(0)
   const toast = useToast()
+  const ask = useConfirm()
+  const cardRef = useRef<HTMLElement>(null)
+  const focusLinkForm = useRef(false)
+
+  // Creating and dismissing the once-shown URL replace a form, so hand focus to its new box.
+  useLayoutEffect(() => {
+    if (!focusLinkForm.current) return
+    focusLinkForm.current = false
+    cardRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+  }, [fresh])
 
   // A plain function over stable setters, called from the effect and from Retry (the
   // LimitsCard idiom — a useCallback here trips preserve-manual-memoization).
-  const load = (initial = false) => {
+  const load = (initial = false, seedDay = true) => {
     const seq = ++seqRef.current
     const source = warmSource(initial)
-    Promise.all([source(WARM.feedTokens, fetchFeedTokens), source(WARM.appSettings, fetchAppSettings)])
+    return Promise.all([source(WARM.feedTokens, fetchFeedTokens), source(WARM.appSettings, fetchAppSettings)])
       .then(([list, appSettings]) => {
         if (seq !== seqRef.current) return
         setTokens(list)
-        setSettings(appSettings)
-        setDayBox(String(appSettings.calendar_update_due_day))
+        if (seedDay) {
+          setSettings(appSettings)
+          setDayBox(String(appSettings.calendar_update_due_day))
+        }
         setError(null)
       })
       .catch((err: unknown) => {
@@ -65,15 +83,17 @@ export default function CalendarFeedCard() {
   const create = () => {
     const label = labelBox.trim()
     if (label === '') return
-    setBusy(true)
+    if (busy) return
+    setPending('create')
     setError(null)
     createFeedToken(label)
       .then((created) => {
+        focusLinkForm.current = true
         setFresh({ label: created.label, url: feedUrl(created.token) })
         setLabelBox('')
       })
       .catch((err: unknown) => setError(message(err, 'Could not create the feed link.')))
-      .finally(() => setBusy(false))
+      .finally(() => setPending(null))
   }
 
   const copy = () => {
@@ -85,21 +105,29 @@ export default function CalendarFeedCard() {
   }
 
   const dismissFresh = () => {
+    focusLinkForm.current = true
     setFresh(null)
-    load()
+    load(false, false)
   }
 
-  const revoke = (token: FeedTokenOut) => {
-    setBusy(true)
+  const revoke = async (token: FeedTokenOut, anchor: HTMLElement) => {
+    if (!await ask({
+      anchor,
+      title: `Revoke the ${token.label} feed link?`,
+      body: "Calendars using it stop updating — this can't be undone",
+      confirmLabel: 'Revoke link',
+    })) return
+    setPending(token.id)
     setError(null)
     // No Undo: the plaintext is gone for good, which is the point of revoking.
     revokeFeedToken(token.id)
       .then(() => {
         toast.success(`Revoked the ${token.label} link — calendars using it will stop updating`)
-        load()
+        void load(false, false)
+        cardRef.current?.querySelector<HTMLInputElement>('input')?.focus()
       })
       .catch((err: unknown) => setError(message(err, 'Could not revoke the link.')))
-      .finally(() => setBusy(false))
+      .finally(() => setPending(null))
   }
 
   const saveDay = () => {
@@ -108,28 +136,16 @@ export default function CalendarFeedCard() {
       setDayError(`Pick a day between ${MIN_DAY} and ${MAX_DAY} — every month has one.`)
       return
     }
-    setBusy(true)
     setDayError(null)
-    setSavedNote(false)
-    // The PUT is PARTIAL now (2026-09-06 spec §3.5): the server reads it with exclude_unset, so
-    // an absent key leaves the stored value. The day travels alone, and the re-read this card
-    // used to make — to avoid reverting a withdrawal rate the App settings card had changed a
-    // minute ago — has nothing left to protect against.
-    putAppSettings({ calendar_update_due_day: day })
-      .then((saved) => {
-        // Re-seeded from the RESPONSE, like every other settings form here: the server
-        // answers with what it stored, and a box holding the typed text would read as
-        // unsaved work against a value that is already in the database.
-        setSettings(saved)
-        setDayBox(String(saved.calendar_update_due_day))
-        setSavedNote(true)
-      })
-      .catch((err: unknown) => setDayError(message(err, 'Could not save the reminder day.')))
-      .finally(() => setBusy(false))
+    void dayState.run(async () => {
+      const saved = await putAppSettings({ calendar_update_due_day: day })
+      setSettings(saved)
+      setDayBox(String(saved.calendar_update_due_day))
+    })
   }
 
   return (
-    <section className="card span-12" id="calendar" role="region" aria-label="Calendar feed">
+    <section ref={cardRef} className="card span-12" id="calendar" role="region" aria-label="Calendar feed">
       <h2 className="eyebrow">
         Calendar feed
         <InfoHint text="Subscribe your phone or desktop calendar to the dashboard's events — vests, paydays, deadlines, your own reminders — with amounts. The link is the credential: anyone holding it can read the feed." />
@@ -185,18 +201,19 @@ export default function CalendarFeedCard() {
                     placeholder="phone, laptop…"
                     maxLength={60}
                     value={labelBox}
-                    disabled={busy}
+                    readOnly={busy}
                     onChange={(e) => setLabelBox(e.target.value)}
                   />
                 </label>
                 <div className="settings-card-actions">
-                  <button
+                  <BusyButton
                     type="submit"
                     className="button button-primary"
-                    disabled={busy || labelBox.trim() === ''}
+                    busy={pending === 'create'}
+                    inert={(busy && pending !== 'create') || labelBox.trim() === ''}
                   >
                     New feed link
-                  </button>
+                  </BusyButton>
                 </div>
               </form>
             )}
@@ -219,13 +236,13 @@ export default function CalendarFeedCard() {
                     aria-label="Monthly update reminder day"
                     inputMode="numeric"
                     value={dayBox}
-                    disabled={busy}
+                    readOnly={dayState.status === 'saving'}
                     onChange={(e) => {
                       setDayBox(e.target.value)
                       // Every keystroke retires both sentences under the form: they describe
                       // the value that WAS in the box (SettingsPage's rule).
                       setDayError(null)
-                      setSavedNote(false)
+                      dayState.clearError()
                     }}
                   />
                 </label>
@@ -241,16 +258,9 @@ export default function CalendarFeedCard() {
                   has one.
                 </p>
                 <div className="settings-card-actions">
-                  <button type="submit" className="button button-primary" disabled={busy}>
-                    Save reminder day
-                  </button>
+                  <SaveButton type="submit" className="button button-primary" state={dayState}>Save reminder day</SaveButton>
+                  {dayError ? <span role="alert" className="save-status save-status-error">{dayError}</span> : <SaveStatus state={dayState} />}
                 </div>
-                <FeedBanner error={dayError} />
-                {savedNote && (
-                  <p className="settings-note" role="status">
-                    Saved.
-                  </p>
-                )}
               </form>
             )}
           </div>
@@ -276,15 +286,16 @@ export default function CalendarFeedCard() {
                         {token.last_used_at === null ? 'never' : formatDateTime(token.last_used_at)}
                       </td>
                       <td className="row-actions">
-                        <button
+                        <BusyButton
                           type="button"
                           className="button"
                           aria-label={`Revoke the ${token.label} link`}
-                          disabled={busy}
-                          onClick={() => revoke(token)}
+                          busy={pending === token.id}
+                          inert={busy && pending !== token.id}
+                          onClick={(event) => void revoke(token, event.currentTarget)}
                         >
                           Revoke
-                        </button>
+                        </BusyButton>
                       </td>
                     </tr>
                   ))}

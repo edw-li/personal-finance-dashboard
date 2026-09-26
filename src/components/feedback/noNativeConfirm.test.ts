@@ -28,8 +28,6 @@ const SRC = path.resolve(__dirname, '../..')
 /** Native confirms still standing, counted per file, grouped by the lane that converts them (spec §6.4). */
 const ALLOWLIST: Record<string, number> = {
   // L5 Settings
-  'components/settings/RestoreCard.tsx': 1, // Restore → the popover, its typed date arm inside
-  'pages/SettingsPage.tsx': 1, // Apply import
 
   // L6 Portfolio·ESPP·Comp·Paycheck
   'components/portfolio/SecuritiesPanel.tsx': 1, // security delete → instant + Undo

@@ -14,6 +14,7 @@ import type {
 } from '../types/api'
 import SettingsPage from './SettingsPage'
 import ToastProvider from '../components/ToastProvider'
+import { ConfirmProvider } from '../components/feedback/confirm'
 import { expectInDocumentOrder } from '../testing/domOrder'
 import { resetWarmForTests } from '../components/settings/settingsPrefetch'
 
@@ -262,7 +263,6 @@ const pick = (file: File) => fireEvent.change(fileBox(), { target: { files: [fil
 
 // Default "yes" keeps jsdom's unimplemented window.confirm out of every other test in the
 // file; only the decline test flips it (BracketsEditor.test.tsx's arrangement).
-const confirmSpy = vi.spyOn(window, 'confirm')
 
 const ME: PersonOut = { id: 1, name: 'Me', is_primary: true }
 const CHECKING: AccountOut = {
@@ -334,7 +334,6 @@ beforeEach(() => {
   // Empty answers: neither card adds a row, a banner or a button to this file's queries.
   vi.mocked(fetchActivity).mockResolvedValue({ entries: [], next_before: null })
   vi.mocked(fetchHealth).mockResolvedValue({ checked_at: '2026-09-04T09:00:00+00:00', checks: [] })
-  confirmSpy.mockReturnValue(true)
 })
 
 afterEach(() => {
@@ -348,7 +347,7 @@ afterEach(() => {
 const renderPage = (section = 'household') =>
   render(
     <MemoryRouter initialEntries={[`/settings?section=${section}`]}>
-      <SettingsPage />
+      <ConfirmProvider><SettingsPage /></ConfirmProvider>
     </MemoryRouter>,
   )
 
@@ -458,7 +457,7 @@ describe('SettingsPage — password', () => {
     await waitFor(() =>
       expect(vi.mocked(changePassword)).toHaveBeenCalledWith('old-pw', 'new-pw-12345'),
     )
-    expect(await screen.findByText('Password changed.')).toBeTruthy()
+    expect(await screen.findByText(/^Saved/)).toBeTruthy()
     // What the change DOES is said once, in the heading's (i) (2026-09-13 spec §14, audit S-11):
     // the note under the form repeated that sentence word for word.
     expect(screen.queryByText('Other devices are signed out; this one stays signed in.')).toBeNull()
@@ -481,7 +480,7 @@ describe('SettingsPage — password', () => {
     // Only a SUCCESS clears: retyping a correct new password to fix a wrong current one
     // would be a punishment for the server's answer.
     expect(newPwBox().value).toBe('new-pw-12345')
-    expect(screen.queryByText('Password changed.')).toBeNull()
+    expect(screen.queryByText(/^Saved/)).toBeNull()
   })
 
   it('disables each submit while its OWN request is in flight', async () => {
@@ -492,29 +491,30 @@ describe('SettingsPage — password', () => {
     renderPage('planning')
     await screen.findByLabelText('Withdrawal rate (% / year)')
 
+    fireEvent.change(screen.getByLabelText('Withdrawal rate (% / year)'), { target: { value: '5' } })
     fireEvent.click(saveButton())
-    await waitFor(() => expect(saveButton().disabled).toBe(true))
+    await waitFor(() => expect(saveButton().getAttribute('aria-busy') === 'true').toBe(true))
     // Two cards, two flags: a settings save must not lock the password form.
     fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
     await screen.findByLabelText('Current password')
-    expect(pwButton().disabled).toBe(false)
+    expect(pwButton().getAttribute('aria-busy') === 'true').toBe(false)
     await act(async () => {
       put.resolve(SETTINGS)
     })
     fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
-    await waitFor(() => expect(saveButton().disabled).toBe(false))
+    await waitFor(() => expect(saveButton().getAttribute('aria-busy') === 'true').toBe(false))
 
     fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
     fillPasswords('old-pw', 'new-pw-12345', 'new-pw-12345')
     fireEvent.click(pwButton())
-    await waitFor(() => expect(pwButton().disabled).toBe(true))
+    await waitFor(() => expect(pwButton().getAttribute('aria-busy') === 'true').toBe(true))
     fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
-    expect(saveButton().disabled).toBe(false)
+    expect(saveButton().getAttribute('aria-busy') === 'true').toBe(false)
     await act(async () => {
       change.resolve(undefined)
     })
     fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
-    await waitFor(() => expect(pwButton().disabled).toBe(false))
+    await waitFor(() => expect(pwButton().getAttribute('aria-busy') === 'true').toBe(false))
   })
 })
 
@@ -536,17 +536,17 @@ describe('SettingsPage — xlsx import', () => {
     renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
-    expect(dryButton().disabled).toBe(true)
-    expect(applyButton().disabled).toBe(true)
+    expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
 
     pick(xlsx())
-    expect(dryButton().disabled).toBe(false)
+    expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(false)
     // A file is not a permission: Apply waits on a REPORT, so nothing reaches the live
     // database that has not been parsed and shown to the user first.
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
 
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
   })
 
   it('dry-runs the chosen file and renders the per-sheet diff', async () => {
@@ -607,7 +607,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(screen.getByText('1 sample changes')).toBeTruthy()
     expect(screen.getByText('2024-06-14 gross 12500.00 -> 12750.00')).toBeTruthy()
     // Samples are not a refusal: a clean sheet with a preview still arms Apply.
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
   })
 
   it('renders sheet errors and leaves Apply disabled', async () => {
@@ -623,7 +623,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(await screen.findByText('ERROR: 2024: bracket rows overlap at 100000')).toBeTruthy()
     // A dry run that found errors is a REFUSAL, not a preview: the same workbook applied
     // would write every sheet that parsed and leave this one half-imported.
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 
   it('renders a sheet key the view does not know about', async () => {
@@ -642,7 +642,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(await screen.findByText('ERROR: row 3: unknown symbol "XBT"')).toBeTruthy()
     // Labelled by its raw key: a guess would be worse than the server's own word.
     expect(screen.getByText('crypto')).toBeTruthy()
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 
   it('drops the report when another file is picked', async () => {
@@ -659,21 +659,22 @@ describe('SettingsPage — xlsx import', () => {
     // OLD file arming Apply for the new one.
     expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
     expect(screen.queryByText('+2')).toBeNull()
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 
   it('spends no request when the clobber warning is declined', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
-    confirmSpy.mockReturnValue(false)
     renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     fireEvent.click(applyButton())
+    expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
-    expect(confirmSpy).toHaveBeenCalledWith(CLOBBER_WARNING)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
     // One call: the dry run. "No" means nothing was uploaded a second time.
     expect(vi.mocked(importXlsx)).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Applied.')).toBeNull()
@@ -689,12 +690,14 @@ describe('SettingsPage — xlsx import', () => {
     const file = xlsx()
     pick(file)
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     fireEvent.click(applyButton())
+    expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook' }))
 
     // The sentence names the one thing a dry run cannot show: sheet-covered years win, so
     // taxes work done in the UI for those years is gone after this.
-    expect(confirmSpy).toHaveBeenCalledWith(CLOBBER_WARNING)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
     await waitFor(() => expect(vi.mocked(importXlsx)).toHaveBeenCalledTimes(2))
     expect(vi.mocked(importXlsx).mock.calls[1]).toEqual([file, false])
 
@@ -703,7 +706,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
     // An applied report arms nothing: applying the same workbook twice means dry-running
     // it again, which is also the only way to see what the second pass would do.
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 
   it('toasts the restore point an applied import saved, and Roll back… pre-selects it in Restore', async () => {
@@ -714,14 +717,14 @@ describe('SettingsPage — xlsx import', () => {
     render(
       <MemoryRouter initialEntries={['/settings?section=data']}>
         <ToastProvider>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </ToastProvider>
       </MemoryRouter>,
     )
     await screen.findByLabelText('Workbook (.xlsx)')
     pick(xlsx())
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     // From the moment the apply returns, the point is on the volume: every later read lists it.
     vi.mocked(fetchRestorePoints).mockResolvedValue([
       {
@@ -734,6 +737,8 @@ describe('SettingsPage — xlsx import', () => {
       },
     ])
     fireEvent.click(applyButton())
+    expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook' }))
     expect(
       await screen.findByText(/^Workbook imported\. The data it replaced is saved as a restore point \(/),
     ).toBeTruthy()
@@ -785,8 +790,10 @@ describe('SettingsPage — xlsx import', () => {
 
     pick(xlsx())
     fireEvent.click(dryButton())
-    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    await waitFor(() => expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     fireEvent.click(applyButton())
+    expect((await screen.findByRole('alertdialog')).textContent).toContain(CLOBBER_WARNING.split('? ')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Apply workbook' }))
 
     expect(await screen.findByText('import failed: database is locked')).toBeTruthy()
     // A failed APPLY may still have written — the import is not one transaction. The
@@ -794,10 +801,10 @@ describe('SettingsPage — xlsx import', () => {
     // it is no longer a true preview and must not be left arming Apply for a second pass.
     await waitFor(() => expect(screen.queryByText('Dry run — nothing was written.')).toBeNull())
     expect(screen.queryByText('+2')).toBeNull()
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
     // Recovery is still one click: the file is still chosen, so a fresh dry run says where
     // things actually stand.
-    expect(dryButton().disabled).toBe(false)
+    expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(false)
     expect(fileBox().disabled).toBe(false)
   })
 
@@ -821,7 +828,7 @@ describe('SettingsPage — xlsx import', () => {
     // request that changed nothing — and leave Apply disarmed for no reason.
     expect(screen.getByText('Dry run — nothing was written.')).toBeTruthy()
     expect(screen.getByText('+2')).toBeTruthy()
-    expect(applyButton().disabled).toBe(false)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false)
     // Every failure carries it, the recoverable ones included.
     expect(screen.getByText(STALE_FILE_HINT)).toBeTruthy()
   })
@@ -835,10 +842,10 @@ describe('SettingsPage — xlsx import', () => {
     pick(xlsx())
     fireEvent.click(dryButton())
 
-    await waitFor(() => expect(dryButton().disabled).toBe(true))
+    await waitFor(() => expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(true))
     // Both buttons AND the file input: with all three shut there is no way to start a
     // second upload behind the first, which is what buys this card its missing seq guard.
-    expect(applyButton().disabled).toBe(true)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(true)
     expect(fileBox().disabled).toBe(true)
     // Separate tasks keep their own request states; switching does not cancel the import.
     fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
@@ -852,9 +859,9 @@ describe('SettingsPage — xlsx import', () => {
       run.resolve(makeReport(SPENDING_DIFF))
     })
     fireEvent.click(screen.getByRole('tab', { name: 'Data' }))
-    await waitFor(() => expect(dryButton().disabled).toBe(false))
+    await waitFor(() => expect((dryButton().getAttribute('aria-disabled') === 'true')).toBe(false))
     expect(fileBox().disabled).toBe(false)
-    expect(applyButton().disabled).toBe(false)
+    expect((applyButton().getAttribute('aria-disabled') === 'true')).toBe(false)
   })
 })
 
@@ -1068,7 +1075,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#limits']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       // waitFor from the first tick rather than findBy-then-assert: the ring lives for
@@ -1105,7 +1112,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#sec-planning']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
@@ -1129,7 +1136,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#calendar']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       await waitFor(() =>
@@ -1143,7 +1150,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
       // its sliding indicator under the selected tab with another (2026-09-13 polish §2.4). The
       // chase is picked by WHAT it watches — the whole body — because construction order is an
       // accident of which effect runs first, and this test is about the page's arrival.
-      expect(resizeObservers).toHaveLength(3)
+      expect(resizeObservers.filter((observer) => observer.targets.includes(document.body))).toHaveLength(1)
       const chase = bodyObserver()
       expect(chase).toBeDefined()
       if (chase === undefined) throw new Error('the arrival chase never observed the body')
@@ -1184,7 +1191,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#calendar']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       await waitFor(() =>
@@ -1221,7 +1228,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
       <MemoryRouter
         initialEntries={[`/settings?restore=${encodeURIComponent(fresh.name)}#restore`]}
       >
-        <SettingsPage />
+        <ConfirmProvider><SettingsPage /></ConfirmProvider>
       </MemoryRouter>,
     )
     // The ring lands as soon as the cards exist; the arrival is still waiting for the list.
@@ -1247,7 +1254,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
   it('takes the ring off the card it leaves when the anchor moves', async () => {
     render(
       <MemoryRouter initialEntries={['/settings#limits']}>
-        <SettingsPage />
+        <ConfirmProvider><SettingsPage /></ConfirmProvider>
         <AnchorProbe to="/settings#backups" />
       </MemoryRouter>,
     )
@@ -1302,7 +1309,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     try {
       render(
         <MemoryRouter initialEntries={['/settings#limits']}>
-          <SettingsPage />
+          <ConfirmProvider><SettingsPage /></ConfirmProvider>
         </MemoryRouter>,
       )
       // waitFor from the first tick rather than findBy-then-assert: the ring lives for

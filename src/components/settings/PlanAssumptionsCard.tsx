@@ -9,6 +9,9 @@ import { formatCurrency } from '../../utils/format'
 import { currentMonthIso } from '../../utils/months'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import InfoHint from '../InfoHint'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { useSaveState } from '../feedback/useSaveState'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
@@ -84,8 +87,8 @@ export default function PlanAssumptionsCard() {
   const [boxes, setBoxes] = useState<Boxes>({ swr: '', planUntil: '', ticker: '', discount: '' })
   const [loadError, setLoadError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [savedNote, setSavedNote] = useState(false)
+  const saveState = useSaveState({ dirty: settings !== null && JSON.stringify(boxes) !== JSON.stringify(boxesFor(settings)) })
+  const saving = saveState.status === 'saving'
   const seqRef = useRef(0)
 
   // A plain function over stable setters, called from the effect and from Retry (the
@@ -124,7 +127,7 @@ export default function PlanAssumptionsCard() {
   // in the boxes.
   const edit = (key: keyof Boxes) => (value: string) => {
     setBoxes((current) => ({ ...current, [key]: value }))
-    setSavedNote(false)
+    saveState.clearError()
     setFormError(null)
   }
 
@@ -164,36 +167,26 @@ export default function PlanAssumptionsCard() {
     // partial PUT a dropped key means "keep" — so "clear the ticker" and "I forgot to send it"
     // would arrive as the same request. The non-empty value travels AS TYPED.
     const ticker = boxes.ticker.trim() === '' ? null : boxes.ticker
-    setSaving(true)
     setFormError(null)
-    setSavedNote(false)
+    saveState.clearError()
     // ONLY this card's fields (spec §3.5; plan_until_year since the 2026-09-23 spec §R11). The
     // cron and the reminder day belong to other cards; sending them — even as nulls — would
     // revert or clear what those cards saved. The plan-until year goes only when it changed —
     // absent means "keep" — and a cleared one as an explicit null, for the ticker's reason.
-    putAppSettings({
+    void saveState.run(async () => {
+      const saved = await putAppSettings({
       swr_pct: shiftPoint(boxes.swr, -2),
       ...(planChanged ? { plan_until_year: planUntil } : {}),
       espp_ticker: ticker,
       espp_discount_pct: shiftPoint(boxes.discount, -2),
     })
-      .then((saved) => {
-        // Re-seeded from the RESPONSE, not from what was typed: the server answers with what
-        // it stored (quantized rate, uppercased ticker), and boxes left holding the typed text
-        // would read as unsaved work against values already in the database.
-        setSettings(saved)
-        setBoxes(boxesFor(saved))
-        setSavedNote(true)
-      })
-      .catch((err: unknown) => {
-        // Verbatim: the ticker 422 is NOT field-prefixed, so the slot is form-level.
-        setFormError(err instanceof ApiError ? err.message : 'Could not save the assumptions.')
-      })
-      .finally(() => setSaving(false))
+      setSettings(saved)
+      setBoxes(boxesFor(saved))
+    })
   }
 
   return (
-    <section className="card span-6" id="plan-assumptions" role="region" aria-label="Plan assumptions">
+    <section className="card span-12" id="plan-assumptions" role="region" aria-label="Plan assumptions">
       <h2 className="eyebrow">
         Plan assumptions
         <InfoHint text="The knobs the Projection, ESPP and Paycheck pages derive from. The employer match is set per person on the Paycheck page." />
@@ -205,6 +198,7 @@ export default function PlanAssumptionsCard() {
           className="settings-card-form"
           onSubmit={(e) => {
             e.preventDefault()
+            e.currentTarget.querySelector<HTMLButtonElement>('button[type="submit"]')?.focus()
             save()
           }}
         >
@@ -258,16 +252,9 @@ export default function PlanAssumptionsCard() {
             maximum.
           </p>
           <div className="settings-card-actions">
-            <button type="submit" className="button button-primary" disabled={saving}>
-              {saving ? 'Saving…' : 'Save assumptions'}
-            </button>
+            <SaveButton type="submit" className="button button-primary" state={saveState}>Save assumptions</SaveButton>
+            {formError ? <span role="alert" className="save-status save-status-error">{formError}</span> : <SaveStatus state={saveState} />}
           </div>
-          <FeedBanner error={formError} />
-          {savedNote && (
-            <p className="settings-note" role="status">
-              Saved.
-            </p>
-          )}
         </form>
       )}
       {/* Behind the same gate as the form: the read that fills this list is the read that

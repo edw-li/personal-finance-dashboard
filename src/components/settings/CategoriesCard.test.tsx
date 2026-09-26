@@ -11,6 +11,7 @@ vi.mock('../../api/spending', async (importOriginal) => ({
   fetchCategories: vi.fn(),
   createCategory: vi.fn(),
   updateCategory: vi.fn(),
+  updateCategoryLogged: vi.fn(),
   deleteCategory: vi.fn(),
   reorderCategories: vi.fn(),
 }))
@@ -20,6 +21,7 @@ import {
   fetchCategories,
   reorderCategories,
   updateCategory,
+  updateCategoryLogged,
 } from '../../api/spending'
 vi.mock('../../api/lifecycle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/lifecycle')>()),
@@ -92,6 +94,7 @@ beforeEach(() => {
   vi.mocked(fetchCategories).mockResolvedValue([GROCERIES, PETS, TAXES])
   vi.mocked(createCategory).mockResolvedValue(GROCERIES)
   vi.mocked(updateCategory).mockResolvedValue(GROCERIES)
+  vi.mocked(updateCategoryLogged).mockResolvedValue({ data: GROCERIES, batchId: 'kind-batch' })
   vi.mocked(deleteCategory).mockResolvedValue({ batchId: null })
   vi.mocked(reorderCategories).mockResolvedValue({ data: [PETS, GROCERIES, TAXES], batchId: 'batch-7' })
   vi.mocked(undoBatch).mockResolvedValue(UNDONE)
@@ -121,6 +124,55 @@ const row = (id: number) =>
   document.querySelector(`.category-table tbody tr[data-reorder-id="${id}"]`)
 /** The card's reorder live region (the toast layer's alert region is a <div>). */
 const live = () => document.querySelector('span[aria-live="assertive"]')?.textContent ?? ''
+
+it('reveals the editor and returns Escape to its row', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+  const edit = screen.getByRole('button', { name: 'Edit Groceries' })
+  fireEvent.click(edit)
+  const input = screen.getByLabelText('Category name') as HTMLInputElement
+  expect(document.activeElement).toBe(input)
+  expect(input.selectionEnd).toBe(input.value.length)
+  expect(row(5)?.getAttribute('aria-current')).toBe('true')
+  edit.focus()
+  fireEvent.click(edit)
+  expect(document.activeElement).toBe(input)
+  fireEvent.keyDown(input, { key: 'Escape' })
+  expect(document.activeElement).toBe(edit)
+  expect(row(5)?.hasAttribute('aria-current')).toBe(false)
+})
+
+it('changes kind optimistically and locks only the row, then undoes the logged batch', async () => {
+  const patch = deferred<{ data: CategoryOut; batchId: string }>()
+  vi.mocked(updateCategoryLogged).mockReturnValue(patch.promise)
+  render(<ToastProvider><CategoriesCard /></ToastProvider>)
+  await screen.findByRole('table')
+  const kinds = within(screen.getByRole('group', { name: 'Kind for Groceries' }))
+  fireEvent.click(kinds.getByRole('button', { name: 'Transfer' }))
+  expect(kinds.getByRole('button', { name: 'Transfer' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Edit Pets' }).getAttribute('aria-disabled')).not.toBe('true')
+  await act(async () => patch.resolve({ data: { ...GROCERIES, kind: 'transfer' }, batchId: 'kind-batch' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+  await waitFor(() => expect(undoBatch).toHaveBeenCalledWith('kind-batch'))
+  await waitFor(() => expect(kinds.getByRole('button', { name: 'Living' }).getAttribute('aria-pressed')).toBe('true'))
+})
+
+it('deletes before offering Undo and restores the identical category with focus', async () => {
+  vi.mocked(deleteCategory).mockResolvedValue({ batchId: 'delete-batch' })
+  render(<ToastProvider><CategoriesCard /></ToastProvider>)
+  await screen.findByRole('table')
+  vi.mocked(fetchCategories).mockResolvedValue([PETS, TAXES])
+  const remove = screen.getByRole('button', { name: 'Delete Groceries' })
+  remove.focus()
+  fireEvent.click(remove)
+  const undo = await screen.findByRole('button', { name: 'Undo' })
+  expect(row(5)).toBeNull()
+  expect(document.activeElement).not.toBe(document.body)
+  vi.mocked(fetchCategories).mockResolvedValue([GROCERIES, PETS, TAXES])
+  fireEvent.click(undo)
+  await waitFor(() => expect(row(5)?.hasAttribute('data-flash')).toBe(true))
+  expect(row(5)?.contains(document.activeElement)).toBe(true)
+})
 
 it('lists the categories with their retirement state', async () => {
   render(<CategoriesCard />)
@@ -171,7 +223,7 @@ it('retires and restores without touching the other columns', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Retire Groceries' }))
   await waitFor(() =>
-    expect(vi.mocked(updateCategory)).toHaveBeenCalledWith(5, { is_active: false }),
+    expect(vi.mocked(updateCategoryLogged)).toHaveBeenCalledWith(5, { is_active: false }),
   )
 
   // The card stays busy until the Retire's reload has landed (a write holds the row buttons with
@@ -180,7 +232,7 @@ it('retires and restores without touching the other columns', async () => {
   await waitFor(() => expect(restore().disabled).toBe(false))
   fireEvent.click(restore())
   await waitFor(() =>
-    expect(vi.mocked(updateCategory)).toHaveBeenCalledWith(6, { is_active: true }),
+    expect(vi.mocked(updateCategoryLogged)).toHaveBeenCalledWith(6, { is_active: true }),
   )
 })
 
@@ -247,10 +299,10 @@ it('PATCHes the kind alone and re-reads the list', async () => {
     }),
   )
 
-  await waitFor(() => expect(vi.mocked(updateCategory)).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(vi.mocked(updateCategoryLogged)).toHaveBeenCalledTimes(1))
   // ONLY kind on the wire — toggleActive's rule: sending the name and position back would
   // let a stale render overwrite a concurrent edit.
-  expect(vi.mocked(updateCategory).mock.calls[0]).toEqual([5, { kind: 'transfer' }])
+  expect(vi.mocked(updateCategoryLogged).mock.calls[0]).toEqual([5, { kind: 'transfer' }])
   await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2))
 })
 
@@ -267,7 +319,7 @@ it('does not PATCH when the kind a row already has is clicked again', async () =
   // Segmented reports every click, including one on the active button. A PATCH that changes
   // nothing would still write a change-log batch offering to "undo" a no-op.
   await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(1))
-  expect(vi.mocked(updateCategory)).not.toHaveBeenCalled()
+  expect(vi.mocked(updateCategoryLogged)).not.toHaveBeenCalled()
 })
 
 it('spells out what each kind means and that a change moves ALL history', async () => {
@@ -280,11 +332,11 @@ it('spells out what each kind means and that a change moves ALL history', async 
   expect(screen.getByText(/Changing a kind recomputes ALL history/)).toBeTruthy()
 })
 
-it('banners a refused kind change and leaves the row on its old kind', async () => {
-  vi.mocked(updateCategory).mockRejectedValue(
+it('toasts a refused kind change and leaves the row on its old kind', async () => {
+  vi.mocked(updateCategoryLogged).mockRejectedValue(
     new ApiError('kind must be one of: living, tax, transfer', 422),
   )
-  render(<CategoriesCard />)
+  render(<ToastProvider><CategoriesCard /></ToastProvider>)
   await screen.findByRole('table')
 
   fireEvent.click(
@@ -305,19 +357,20 @@ it('banners a refused kind change and leaves the row on its old kind', async () 
 it('renders a validation error inline with no Retry beside it (motion spec §9)', async () => {
   render(<CategoriesCard />)
   await screen.findByRole('table')
-  fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+  fireEvent.submit(screen.getByRole('button', { name: 'Add category' }).closest('form')!)
 
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('Category name is required.')
+  expect(document.activeElement).toBe(screen.getByLabelText('Category name'))
   // Retry re-runs the FETCH: here it would invite a re-send of a form the client refused.
   expect(within(alert).queryByRole('button')).toBeNull()
 })
 
-it('is a span-8 card whose table scroller carries the row-actions column (2026-09-13 spec §7)', async () => {
+it('is a span-12 card whose table scroller carries the row-actions column (2026-09-13 spec §7)', async () => {
   render(<CategoriesCard />)
   await screen.findByRole('table')
   const card = document.getElementById('categories') as HTMLElement
-  expect(card.classList.contains('span-8')).toBe(true)
+  expect(card.classList.contains('span-12')).toBe(true)
   expect(card.querySelector('.settings-scroll')).not.toBeNull()
   expect(card.querySelectorAll('td.row-actions').length).toBeGreaterThan(0)
 })
@@ -653,8 +706,8 @@ it('parks the grips while the list on screen failed to reload, until a Retry bri
 })
 
 it('parks every grip while another request of the card is in flight (spec §4.1 Busy)', async () => {
-  const patch = deferred<CategoryOut>()
-  vi.mocked(updateCategory).mockReturnValue(patch.promise)
+  const patch = deferred<{ data: CategoryOut; batchId: string | null }>()
+  vi.mocked(updateCategoryLogged).mockReturnValue(patch.promise)
   render(<CategoriesCard />)
   await screen.findByRole('table')
   expect(grip('Taxes').getAttribute('aria-disabled')).toBeNull()
@@ -669,7 +722,7 @@ it('parks every grip while another request of the card is in flight (spec §4.1 
   expect(live()).toBe('')
 
   await act(async () => {
-    patch.resolve({ ...GROCERIES, is_active: false })
+    patch.resolve({ data: { ...GROCERIES, is_active: false }, batchId: null })
   })
   await waitFor(() => expect(grip('Taxes').getAttribute('aria-disabled')).toBeNull())
 })
@@ -684,13 +737,13 @@ it('holds every row button while a row is lifted, and gives them back when the l
     }) as HTMLButtonElement
 
   press('Groceries', ' ')
-  expect(edit().disabled).toBe(true)
-  expect((screen.getByRole('button', { name: 'Delete Pets' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(edit().getAttribute('aria-disabled')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Delete Pets' }).getAttribute('aria-disabled')).toBe('true')
   expect(kindTax().disabled).toBe(true)
 
   press('Groceries', 'Escape')
   expect(live()).toBe('Cancelled. Groceries is back at position 1 of 3.')
-  expect(edit().disabled).toBe(false)
+  expect(edit().getAttribute('aria-disabled')).toBeNull()
   expect(kindTax().disabled).toBe(false)
 })
 

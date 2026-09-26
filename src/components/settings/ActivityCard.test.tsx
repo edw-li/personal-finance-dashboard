@@ -49,6 +49,34 @@ afterEach(() => {
 })
 
 describe('ActivityCard', () => {
+  it('keeps focus in Activity when Undo of a later page reloads only the first page', async () => {
+    vi.mocked(fetchActivity)
+      .mockResolvedValueOnce(page([SUMMARY], 'older'))
+      .mockResolvedValueOnce(page([SAVE]))
+      .mockResolvedValueOnce(page([SUMMARY], 'older'))
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }))
+    const button = await screen.findByRole('button', { name: 'Undo' })
+    button.focus()
+    fireEvent.click(button)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo?' }))
+    await waitFor(() => expect(screen.queryByText(SAVE.label)).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Activity' }))
+  })
+
+  it('focuses the original activity row after Undo removes its action', async () => {
+    vi.mocked(fetchActivity)
+      .mockResolvedValueOnce(page([SAVE]))
+      .mockResolvedValueOnce(page([{ ...SAVE, undoable: false, undone_by: 'u-1' }]))
+    mount()
+    const button = await screen.findByRole('button', { name: 'Undo' })
+    button.focus()
+    fireEvent.click(button)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo?' }))
+    await screen.findByText('undone')
+    expect(document.activeElement).toBe(screen.getByText(SAVE.label).closest('li'))
+  })
+
   it('lists batches and runs with source pills, and offers Undo only where undoable', async () => {
     mount()
     expect(await screen.findByRole('region', { name: 'Activity' })).toBeTruthy()
@@ -137,11 +165,13 @@ describe('ActivityCard', () => {
     const [restoreView, importView] = await screen.findAllByRole('button', { name: 'View report' })
     fireEvent.click(restoreView)
     expect(await screen.findByText('Restored.')).toBeTruthy()
+    expect(restoreView.getAttribute('aria-expanded')).toBe('true')
+    expect(restoreView.closest('li')?.contains(screen.getByText('Restored.'))).toBe(true)
     expect(screen.getByText('1 table unchanged')).toBeTruthy()
     fireEvent.click(importView)
     expect(await screen.findByText('Applied.')).toBeTruthy()
     expect(screen.getByText('transaction')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Close report' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide report' }))
     expect(screen.queryByText('Applied.')).toBeNull()
   })
 
