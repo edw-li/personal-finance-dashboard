@@ -278,3 +278,32 @@ async def test_the_feed_bump_and_a_revoke_log_nothing(auth_client, db, monkeypat
     revoked = await auth_client.delete(f"{CALENDAR}/feed-tokens/{token_id}")
     assert revoked.status_code == 204 and "x-change-batch" not in revoked.headers
     assert (await db.execute(count)).scalar_one() == logged_before
+
+
+async def test_naming_skips_the_tax_pricing_and_a_put_that_changes_nothing_names_nothing(
+    auth_client, db, monkeypatch
+):
+    """The withholding tracker prices the tax deadlines and never names one, so naming runs
+    without it and the label is the same; and a PUT that changes nothing composes nothing."""
+    freeze_today(monkeypatch)
+    calls = {"compose": 0, "estimate": 0}
+    real_compose = calendar_api._compose_for
+
+    async def counted_compose(*args, **kwargs):
+        calls["compose"] += 1
+        return await real_compose(*args, **kwargs)
+
+    async def estimate(*_args, **_kwargs):
+        calls["estimate"] += 1
+        raise AssertionError("naming an event must not price the tax deadlines")
+
+    monkeypatch.setattr(calendar_api, "_compose_for", counted_compose)
+    monkeypatch.setattr(calendar_api, "withholding_estimate", estimate)
+    done = await auth_client.put(f"{CALENDAR}/overrides/{Q3}", json=overlay(done=True))
+    assert done.status_code == 200, done.text
+    [row] = await logged(db, done.headers["x-change-batch"])
+    assert row.label == f"Marked {Q3_NAME} done"  # a tax deadline's label needs no pricing
+    assert calls == {"compose": 1, "estimate": 0}
+    again = await auth_client.put(f"{CALENDAR}/overrides/{Q3}", json=overlay(done=True))
+    assert again.status_code == 200 and "x-change-batch" not in again.headers
+    assert calls == {"compose": 1, "estimate": 0}  # nothing recorded, so nothing named

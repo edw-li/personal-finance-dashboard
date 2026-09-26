@@ -419,10 +419,14 @@ async def _custom_rows(db: AsyncSession, window: Window, names: dict[int, str]) 
 
 
 async def _load_sources(
-    db: AsyncSession, window: Window, today: date
+    db: AsyncSession, window: Window, today: date, *, priced: bool = True
 ) -> tuple[Sources, list[SourceHealthOut], datetime | None]:
     """Every generator input as plain values, plus the health footer and the quote stamp.
-    Health rows come out in SOURCE_FAMILIES order — `card` between tax and ritual."""
+    Health rows come out in SOURCE_FAMILIES order — `card` between tax and ritual.
+
+    `priced=False` skips the withholding tracker, the costliest loader: it prices the tax
+    deadlines and never names one ("Tax deadline — {which}" is fixed words), so the override
+    labels (`_event_name`) load without it — and without its health row."""
     health: list[SourceHealthOut] = []
     # ONE roster read for these loaders: the payday owners and the custom-event person
     # stamps are the same people, and two reads are two chances to disagree. (`_tax_facts`
@@ -513,8 +517,10 @@ async def _load_sources(
     payday_sources, payroll_health = await _payday_sources(db, today, people)
     health.append(payroll_health)
 
-    tax_facts, tax_health = await _tax_facts(db, window, today)
-    health.append(tax_health)
+    tax_facts: dict[int, TaxFacts] = {}
+    if priced:
+        tax_facts, tax_health = await _tax_facts(db, window, today)
+        health.append(tax_health)
     cards, card_health = await _card_facts(db)
     health.append(card_health)
 
@@ -560,11 +566,12 @@ async def _overrides(db: AsyncSession) -> dict[str, Override]:
 
 
 async def _compose_for(
-    db: AsyncSession, start: date, end: date, today: date
+    db: AsyncSession, start: date, end: date, today: date, *, priced: bool = True
 ) -> tuple[list[Event], list[SourceHealthOut], datetime | None]:
-    """Shared by GET /calendar and Lane B's ICS routes: load, compose, overlay."""
+    """Shared by GET /calendar and Lane B's ICS routes: load, compose, overlay. `priced=False`
+    is the override labels' path (`_load_sources` says what it skips)."""
     window = Window(start, end)
-    sources, health, quoted_at = await _load_sources(db, window, today)
+    sources, health, quoted_at = await _load_sources(db, window, today, priced=priced)
     events = compose(window, today=today, sources=sources, overrides=await _overrides(db))
     return events, health, quoted_at
 
@@ -767,11 +774,12 @@ def _override_out(row: CalendarEventOverride) -> OverrideOut:
 
 async def _event_name(db: AsyncSession, key: str) -> str:
     """How an Activity label names the event an override sits on: the calendar's own label and
-    the day in its key — "Payday of Sep 15, 2026". Composed for that day as GET /calendar would;
-    the overdue monthly reminder sits on today while its key keeps the nominal day, so a ritual
-    key's window runs on to today. A key no event carries (or a day no calendar has — KEY_RE
-    admits 2026-02-30) is named by the key itself. The label is the only reason an override
-    route composes anything.
+    the day in its key — "Payday of Sep 15, 2026". Composed for that day as GET /calendar would,
+    minus the tax pricing, which names nothing (`priced=False`); the overdue monthly reminder
+    sits on today while its key keeps the nominal day, so a ritual key's window runs on to today.
+    A key no event carries (or a day no calendar has — KEY_RE admits 2026-02-30) is named by the
+    key itself. The label is the only reason an override route composes anything, so callers ask
+    only once the write has recorded a row.
 
     A label is a nicety and must never cost the write it describes. The compose runs inside a
     SAVEPOINT, so a loader's database error cannot abort the write's transaction; and any
@@ -789,7 +797,7 @@ async def _event_name(db: AsyncSession, key: str) -> str:
         return by_key
     try:
         async with db.begin_nested():
-            events, _health, _quoted_at = await _compose_for(db, day, end, today)
+            events, _health, _quoted_at = await _compose_for(db, day, end, today, priced=False)
     except Exception:
         logger.warning(
             "could not name calendar event %s; labelling it by its key", key, exc_info=True
@@ -837,7 +845,6 @@ async def put_override(
     """Upsert, full replace (the house law): a PUT without an amount clears the figure.
     Logged as the one row's insert or update, so its Undo puts the overlay back as it was."""
     amount = _validated_amount(body.amount)
-    name = await _event_name(db, key)
     row = await _find_override(db, key)
     before = None if row is None else row_image(row)
     if row is None:
@@ -861,7 +868,8 @@ async def put_override(
         batch.record_insert(row)
     else:
         batch.record_update(row, before)
-    batch.label = _override_label(before, after, name)
+    if batch.rows:  # a PUT that changed nothing records nothing, and composes nothing to name it
+        batch.label = _override_label(before, after, await _event_name(db, key))
     response.headers.update(batch_header(await batch.commit()))
     return _override_out(row)
 
