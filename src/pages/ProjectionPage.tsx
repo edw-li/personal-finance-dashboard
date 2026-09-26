@@ -19,12 +19,20 @@ import { PinRow } from '../sandbox/SandboxPanel'
 import CompareTable from '../sandbox/CompareTable'
 import type { HouseholdOut, PersonOut, ProjectionOut } from '../types/api'
 import type { ChartSelection } from '../types/metrics'
-import { formatCurrency, formatMonth, formatPct } from '../utils/format'
+import { formatCurrency, formatCurrencyWhole, formatMonth, formatPct } from '../utils/format'
 import '../components/panels.css'
 import './ProjectionPage.css'
 
 const NO_PEOPLE: PersonOut[] = []
 const SECTIONS = [{ id: 'planning', label: 'Planning workspace' }, { id: 'trend', label: 'Historical trend' }] as const
+
+/** FI ratio's second line (2026-09-25 polish spec §4.4): what is left to the target in whole dollars — a
+ *  display-only difference of the server's two figures — or that the target is reached. */
+function fiRatioLine(data: ProjectionOut): { text: string; tone: 'positive' | 'neutral' } | undefined {
+  if (data.fi_target === null || data.fi_ratio === null) return undefined
+  if (Number(data.fi_ratio) >= 1) return { text: 'Target reached', tone: 'positive' }
+  return { text: `${formatCurrencyWhole(Number(data.fi_target) - Number(data.starting_balance))} to go`, tone: 'neutral' }
+}
 
 export default function ProjectionPage() {
   const sections = useLocalSections(SECTIONS, 'planning')
@@ -109,7 +117,7 @@ export default function ProjectionPage() {
       status: missing ? 'ready' : data === null ? pageError !== null ? 'error' : 'loading' : 'ready',
       error: pageError, busy: false, fromCache,
       retry: () => !sandbox.empty && sandbox.errorStatus === 422 ? sandbox.reset() : setRetryNonce((n) => n + 1),
-    }} skeleton={{ tiles: 5, cards: [{ span: 12, height: 400 }] }}>
+    }} skeleton={{ tiles: { count: 5, row: 'five', className: 'projection-outcomes' }, cards: [{ span: 12, height: 400 }] }}>
       {missing ? <section className="card"><h2 className="eyebrow">Projected investable balance</h2>
         <p className="empty-note">{sandbox.error} — <Link to="/update">enter a monthly update</Link> to start one.</p></section>
         : data !== null && display !== null && receipts !== null && fiDate !== null && lasts !== null && <>
@@ -119,7 +127,9 @@ export default function ProjectionPage() {
                 delta={data.fi_target === null ? undefined : `annual spend ÷ ${formatPct(data.swr_pct, { signed: false })} SWR`}
                 hint="Annual spend ÷ withdrawal rate — the balance at which withdrawals could cover spending."
                 evidence={receipts.target} tone="neutral" />
+              {/* Its second line (spec §4.4): the gap to the target — a verdict when reached, never a glyph. */}
               <StatTile label="FI ratio" value={formatPct(data.fi_ratio, { signed: false })} evidence={receipts.ratio}
+                delta={fiRatioLine(data)?.text} tone={fiRatioLine(data)?.tone} direction="none"
                 hint="Investable balance as a share of the FI target." />
               {/* Named by the day its balances describe (2026-09-23 spec §R5): the current snapshot —
                   the Overview's — so next month's balances recorded early read "· provisional". */}

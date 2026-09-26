@@ -1075,6 +1075,25 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     ])
   })
 
+  // 2026-09-25 polish spec §4.4 (PCC-12: "its tile is half empty"): what is left to the target, whole
+  // dollars — $1,500,000 target, $100,000 invested — or that it is reached.
+  it('gives FI ratio a second line: what is left to the target, or that it is reached', async () => {
+    renderPage()
+    await loaded()
+    const tile = screen.getByText('FI ratio', { selector: '.stat-label-text' }).closest('.stat-tile') as HTMLElement
+    expect(tile.querySelector('.stat-delta')?.textContent).toBe('$1,400,000 to go')
+    expect(tile.querySelector('.stat-delta')?.className).toContain('stat-delta-neutral')
+  })
+
+  it('says the target is reached, green and with no glyph', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_ratio: '1.050000' }))
+    renderPage()
+    await loaded()
+    const delta = screen.getByText('FI ratio', { selector: '.stat-label-text' }).closest('.stat-tile')?.querySelector('.stat-delta') as HTMLElement
+    expect(delta.textContent).toBe('Target reached')
+    expect(delta.className).toContain('stat-delta-positive')
+  })
+
   it('measures the outcomes band into --projection-band-h so the chart column sticks under it', async () => {
     // jsdom has no ResizeObserver; the stub is what lets the measurement path run at all.
     class StubResizeObserver {
