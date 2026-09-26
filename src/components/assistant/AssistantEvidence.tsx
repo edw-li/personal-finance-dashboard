@@ -1,10 +1,15 @@
-import { Children, cloneElement, isValidElement, memo, useEffect, useState } from 'react'
+import { Children, cloneElement, isValidElement, memo, useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { ReactNode } from 'react'
 import { deleteFinding, fetchFindings, saveFinding } from '../../api/assistantFindings'
 import { errorDetail } from '../../api/client'
 import type { AssistantEvidenceBundle, AssistantFinding } from '../../types/assistantEvidence'
 import type { MetricEvidence } from '../../types/metrics'
 import Disclosure from '../Disclosure'
+import BusyButton from '../feedback/BusyButton'
+import { useConfirm } from '../feedback/confirm'
+import { useLatest } from '../reorder/useLatest'
+import { useToast } from '../ToastProvider'
 import MetricInspector, { ApplicationSourceLink, formatEvidenceValue } from '../details/MetricInspector'
 import { useDetailPanel } from '../details/DetailPanelProvider'
 import { renderMarkdown } from './markdown'
@@ -58,11 +63,11 @@ export function SaveFindingButton({ question, content, model, bundle, onSaved }:
   const [state, setState] = useState<'ready' | 'saving' | 'saved'>('ready')
   const [error, setError] = useState<string | null>(null)
   return <div className="assistant-save-finding">
-    <button type="button" className="button" disabled={state !== 'ready'} onClick={() => {
+    <BusyButton type="button" className="button" busy={state === 'saving'} inert={state === 'saved'} onClick={() => {
       setState('saving'); setError(null)
       saveFinding(question, content, model, bundle).then(() => { setState('saved'); onSaved() })
         .catch((e: unknown) => { setError(errorDetail(e)); setState('ready') })
-    }}>{state === 'saved' ? 'Finding saved' : state === 'saving' ? 'Saving…' : 'Save finding'}</button>
+    }}>{state === 'saved' ? 'Finding saved' : state === 'saving' ? 'Saving…' : 'Save finding'}</BusyButton>
     {error && <p className="assistant-error" role="alert">Could not save this finding: {error}</p>}
   </div>
 }
@@ -72,27 +77,46 @@ export function SavedFindings({ revision }: { revision: number }) {
   const [error, setError] = useState<string | null>(null)
   const [retry, setRetry] = useState(0)
   const [deleting, setDeleting] = useState<number | null>(null)
+  const ask = useConfirm()
+  const toast = useToast()
+  const regionRef = useRef<HTMLDivElement>(null)
+  const findingsRef = useLatest(findings)
+  const remove = async (finding: AssistantFinding, anchor: HTMLButtonElement) => {
+    if (!(await ask({ anchor, title: `Remove ${finding.title}?`, body: "This can't be undone.", confirmLabel: 'Remove saved finding' }))) return
+    setDeleting(finding.id)
+    try {
+      await deleteFinding(finding.id)
+      const rows = findingsRef.current ?? []
+      const index = rows.findIndex((row) => row.id === finding.id)
+      const neighbour = rows[index + 1] ?? rows[index - 1]
+      flushSync(() => setFindings((current) => current?.filter((row) => row.id !== finding.id) ?? null))
+      const target = neighbour ? document.getElementById(`assistant-finding-${neighbour.id}`)?.querySelector<HTMLElement>('summary') : null
+      ;(target ?? regionRef.current)?.focus()
+    } catch (err) {
+      toast.error(errorDetail(err))
+    } finally {
+      setDeleting(null)
+    }
+  }
   useEffect(() => {
     let alive = true
     fetchFindings().then((rows) => { if (alive) { setFindings(rows); setError(null) } })
       .catch((e: unknown) => { if (alive) setError(errorDetail(e)) })
     return () => { alive = false }
   }, [revision, retry])
-  return <div className="assistant-saved-findings">
+  return <div className="assistant-saved-findings" ref={regionRef} role="region" aria-label="Saved findings" tabIndex={-1}>
     <p>Saved findings retain their original figures and source context. Open a source to see current data.</p>
     {error && <p role="alert">Could not load findings: {error} <button className="button" onClick={() => setRetry((n) => n + 1)}>Retry</button></p>}
     {findings === null && !error && <p role="status">Loading saved findings…</p>}
     {findings?.length === 0 && <p>No saved findings yet. Save a useful answer from your conversation.</p>}
-    {findings?.map((finding) => <Disclosure key={finding.id} className="assistant-saved-finding"
+    {findings?.map((finding) => <Disclosure key={finding.id} id={`assistant-finding-${finding.id}`} className="assistant-saved-finding"
       summary={<>{finding.title}<small>Evidence from {new Date(finding.evidence_as_of).toLocaleString()}</small></>}>
       <AssistantMessageBody text={finding.content} metrics={finding.evidence} />
       {finding.evidence.length > 0 && <dl>{finding.evidence.map((metric) => <div key={metric.id}><dt>{metric.label}</dt><dd><EvidenceReference metric={metric} /></dd></div>)}</dl>}
       <p className="assistant-meta">Saved {new Date(finding.created_at).toLocaleString()}{finding.model_used ? ` · ${finding.model_used}` : ''}</p>
-      <button type="button" className="button" disabled={deleting === finding.id} onClick={() => {
-        setDeleting(finding.id)
-        deleteFinding(finding.id).then(() => setFindings((rows) => rows?.filter((row) => row.id !== finding.id) ?? null))
-          .catch((e: unknown) => setError(errorDetail(e))).finally(() => setDeleting(null))
-      }}>{deleting === finding.id ? 'Removing…' : 'Remove saved finding'}</button>
+      <BusyButton type="button" className="button" busy={deleting === finding.id} onClick={(event) => void remove(finding, event.currentTarget)}>
+        Remove saved finding
+      </BusyButton>
     </Disclosure>)}
   </div>
 }
