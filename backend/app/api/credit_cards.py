@@ -31,6 +31,7 @@ from app.schemas.credit_cards import (
     RewardRatePut,
 )
 from app.schemas.ordering import OrderIn
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_8_2,
     MONEY_MAX_ABS_10_2,
@@ -59,6 +60,19 @@ POINT_VALUE_MAX_ABS = Decimal(100)  # Numeric(6,4): 2 integer digits
 # /{card_id} route (those live in the cards section below) — FastAPI matches in
 # declaration order and "/credit-cards/categories" would otherwise 422 against the
 # int converter. Keep new static sub-paths above the cards section.
+
+
+# --- Activity labels (2026-09-25 polish spec §6.1) ----------------------------------------
+
+
+def _edit_label(noun: str, name: str, before: dict, after: dict, *, off: str, on: str) -> str:
+    """A PATCH's label. When `is_active` is the only column that moved, the edit was the
+    row's one-click toggle, and the label says so in the button's own verb — the roster's
+    Archive / Unarchive, the categories' Hide / Show."""
+    moved = {key for key, value in after.items() if before.get(key) != value}
+    if moved == {"is_active"}:
+        return f"{on if after['is_active'] else off} {noun} {name}"
+    return f"Edited {noun} {name}"
 
 
 # --- reward categories (matrix rows) ------------------------------------------------------
@@ -98,7 +112,10 @@ async def list_reward_categories(db: AsyncSession = Depends(get_db)) -> list[Rew
 
 @router.post("/categories", response_model=RewardCategoryOut, status_code=201)
 async def create_reward_category(
-    body: RewardCategoryCreate, db: AsyncSession = Depends(get_db)
+    body: RewardCategoryCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> RewardCategory:
     slug = slugify(body.name)
     if not slug or len(slug) > 80:
@@ -136,7 +153,10 @@ async def create_reward_category(
         pinned_card_id=body.pinned_card_id,
     )
     db.add(category)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(category)
+    batch.label = f"Added reward category {category.name}"
+    response.headers.update(batch_header(await batch.commit()))
     return category
 
 
@@ -159,7 +179,11 @@ async def reorder_reward_categories(
 
 @router.patch("/categories/{category_id}", response_model=RewardCategoryOut)
 async def update_reward_category(
-    category_id: int, body: RewardCategoryUpdate, db: AsyncSession = Depends(get_db)
+    category_id: int,
+    body: RewardCategoryUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> RewardCategory:
     category = await _get_reward_category(db, category_id)
     updates = body.model_dump(exclude_unset=True)
@@ -197,20 +221,49 @@ async def update_reward_category(
     await _validated_category_refs(
         db, updates.get("spending_category_id"), updates.get("pinned_card_id")
     )
+    before = row_image(category)
     for field, value in updates.items():
         setattr(category, field, value)
-    await db.commit()
+    batch.record_update(category, before)
+    batch.label = _edit_label(
+        "reward category", category.name, before, row_image(category), off="Hid", on="Showed"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return category
 
 
 @router.delete("/categories/{category_id}", status_code=204)
-async def delete_reward_category(category_id: int, db: AsyncSession = Depends(get_db)) -> Response:
-    """Deletes the row AND its matrix cells (FK CASCADE). Unlike spending categories
-    there is no monthly history to orphan — cells are cheap to re-enter, so no guard."""
+async def delete_reward_category(
+    category_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
+    """Deletes the row AND its matrix cells — the cells by their own explicit DELETEs, each
+    imaged, so the Activity card's Undo restores them with the row. Unlike spending categories
+    there is no monthly history to orphan — cells are cheap to re-enter — so no guard."""
     category = await _get_reward_category(db, category_id)
+    cells = (
+        (
+            await db.execute(
+                select(RewardRate)
+                .where(RewardRate.category_id == category_id)
+                .order_by(RewardRate.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for rate in cells:
+        batch.record_delete(rate)
+        await db.delete(rate)
+    # The cells reach the database before the row: with no relationship() between these
+    # models the unit of work orders deletes by class name, RewardCategory ahead of RewardRate,
+    # and the FK cascade would take cells the session still means to delete.
+    await db.flush()
+    batch.record_delete(category)
+    batch.label = f"Deleted reward category {category.name}"
     await db.delete(category)
-    await db.commit()
-    return Response(status_code=204)
+    return Response(status_code=204, headers=batch_header(await batch.commit()))
 
 
 # --- reward rates (matrix cells) ----------------------------------------------------------
@@ -231,11 +284,16 @@ async def list_reward_rates(db: AsyncSession = Depends(get_db)) -> list[RewardRa
 
 @router.put("/rates", response_model=list[RewardRateOut])
 async def put_reward_rates(
-    body: list[RewardRatePut], db: AsyncSession = Depends(get_db)
+    body: list[RewardRatePut],
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[RewardRate]:
     """Bulk matrix save: upsert cells, delete where multiplier is null. ATOMIC — any
     validation failure raises before the single commit, applying nothing. Returns the
-    full post-save cell list (the matrix re-renders without a second fetch)."""
+    full post-save cell list (the matrix re-renders without a second fetch). Every cell it
+    adds, changes or clears is a row of ONE change batch, so one Undo reverts the whole save;
+    an all-unchanged save records nothing and names no batch."""
     seen: set[tuple[int, int]] = set()
     for entry in body:
         key = (entry.card_id, entry.category_id)
@@ -269,11 +327,13 @@ async def put_reward_rates(
         (rate.card_id, rate.category_id): rate
         for rate in (await db.execute(select(RewardRate))).scalars()
     }
+    added: list[RewardRate] = []
     for entry in body:
         key = (entry.card_id, entry.category_id)
         row = existing.get(key)
         if entry.multiplier is None:
             if row is not None:
+                batch.record_delete(row)
                 await db.delete(row)
             continue
         multiplier = quantize_money(entry.multiplier, "multiplier", max_abs=MULTIPLIER_MAX_ABS)
@@ -285,20 +345,27 @@ async def put_reward_rates(
             if cap <= 0:
                 raise HTTPException(status_code=422, detail="monthly_cap must be positive")
         if row is None:
-            db.add(
-                RewardRate(
-                    card_id=entry.card_id,
-                    category_id=entry.category_id,
-                    multiplier=multiplier,
-                    note=entry.note,
-                    monthly_cap=cap,
-                )
+            rate = RewardRate(
+                card_id=entry.card_id,
+                category_id=entry.category_id,
+                multiplier=multiplier,
+                note=entry.note,
+                monthly_cap=cap,
             )
+            db.add(rate)
+            added.append(rate)
         else:
+            before = row_image(row)
             row.multiplier = multiplier
             row.note = entry.note
             row.monthly_cap = cap
-    await db.commit()
+            batch.record_update(row, before)
+    await db.flush()  # the new cells' ids, which their images need
+    for rate in added:
+        batch.record_insert(rate)
+    changed = batch.rows
+    batch.label = f"Edited {changed} reward multiplier{'' if changed == 1 else 's'}"
+    response.headers.update(batch_header(await batch.commit()))
     return await _all_rates(db)
 
 
