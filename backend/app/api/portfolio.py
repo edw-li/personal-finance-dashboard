@@ -157,16 +157,9 @@ async def _resolve_account(db: AsyncSession, batch: ChangeBatch, label: str) -> 
     """resolve_portfolio_account, with the label row it mints — when it mints one — recorded in
     `batch` ahead of the row that needs it. An Undo then removes a label the write brought into
     being (refusing while another row still files under it), never one that was already there."""
-    cleaned = label.strip()
-    existing = (
-        (await db.execute(select(PortfolioAccount).where(PortfolioAccount.label == cleaned)))
-        .scalars()
-        .first()
-    )
-    if existing is not None:
-        return existing
-    account = await resolve_portfolio_account(db, cleaned)  # flushes: the image has its id
-    batch.record_insert(account)
+    account, minted = await resolve_portfolio_account(db, label)
+    if minted:
+        batch.record_insert(account)  # the service flushed: the image has its id
     return account
 
 

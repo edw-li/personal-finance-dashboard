@@ -16,12 +16,15 @@ async def test_resolve_creates_one_row_per_label_owned_by_the_primary(db):
     await db.commit()
     me = (await db.execute(select(Person).where(Person.is_primary))).scalar_one()
 
-    first = await resolve_portfolio_account(db, "RH Taxable")
-    again = await resolve_portfolio_account(db, "  RH Taxable  ")  # stripped, like the router
-    other = await resolve_portfolio_account(db, "Fidelity Taxable")
+    first, minted = await resolve_portfolio_account(db, "RH Taxable")
+    # Stripped, like the router.
+    again, minted_again = await resolve_portfolio_account(db, "  RH Taxable  ")
+    other, _ = await resolve_portfolio_account(db, "Fidelity Taxable")
     await db.commit()
 
     assert again.id == first.id  # get-or-create: one row per label, never two
+    # ... and it says which call minted the row, so a logged writer images that insert alone.
+    assert (minted, minted_again) == (True, False)
     assert first.person_id == me.id  # a NEW label defaults to the primary person
     assert other.person_id == me.id
     labels = (
@@ -39,11 +42,11 @@ async def test_resolve_never_rewrites_a_retagged_owner(db):
     await db.commit()
     sam = (await db.execute(select(Person).where(Person.name == "Sam"))).scalar_one()
 
-    account = await resolve_portfolio_account(db, "Sam Brokerage")
+    account, _ = await resolve_portfolio_account(db, "Sam Brokerage")
     account.person_id = sam.id
     await db.commit()
 
-    again = await resolve_portfolio_account(db, "Sam Brokerage")
+    again, _ = await resolve_portfolio_account(db, "Sam Brokerage")
     await db.commit()
     assert again.id == account.id
     assert again.person_id == sam.id  # get-or-create GETS; it does not re-own
@@ -52,7 +55,7 @@ async def test_resolve_never_rewrites_a_retagged_owner(db):
 async def test_resolve_on_a_peopleless_database_leaves_the_owner_null(db):
     """A create_all database (pytest, a scratch dev box) has no roster — NULL is exactly
     the pre-ownership spelling, not an error."""
-    account = await resolve_portfolio_account(db, "Solo")
+    account, _ = await resolve_portfolio_account(db, "Solo")
     await db.commit()
     assert account.person_id is None
 
