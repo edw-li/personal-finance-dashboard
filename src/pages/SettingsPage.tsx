@@ -7,6 +7,7 @@ import { importXlsx } from '../api/importer'
 import { fetchAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
 import AccountsCard from '../components/settings/AccountsCard'
+import PortfolioAccountsCard from '../components/settings/PortfolioAccountsCard'
 import ActivityCard from '../components/settings/ActivityCard'
 import AppearanceCard from '../components/settings/AppearanceCard'
 import AssistantCard from '../components/settings/AssistantCard'
@@ -328,6 +329,7 @@ export default function SettingsPage() {
 <LocalSectionPanel state={views} section="household" className="span-12 card-grid">
 {loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-household">Household</h2>
 <HouseholdCard onPeopleChange={setPeople} />
+<PortfolioAccountsCard people={people} />
 <CategoriesCard />
 <AccountsCard people={people} /></>}
 </LocalSectionPanel>

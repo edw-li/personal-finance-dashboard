@@ -129,6 +129,10 @@ function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: Cov
         <dd className="system-mono">{status.database.alembic_head ?? '—'}</dd>
       </div>
       <div className="system-fact">
+        <dt>Build</dt>
+        <dd className="system-mono">{__BUILD_HASH__}</dd>
+      </div>
+      <div className="system-fact">
         <dt>Environment</dt>
         <dd className="system-mono">{status.environment}</dd>
       </div>

@@ -23,6 +23,13 @@ const settings = readFileSync(path.resolve(__dirname, 'settings.css'), 'utf8')
 const reorderCss = readFileSync(path.resolve(__dirname, '../reorder/reorder.css'), 'utf8')
 
 describe('settings.css', () => {
+  it('shares one fact-label column and gives portfolio owners content width', () => {
+    expect(declarationsFor(settings, '.system-facts')).toContain('grid-template-columns: 9rem 1fr;')
+    const owner = declarationsFor(settings, '.portfolio-accounts-table select.field-input')
+    expect(owner).toContain('width: auto;')
+    expect(owner).toContain('max-width: 14rem;')
+    expect(declarationsFor(settings, '.settings-field > .segmented')).toContain('align-self: flex-start;')
+  })
   // The rail rides PageFrame's sticky scope row, which paints over the top of the scrollport.
   // The bands carry scroll-margin-top so a chip lands its section below the row — and every
   // anchored CARD needs the same, or /settings#backups, #restore (the ?restore= hand-off) and

@@ -4,7 +4,12 @@ import { ApiError } from '../../api/client'
 import type { AccountOut, ActivityBatch, PersonOut, PortfolioAccountOut } from '../../types/api'
 import { REORDER_INSTRUCTIONS } from '../reorder/reorderMath'
 import ToastProvider from '../ToastProvider'
-import AccountsCard from './AccountsCard'
+import NetWorthAccountsCard from './AccountsCard'
+import PortfolioAccountsCard from './PortfolioAccountsCard'
+
+function AccountsCard({ people }: { people: PersonOut[] }) {
+  return <><NetWorthAccountsCard people={people} /><PortfolioAccountsCard people={people} /></>
+}
 
 vi.mock('../../api/netWorth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/netWorth')>()),
@@ -629,13 +634,13 @@ it('renders once, after BOTH feeds settle — no roster table before the portfol
   vi.mocked(fetchPortfolioAccounts).mockReturnValue(labels.promise)
   render(<AccountsCard people={[ME]} />)
   expect((document.querySelector('.settings-ghost') as HTMLElement).dataset.ghostHeight).toBe('1114')
-  expect(screen.queryByText('Portfolio accounts')).toBeNull()
+  expect(screen.getByRole('region', { name: 'Portfolio accounts' })).toBeTruthy()
   await act(async () => {
     accounts.resolve([CHECKING])
   })
   // The roster is in, the labels are not: still the ghost — the card used to grow here and again
   // 76ms later, pushing the second table 1118px down the page (audit S-5).
-  expect(screen.queryByRole('table', { name: 'Net-worth accounts' })).toBeNull()
+  expect(screen.getByRole('table', { name: 'Net-worth accounts' })).toBeTruthy()
   expect(document.querySelector('.settings-ghost')).not.toBeNull()
   await act(async () => {
     labels.resolve([BROKERAGE])

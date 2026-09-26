@@ -250,7 +250,7 @@ export default function CategoriesCard() {
   })
 
   return (
-    <section className="card span-8" id="categories">
+    <section className="card span-12" id="categories">
       <h2 className="eyebrow">
         Spending categories
         <InfoHint text="The spending matrix's rows. Retire keeps a category out of the wizard without losing its history; delete only works while a category has no monthly rows. The slug never changes — it is the workbook importer's key. Drag a row by its grip to change the order the app lists categories in." />

@@ -8,13 +8,11 @@ import {
   reorderAccounts,
   updateAccount,
 } from '../../api/netWorth'
-import { fetchPortfolioAccounts, patchPortfolioAccount } from '../../api/portfolio'
 import { GROUP_LABELS, GROUP_ORDER } from '../../charts/theme'
 import type {
   AccountGroup,
   AccountOut,
   PersonOut,
-  PortfolioAccountOut,
 } from '../../types/api'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
@@ -84,7 +82,6 @@ function message(err: unknown, fallback: string): string {
 export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [accounts, setAccounts] = useState<AccountOut[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [settled, setSettled] = useState(false) // both mount fetches answered, either way
   // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -100,17 +97,6 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [pendingOrder, setPendingOrder] = useState<AccountOut[] | null>(null)
   const [lastAccounts, setLastAccounts] = useState(accounts)
   const seqRef = useRef(0)
-  // The portfolio labels get their OWN fetch, error slot, busy flag and seq guard —
-  // deliberately not folded into the roster's above. Two tables from two routers, and one
-  // being down must not empty the other (SystemCard's per-card posture).
-  const [portfolioAccounts, setPortfolioAccounts] = useState<PortfolioAccountOut[]>([])
-  const [portfolioLoaded, setPortfolioLoaded] = useState(false)
-  const [portfolioError, setPortfolioError] = useState<string | null>(null)
-  // The roster's loadError/formError split, for the second feed: a retag the server
-  // REFUSED is not fixed by asking for the labels again (2026-09-05 motion spec §9).
-  const [portfolioFormError, setPortfolioFormError] = useState<string | null>(null)
-  const [portfolioBusy, setPortfolioBusy] = useState(false)
-  const portfolioSeqRef = useRef(0)
   const toast = useToast()
 
   if (lastAccounts !== accounts) {
@@ -136,40 +122,8 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       })
   }
 
-  const loadPortfolio = (initial = false) => {
-    const seq = ++portfolioSeqRef.current
-    return warmSource(initial)(WARM.portfolioAccounts, fetchPortfolioAccounts)
-      .then((rows) => {
-        if (seq !== portfolioSeqRef.current) return
-        setPortfolioAccounts(rows)
-        setPortfolioError(null)
-        setPortfolioLoaded(true)
-      })
-      .catch((err: unknown) => {
-        if (seq !== portfolioSeqRef.current) return
-        setPortfolioError(describeError(err, 'the portfolio accounts'))
-      })
-  }
-
-  // ON CHANGE, one field on the wire — the card's toggleActive idiom. person_id is the only
-  // column this control owns (labels are immutable server-side this batch), and the value
-  // travels EXPLICITLY: an omitted key means "leave the owner alone", so clearing the
-  // select has to send null on purpose.
-  const retagPortfolioAccount = (account: PortfolioAccountOut, value: string) => {
-    setPortfolioBusy(true)
-    setPortfolioFormError(null)
-    patchPortfolioAccount(account.id, { person_id: value === '' ? null : Number(value) })
-      .then(() => loadPortfolio())
-      .catch((err: unknown) => setPortfolioFormError(message(err, 'Could not retag the account.')))
-      .finally(() => setPortfolioBusy(false))
-  }
-
   useEffect(() => {
-    // ONE render when both feeds have SETTLED (2026-09-13 spec §9): the card used to grow twice —
-    // the roster landing 76ms before the portfolio labels pushed the second table 1118px down the
-    // page (audit S-5). Settled, not fulfilled: a feed that failed still lets the other render.
-    void Promise.allSettled([load(true), loadPortfolio(true)]).then(() => setSettled(true))
-    // mount-only: two plain functions over stable setters (house idiom)
+    load(true)
   }, [])
 
   const setText =
@@ -315,10 +269,6 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // An account may not parent itself (the server 422s it); leaving it out of the select
   // means the UI never offers the mistake.
   const parentOptions = accounts.filter((a) => a.id !== editingId)
-  // Named in the hint below: the get-or-create on a new transaction label owns it to the
-  // primary person, and this table is the only place that can be undone.
-  const primaryName = people.find((p) => p.is_primary)?.name ?? 'the primary person'
-
   // What the table draws: the dropped order while its save is in flight, else the server's —
   // grouped the way the Monthly update walks it, and the hook's items derived from exactly those
   // rows every render (./accountsRoster.ts).
@@ -481,8 +431,8 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key. Drag a row by its grip to reorder accounts within their group; a parent brings its components with it." />
       </h2>
       <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the accounts" />
-      {!settled && <SettingsGhost height={1114} />}
-      {settled && loaded && (
+      {!loaded && loadError === null && <SettingsGhost height={1114} />}
+      {loaded && (
         <>
           <form
             className="accounts-form"
@@ -627,79 +577,6 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         </>
       )}
 
-      {settled && (
-        <>
-        {/* Portfolio accounts (2026-08-28 spec §5): the labels behind the positions ledger,
-            and the ONE place their ownership is edited. Gated on `settled`, never on the roster's
-            `loaded` — a net-worth GET that failed says nothing about the portfolio router, and
-            both tables arrive in the same render (2026-09-13 spec §9). */}
-        <h3 className="eyebrow portfolio-accounts-heading">
-          Portfolio accounts
-          <InfoHint text="The account labels your transactions and dividends are filed under. Owner blank = joint; a person's Portfolio view is their own labels plus the joint ones. Labels are fixed here — they are the positions' identity." />
-        </h3>
-        <FeedBanner
-          error={portfolioError}
-          retry={() => loadPortfolio()}
-          retryLabel="Retry loading the portfolio accounts"
-        />
-        {portfolioLoaded &&
-          (portfolioAccounts.length === 0 ? (
-            <p className="empty-note">
-              No portfolio accounts yet — one appears the first time a transaction or dividend
-              names an account.
-            </p>
-          ) : (
-            <>
-              <div className="settings-scroll">
-                <table
-                  className="data-table portfolio-accounts-table"
-                  aria-label="Portfolio accounts"
-                >
-                  <thead>
-                    <tr>
-                      <th>Label</th>
-                      <th>Owner</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {portfolioAccounts.map((account) => (
-                      <tr key={account.id}>
-                        {/* Read-only text, not an input: renaming a label would orphan every
-                            position filed under it, and the server refuses it. */}
-                        <td>{account.label}</td>
-                        <td>
-                          <select
-                            className="field-input"
-                            aria-label={`Owner for ${account.label}`}
-                            value={account.person_id === null ? '' : String(account.person_id)}
-                            disabled={portfolioBusy}
-                            onChange={(e) => retagPortfolioAccount(account, e.target.value)}
-                          >
-                            <option value="">Joint</option>
-                            {people.map((person) => (
-                              <option key={person.id} value={String(person.id)}>
-                                {person.name}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {/* Inline under the table the select lives in, and with NO Retry: the failure is a
-                  write the server refused, which asking for the labels again cannot fix. */}
-              <FeedBanner error={portfolioFormError} />
-              <p className="settings-note">
-                A new account label typed on a transaction or dividend is created owned by{' '}
-                {primaryName} — re-tag it here. The labels themselves are fixed: they identify
-                the positions.
-              </p>
-            </>
-          ))}
-        </>
-      )}
     </section>
   )
 }
