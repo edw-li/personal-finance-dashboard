@@ -908,6 +908,13 @@ describe('SpendingPage — reviewed-month metrics', () => {
     await screen.findByText('Where Jul 2026 went')
     expect(tileValue('Previous 12 months')).toBe('$1,234.56')
     expect(screen.getByText('4 eligible months')).toBeTruthy()
+    cleanup()
+    clearSnapshots()
+    // One is a month, not "1 eligible months" (the first month of the history reads so).
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ comparison_average: [null, '1234.56'], comparison_count: [0, 1] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(screen.getByText('1 eligible month')).toBeTruthy()
   })
 
   it('keeps a measured zero visible and does not substitute all-category totals for unavailable living spending', async () => {

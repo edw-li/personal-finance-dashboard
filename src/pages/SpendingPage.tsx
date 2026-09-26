@@ -120,6 +120,11 @@ function versusMonthBefore(
 /** The Living spending tile's line (2026-09-25 polish review): the month's other outflows, each only when
  *  there was any — "tax $5,044 · transfers $1,200", "tax $5,044" — or "No tax or transfers"; nothing on a
  *  payload without the two series. Whole dollars. */
+/** The comparison's count — "1 eligible month" for the history's first month, never "1 … months". */
+function eligibleMonths(count: number): string {
+  return `${count} eligible ${count === 1 ? 'month' : 'months'}`
+}
+
 function otherOutflows(tax: string | undefined, transfers: string | undefined): string | undefined {
   if (tax === undefined && transfers === undefined) return undefined
   const parts = [
@@ -611,7 +616,7 @@ export default function SpendingPage() {
               label="Previous 12 months"
               value={formatCurrency(kpis.average)}
               hint="Mean living spending in eligible months within the previous 12 calendar months, excluding this month. Missing months do not pull older entries into the comparison."
-              delta={`${matrix?.comparison_count?.[focusIndex] ?? evidence.data?.comparison.window?.included.length ?? 0} eligible months`}
+              delta={eligibleMonths(matrix?.comparison_count?.[focusIndex] ?? evidence.data?.comparison.window?.included.length ?? 0)}
               evidence={evidence.data?.comparison}
             />
             <StatTile
