@@ -836,11 +836,11 @@ describe('CompPage — vesting schedule', () => {
     // The tile's value is the next vest DATE and its delta the shares and the estimate the
     // server priced them at — none of the three is multiplied out here.
     expect(within(tile('Next vest')).getByText('Nov 18, 2026')).toBeTruthy()
-    expect(tile('Next vest').querySelector('.stat-delta')?.textContent).toBe('105 sh · $20,101.20')
+    expect(tile('Next vest').querySelector('.stat-delta')?.textContent).toBe('105 sh · $20,101')
     expect(within(tile('Unvested')).getByText('1,230 sh')).toBeTruthy()
-    expect(within(tile('Unvested')).getByText('$235,471.20')).toBeTruthy()
+    expect(within(tile('Unvested')).getByText('$235,471')).toBeTruthy()
     expect(within(tile('Vested this year')).getByText('75 sh')).toBeTruthy()
-    expect(within(tile('Vested this year')).getByText('$13,200.00')).toBeTruthy()
+    expect(within(tile('Vested this year')).getByText('$13,200')).toBeTruthy()
     // The quote the future half of the card was priced against, said once.
     expect(screen.getByText('NVDA · $191.44 · as of Aug 20, 2026')).toBeTruthy()
   })

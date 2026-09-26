@@ -405,9 +405,10 @@ export default function CreditCardsPage() {
         ) : (
           <>
             {/* Tiles belong to a view's summary (2026-09-13 polish §12): Rewards and Credit lines
-                read the lineup; Manage edits it and gets none. */}
+                read the lineup; Manage edits it and gets none. Five tiles when the household
+                advantage shows: a five-tile row (2026-09-25 polish spec §4.2), never 4 + 1. */}
             {kpis && views.section !== 'manage' && (
-              <div className="kpi-row">
+              <div className={advantage !== null ? 'kpi-row kpi-row-5' : 'kpi-row'}>
                 <StatTile
                   label="Total credit line"
                   value={formatCurrency(kpis.totalLine)}

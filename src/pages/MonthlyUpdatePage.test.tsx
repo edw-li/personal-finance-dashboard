@@ -2629,10 +2629,12 @@ it('lays the Review step out as four tiles with the cash split and the close gat
     "August's change appears once Sep 1 balances are recorded",
   )
   expect(tile('Living spending').querySelector('.stat-value')?.textContent).toBe('$250.00')
+  // 2026-09-25 polish spec §4.4: the one bare tile of four gets a line — living as a share of take-home.
+  expect(tile('Living spending').querySelector('.stat-delta')?.textContent).toBe('25.0% of take-home')
   expect(tile('Cash outflow').querySelector('.stat-value')?.textContent).toBe('$300.00')
-  expect(tile('Cash outflow').querySelector('.stat-delta')?.textContent).toBe('tax $50.00 · transfers $100.00')
+  expect(tile('Cash outflow').querySelector('.stat-delta')?.textContent).toBe('tax $50 · transfers $100')
   expect(tile('Cash saved').querySelector('.stat-value')?.textContent).toBe('70.0%')
-  expect(tile('Cash saved').querySelector('.stat-delta')?.textContent).toBe('$700.00 of $1,000.00 take-home')
+  expect(tile('Cash saved').querySelector('.stat-delta')?.textContent).toBe('$700 of $1,000 take-home')
   // The gate sentence lives in the footer, next to the disabled primary — here the first thing to
   // fix: August has no balances of its own yet.
   const footer = screen.getByRole('button', { name: 'Save and close August' }).closest('.wizard-footer') as HTMLElement
@@ -3517,7 +3519,7 @@ describe("the month's story (2026-09-23 spec §M5)", () => {
   it('names the tile by its 1st and tells the change to the next 1st — provisional', async () => {
     septemberStory('provisional')
     renderPage('/update?month=2026-09-01&step=review')
-    expect(await screen.findByText("September's change: ▲ $126,583.02 (Sep 1 → Sep 22 · provisional)")).toBeTruthy()
+    expect(await screen.findByText("September's change: ▲ $126,583 (Sep 1 → Sep 22 · provisional)")).toBeTruthy()
     const tile = screen.getByText('Sep 1 balances').closest('.stat-tile') as HTMLElement
     expect(tile.querySelector('.stat-value')?.textContent).toBe('$1,500.00')
     expect(screen.getByRole('heading', { name: 'Largest balance changes · Sep 1 → Oct 1' })).toBeTruthy()
@@ -3529,7 +3531,7 @@ describe("the month's story (2026-09-23 spec §M5)", () => {
   it('a final next 1st', async () => {
     septemberStory('final')
     renderPage('/update?month=2026-09-01&step=review')
-    expect(await screen.findByText("September's change: ▲ $126,583.02 (Sep 1 → Oct 1)")).toBeTruthy()
+    expect(await screen.findByText("September's change: ▲ $126,583 (Sep 1 → Oct 1)")).toBeTruthy()
   })
 
   it('no next 1st yet — and nothing is asked of the server for it', async () => {
@@ -3556,7 +3558,7 @@ describe("the month's story (2026-09-23 spec §M5)", () => {
   it('re-reads the story after a balances save', async () => {
     septemberStory('final')
     renderPage('/update?month=2026-09-01&step=review')
-    await screen.findByText("September's change: ▲ $126,583.02 (Sep 1 → Oct 1)")
+    await screen.findByText("September's change: ▲ $126,583 (Sep 1 → Oct 1)")
     vi.mocked(netWorthApi.fetchSummary).mockResolvedValue({
       month: '2026-10-01', net_worth: '933250.90', mom_delta: '126000.00', mom_pct: '0.157', groups: [],
       owner_totals: [], as_of: '2026-10-01', provisional: false, previous: SEP_1, days_since_previous: 30,
@@ -3565,7 +3567,7 @@ describe("the month's story (2026-09-23 spec §M5)", () => {
     fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2083.02' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save Sep 1 balances' }))
     fireEvent.click(await screen.findByRole('button', { name: /^3\s*review$/i }))
-    expect(await screen.findByText("September's change: ▲ $126,000.00 (Sep 1 → Oct 1)")).toBeTruthy()
+    expect(await screen.findByText("September's change: ▲ $126,000 (Sep 1 → Oct 1)")).toBeTruthy()
   })
 
   // Review M1/M8: the toast names what is due next, which /coverage alone decides — so it waits for

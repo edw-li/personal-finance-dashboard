@@ -1084,6 +1084,8 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
     // a wallet whose $395 fee eats its lead. So the merge is worth 475 − 390 = $85.00/yr.
     expect(tile.querySelector('.stat-value')?.textContent).toBe('$85.00/yr')
     expect(tile.textContent).toContain('beats the best single wallet')
+    // Five tiles are a five-tile row (2026-09-25 polish spec §4.2): 3 + 2 below 1000px, never 4 + 1.
+    expect(tile.closest('.kpi-row')?.className).toBe('kpi-row kpi-row-5')
   })
 })
 

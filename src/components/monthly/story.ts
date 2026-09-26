@@ -1,5 +1,5 @@
 import type { NetWorthSummary } from '../../types/api'
-import { formatCurrency } from '../../utils/format'
+import { formatCurrencyWhole } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 import { dayOf, monthNameOf } from './monthlyCopy'
 
@@ -39,13 +39,14 @@ export function monthStory(month: string, next: NextSnapshot): MonthStory {
   if (summary.previous?.month !== month || summary.mom_delta === null) {
     return without(`${name}'s change needs ${dayOf(month)} balances`)
   }
-  // Cents decide the glyph and the tone, and a zero prints as a clean $0.00 — the rule every delta
-  // on this page follows (a -0 would format as "-$0.00" under a ▲).
+  // Cents decide the glyph and the tone, and a zero prints as a clean $0 — the rule every delta on
+  // this page follows (a -0 would format as "-$0" under a ▲). The line is the Review tile's delta, so
+  // whole dollars (2026-09-25 polish spec §4.3); the saved balances below keep their cents.
   const cents = Math.round(Number(summary.mom_delta) * 100)
   const asOf = summary.as_of ?? null
   const to = summary.provisional ? `${asOf === null ? 'date unknown' : dayOf(asOf)} · provisional` : dayOf(nextMonth)
   return {
-    text: `${name}'s change: ${cents < 0 ? '▼' : '▲'} ${formatCurrency(cents === 0 ? 0 : cents / 100)} (${dayOf(month)} → ${to})`,
+    text: `${name}'s change: ${cents < 0 ? '▼' : '▲'} ${formatCurrencyWhole(cents === 0 ? 0 : cents / 100)} (${dayOf(month)} → ${to})`,
     tone: cents > 0 ? 'positive' : cents < 0 ? 'negative' : null,
     title,
     unavailable: null,
