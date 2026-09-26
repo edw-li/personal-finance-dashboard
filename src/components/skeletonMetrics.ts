@@ -15,8 +15,6 @@ export const FORM_ROW = 51
  *  1 border + 15.3 label + 7.2 + 23.8 figure + 5.6 + 17 delta + 16 + 1. Ghost TILES need no number —
  *  they stand in the real lines — so this is only for a CARD ghost standing in for a tile row. */
 export const STAT_TILE = 101
-/** A .kpi-row's tile plus the 1rem the row leaves under it. */
-export const TILE_ROW = STAT_TILE + 16
 /** The .networth-owner-strip BOX only — dt 15 + dd (2 margin + 24 line) = 41. Its 1rem margin is
  *  .skeleton-strip's `margin`, not part of this number: counting it twice stood the ghost 16px
  *  taller than the strip and pushed both charts down when the summary landed. */
@@ -71,7 +69,9 @@ export function chartCardBox(
 export const FEED_SKELETON = {
   // 3-line hint, 11 waterfall lines + total — the tile row stands outside the feed now (2026-09-25 polish §4.5)
   paycheckBreakdown: 3 * HINT_LINE + 12 * TABLE_ROW,
-  compVesting: ghostCardBody(TILE_ROW), // VestingTiles is a bare .kpi-row, not a card
+  // VestingTiles is a bare .kpi-row, not a card: the ghost card's own margin is the 1rem the row leaves
+  // under its tiles, so the box is the tile alone (counting the 1rem as well stood the ghost 16px tall).
+  compVesting: ghostCardBody(STAT_TILE),
   compEvents: 5 * HINT_LINE + 2 * FORM_ROW + 5 * TABLE_ROW, // 5-line hint, the auto-fit form's two rows, header + 4 focal years
   esppLots: HINT_LINE + 9 * TABLE_ROW, // hint, the add-row form, table header + 5 rows + the held totals row
   esppOfferings: HINT_LINE + 6 * TABLE_ROW, // hint, add form, header + 3 rows
