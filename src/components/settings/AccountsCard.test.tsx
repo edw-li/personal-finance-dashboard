@@ -16,6 +16,7 @@ vi.mock('../../api/netWorth', async (importOriginal) => ({
   fetchAccounts: vi.fn(),
   createAccount: vi.fn(),
   updateAccount: vi.fn(),
+  updateAccountLogged: vi.fn(),
   deleteAccount: vi.fn(),
   reorderAccounts: vi.fn(),
 }))
@@ -25,6 +26,7 @@ import {
   fetchAccounts,
   reorderAccounts,
   updateAccount,
+  updateAccountLogged,
 } from '../../api/netWorth'
 vi.mock('../../api/portfolio', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/portfolio')>()),
@@ -204,6 +206,7 @@ beforeEach(() => {
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING, HSA])
   vi.mocked(createAccount).mockResolvedValue(CHECKING)
   vi.mocked(updateAccount).mockResolvedValue(HSA)
+  vi.mocked(updateAccountLogged).mockResolvedValue({ data: HSA, batchId: 'retire-batch' })
   vi.mocked(deleteAccount).mockResolvedValue({ batchId: null })
   vi.mocked(fetchPortfolioAccounts).mockResolvedValue([BROKERAGE, JOINT_ROTH])
   vi.mocked(patchPortfolioAccount).mockResolvedValue({ ...BROKERAGE, person_id: 2 })
@@ -247,6 +250,40 @@ const headings = () =>
   )
 /** The card's reorder live region (the toast layer's alert region is a <div>). */
 const live = () => document.querySelector('span[aria-live="assertive"]')?.textContent ?? ''
+
+it('reveals the account editor, saves back to the row and cancels with Escape', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  const edit = screen.getByRole('button', { name: 'Edit Fidelity HSA' })
+  fireEvent.click(edit)
+  const name = screen.getByLabelText('Account name') as HTMLInputElement
+  expect(document.activeElement).toBe(name)
+  expect(name.selectionEnd).toBe(name.value.length)
+  expect(edit.closest('tr')?.getAttribute('aria-current')).toBe('true')
+  fireEvent.keyDown(name, { key: 'Escape' })
+  expect(document.activeElement).toBe(edit)
+  fireEvent.click(edit)
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }))
+  await waitFor(() => expect(edit.closest('tr')?.hasAttribute('data-flash')).toBe(true))
+  expect(document.activeElement).toBe(edit)
+})
+
+it('deletes an account through its batch and restores its original id', async () => {
+  vi.mocked(deleteAccount).mockResolvedValue({ batchId: 'delete-account' })
+  render(<ToastProvider><AccountsCard people={[ME]} /></ToastProvider>)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  vi.mocked(fetchAccounts).mockResolvedValue([CHECKING])
+  const remove = screen.getByRole('button', { name: 'Delete Fidelity HSA' })
+  remove.focus()
+  fireEvent.click(remove)
+  const undo = await screen.findByRole('button', { name: 'Undo' })
+  expect(screen.queryByRole('button', { name: 'Delete Fidelity HSA' })).toBeNull()
+  vi.mocked(fetchAccounts).mockResolvedValue([CHECKING, HSA])
+  fireEvent.click(undo)
+  await waitFor(() => expect(document.querySelector('[data-settings-row="11"]')?.hasAttribute('data-flash')).toBe(true))
+  expect(undoBatch).toHaveBeenCalledWith('delete-account')
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete Fidelity HSA' }))
+})
 
 it('renders the roster with owner names, joint spelled out', async () => {
   render(<AccountsCard people={[ME, PARTNER]} />)
@@ -345,7 +382,7 @@ it('retires an account without touching its other columns', async () => {
   // ONLY is_active on the wire: sending the whole row back would let a stale render
   // overwrite a concurrent edit.
   await waitFor(() =>
-    expect(vi.mocked(updateAccount)).toHaveBeenCalledWith(11, { is_active: false }),
+    expect(vi.mocked(updateAccountLogged)).toHaveBeenCalledWith(11, { is_active: false }),
   )
 })
 
@@ -1069,9 +1106,9 @@ it('parks the grips while the roster on screen failed to reload, until a Retry b
 })
 
 it('parks every grip while another request of the roster is in flight (spec §4.1 Busy)', async () => {
-  const patch = deferred<AccountOut>()
+  const patch = deferred<{ data: AccountOut; batchId: string | null }>()
   vi.mocked(fetchAccounts).mockResolvedValue(ROSTER)
-  vi.mocked(updateAccount).mockReturnValue(patch.promise)
+  vi.mocked(updateAccountLogged).mockReturnValue(patch.promise)
   render(<AccountsCard people={[ME]} />)
   await screen.findByRole('table', { name: 'Net-worth accounts' })
   expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull()
@@ -1086,7 +1123,7 @@ it('parks every grip while another request of the roster is in flight (spec §4.
   expect(live()).toBe('')
 
   await act(async () => {
-    patch.resolve({ ...HSA, is_active: false })
+    patch.resolve({ data: { ...HSA, is_active: false }, batchId: null })
   })
   await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
 })
@@ -1098,14 +1135,14 @@ it('holds every roster button while a row is lifted — the portfolio labels sta
   const edit = () => screen.getByRole('button', { name: 'Edit Traditional pre-tax' }) as HTMLButtonElement
 
   press('Fidelity HSA', ' ')
-  expect(edit().disabled).toBe(true)
-  expect((screen.getByRole('button', { name: 'Delete Fidelity HSA' }) as HTMLButtonElement).disabled).toBe(true)
-  expect((screen.getByRole('button', { name: 'Retire Joint Checking' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(edit().getAttribute('aria-disabled')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Delete Fidelity HSA' }).getAttribute('aria-disabled')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Retire Joint Checking' }).getAttribute('aria-disabled')).toBe('true')
   expect((screen.getByLabelText('Owner for Fidelity Brokerage') as HTMLSelectElement).disabled).toBe(false)
 
   press('Fidelity HSA', 'Escape')
   expect(live()).toBe('Cancelled. Fidelity HSA is back at position 1 of 2.')
-  expect(edit().disabled).toBe(false)
+  expect(edit().getAttribute('aria-disabled')).toBeNull()
 })
 
 it('says what the order is for and how to change it (spec §8.1)', async () => {

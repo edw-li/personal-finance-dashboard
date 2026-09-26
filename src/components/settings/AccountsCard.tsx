@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, describeError, errorDetail } from '../../api/client'
 import { undoBatch } from '../../api/lifecycle'
 import {
@@ -7,6 +7,7 @@ import {
   fetchAccounts,
   reorderAccounts,
   updateAccount,
+  updateAccountLogged,
 } from '../../api/netWorth'
 import { GROUP_LABELS, GROUP_ORDER } from '../../charts/theme'
 import type {
@@ -15,6 +16,10 @@ import type {
   PersonOut,
 } from '../../types/api'
 import InfoHint from '../InfoHint'
+import BusyButton from '../feedback/BusyButton'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { flashElement, revealEditor, revealRow, useEscapeCancel } from '../feedback/reveal'
+import { useLatest } from '../reorder/useLatest'
 import DragHandle from '../reorder/DragHandle'
 import {
   ORDER_RESTORED,
@@ -98,6 +103,25 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [lastAccounts, setLastAccounts] = useState(accounts)
   const seqRef = useRef(0)
   const toast = useToast()
+  const formRef = useRef<HTMLFormElement>(null)
+  const landingId = useRef<number | null>(null)
+  const [rowUpdates, setRowUpdates] = useState<Record<number, Partial<AccountOut>>>({})
+  const deleteWithUndo = useDeleteWithUndo()
+  const findRow = (id: number) => document.querySelector<HTMLElement>(`#accounts [data-settings-row="${id}"]`)
+
+  useLayoutEffect(() => {
+    if (editingId !== null) revealEditor(formRef.current, 'input')
+  }, [editingId])
+  useLayoutEffect(() => {
+    if (busy || landingId.current === null) return
+    const row = findRow(landingId.current)
+    if (row === null) return
+    landingId.current = null
+    revealRow(row)
+    flashElement(row)
+    row.querySelector<HTMLButtonElement>('[data-edit]')?.focus({ preventScroll: true })
+  }, [accounts, busy])
+
 
   if (lastAccounts !== accounts) {
     setLastAccounts(accounts)
@@ -146,9 +170,13 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   }
 
   const cancelEdit = () => {
+    if (editingId !== null) findRow(editingId)?.querySelector<HTMLButtonElement>('[data-edit]')?.focus()
     setEditingId(null)
     setForm(EMPTY_ACCOUNT)
+    setFormError(null)
   }
+  useEscapeCancel(formRef, cancelEdit, editingId !== null)
+  const latest = useLatest({ editingId, cancelEdit, load, rows: accounts })
 
   const submit = () => {
     const name = form.name.trim()
@@ -180,37 +208,67 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     const request = editingId !== null ? updateAccount(editingId, body) : createAccount(body)
     void track(() =>
       request
-        .then(() => {
-          cancelEdit()
+        .then((saved) => {
+          landingId.current = saved.id
+          setEditingId(null)
+          setForm(EMPTY_ACCOUNT)
           return load()
         })
         .catch((err: unknown) => setFormError(message(err, 'Save failed'))),
     )
   }
 
-  // ONLY is_active on the wire: every other column is untouched here, and sending the
-  // whole row back would let a stale render overwrite a concurrent edit (CardsPanel's rule).
-  const toggleActive = (account: AccountOut) => {
-    setFormError(null)
-    void track(() =>
-      updateAccount(account.id, { is_active: !account.is_active })
-        .then(() => load())
-        .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
-    )
+  // One-click changes draw at once. Grips wait for the reload; only this row's controls wait.
+  const changeRow = (account: AccountOut, patch: Partial<AccountOut>, label: string) => {
+    if (rowUpdates[account.id] !== undefined) return
+    setRowUpdates((current) => ({ ...current, [account.id]: patch }))
+    void track(async () => {
+      try {
+        const { batchId } = await updateAccountLogged(account.id, patch)
+        await latest.current.load()
+        toast.success(label, batchId === null ? undefined : { action: { label: 'Undo', onAction: () => {
+          void track(async () => {
+            try {
+              await undoBatch(batchId)
+              landingId.current = account.id
+              await latest.current.load()
+              toast.success(`Restored ${account.name}`)
+            } catch (err) {
+              toast.error(errorDetail(err))
+              findRow(account.id)?.querySelector<HTMLButtonElement>('[data-edit]')?.focus()
+            }
+          })
+        } } })
+      } catch (err) {
+        toast.error(errorDetail(err))
+      } finally {
+        setRowUpdates((current) => { const next = { ...current }; delete next[account.id]; return next })
+      }
+    })
   }
 
+  const toggleActive = (account: AccountOut) => changeRow(
+    account, { is_active: !account.is_active }, `${account.is_active ? 'Retired' : 'Restored'} ${account.name}`,
+  )
+
   const remove = (account: AccountOut) => {
-    // The guard sentence belongs to the SERVER ("account has N balance rows — deactivate it
-    // instead") and it is about a row far down the table, so it rides the toast layer
-    // rather than the form-level banner above the form.
-    void track(() =>
-      deleteAccount(account.id)
-        .then(() => {
-          if (account.id === editingId) cancelEdit()
-          return load()
-        })
-        .catch((err: unknown) => toast.error(message(err, 'Delete failed'))),
-    )
+    const rows = [...document.querySelectorAll<HTMLElement>('#accounts [data-settings-row]')]
+    const index = rows.findIndex((row) => row === findRow(account.id))
+    const neighbour = rows[index + 1] ?? rows[index - 1]
+    void track(() => deleteWithUndo({
+      name: `account ${account.name}`,
+      row: findRow(account.id),
+      request: () => deleteAccount(account.id),
+      onDeleted: async () => {
+        if (latest.current.editingId === account.id) latest.current.cancelEdit()
+        await latest.current.load()
+      },
+      focusAfter: () => neighbour?.isConnected
+        ? neighbour.querySelector<HTMLButtonElement>('[data-delete]')
+        : formRef.current?.querySelector<HTMLInputElement>('input') ?? null,
+      onRestored: () => latest.current.load(),
+      restoredRow: () => findRow(account.id),
+    }))
   }
 
   const ownerName = new Map(people.map((p) => [p.id, p.name]))
@@ -272,7 +330,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // What the table draws: the dropped order while its save is in flight, else the server's —
   // grouped the way the Monthly update walks it, and the hook's items derived from exactly those
   // rows every render (./accountsRoster.ts).
-  const shown = pendingOrder ?? accounts
+  const shown = (pendingOrder ?? accounts).map((row) => ({ ...row, ...rowUpdates[row.id] }))
   const groups = rosterGroups(shown)
   const items = rosterItems(groups)
 
@@ -361,17 +419,20 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
 
   // A lifted row holds the roster: the row buttons wait for the drop, as they wait for a request
   // (spec §2.3) — an Edit or a Delete must not land on a row that is in the air.
-  const locked = busy || reorder.active
+  const locked = (busy && Object.keys(rowUpdates).length === 0) || reorder.active
 
   /** One roster row. `nested` rows are components drawn under their parent: panels.css's
    *  `.component-row` register, with the indent moved to the Account cell (settings.css). */
   const rosterRow = (account: AccountOut, nested: boolean) => {
+    const rowLocked = locked || rowUpdates[account.id] !== undefined
     const classes = [nested ? 'component-row' : null, account.id === editingId ? 'is-editing' : null]
       .filter((name) => name !== null)
       .join(' ')
     return (
       <tr
         key={account.id}
+        data-settings-row={account.id}
+        aria-current={account.id === editingId ? true : undefined}
         className={classes === '' ? undefined : classes}
         {...reorder.itemProps(account.id)}
       >
@@ -392,33 +453,35 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
           <span className="badge">{account.is_active ? 'Active' : 'Retired'}</span>
         </td>
         <td className="row-actions">
-          <button
+          <BusyButton
             type="button"
             className="button"
+            data-edit
             aria-label={`Edit ${account.name}`}
-            disabled={locked}
+            inert={rowLocked}
             onClick={() => startEdit(account)}
           >
             Edit
-          </button>
-          <button
+          </BusyButton>
+          <BusyButton
             type="button"
             className="button"
             aria-label={account.is_active ? `Retire ${account.name}` : `Restore ${account.name}`}
-            disabled={locked}
+            inert={rowLocked}
             onClick={() => toggleActive(account)}
           >
             {account.is_active ? 'Retire' : 'Restore'}
-          </button>
-          <button
+          </BusyButton>
+          <BusyButton
             type="button"
             className="button"
+            data-delete
             aria-label={`Delete ${account.name}`}
-            disabled={locked}
+            inert={rowLocked}
             onClick={() => remove(account)}
           >
             Delete
-          </button>
+          </BusyButton>
         </td>
       </tr>
     )
@@ -435,6 +498,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       {loaded && (
         <>
           <form
+            ref={formRef}
             className="accounts-form"
             onSubmit={(e) => {
               e.preventDefault()
@@ -507,16 +571,16 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
               Component of the parent
             </label>
             <div className="settings-card-actions">
-              <button type="submit" className="button button-primary" disabled={busy}>
+              <BusyButton type="submit" className="button button-primary" busy={busy && Object.keys(rowUpdates).length === 0} inert={busy}>
                 {editingId !== null ? 'Save account' : 'Add account'}
-              </button>
+              </BusyButton>
               {editingId !== null && (
                 <button type="button" className="button" onClick={cancelEdit}>
                   Cancel
                 </button>
               )}
+              {formError && <span role="alert" className="save-status is-error">{formError}</span>}
             </div>
-            <FeedBanner error={formError} />
           </form>
           {accounts.length === 0 ? (
             <p className="empty-note">No accounts yet — add the first one above.</p>

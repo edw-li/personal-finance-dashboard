@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, describeError, errorDetail } from '../../api/client'
 import { undoBatch } from '../../api/lifecycle'
 import {
@@ -7,9 +7,14 @@ import {
   fetchCategories,
   reorderCategories,
   updateCategory,
+  updateCategoryLogged,
 } from '../../api/spending'
 import type { CategoryKind, CategoryOut } from '../../types/api'
 import InfoHint from '../InfoHint'
+import BusyButton from '../feedback/BusyButton'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { flashElement, revealEditor, revealRow, useEscapeCancel } from '../feedback/reveal'
+import { useLatest } from '../reorder/useLatest'
 import DragHandle from '../reorder/DragHandle'
 import {
   ORDER_RESTORED,
@@ -77,13 +82,32 @@ export default function CategoriesCard() {
   const [lastCategories, setLastCategories] = useState(categories)
   const seqRef = useRef(0)
   const toast = useToast()
+  const formRef = useRef<HTMLFormElement>(null)
+  const landingId = useRef<number | null>(null)
+  const [rowUpdates, setRowUpdates] = useState<Record<number, Partial<CategoryOut>>>({})
+  const deleteWithUndo = useDeleteWithUndo()
+  const findRow = (id: number) => document.querySelector<HTMLElement>(`#categories [data-settings-row="${id}"]`)
+
+  useLayoutEffect(() => {
+    if (editingId !== null) revealEditor(formRef.current, 'input')
+  }, [editingId])
+  useLayoutEffect(() => {
+    if (busy || landingId.current === null) return
+    const row = findRow(landingId.current)
+    if (row === null) return
+    landingId.current = null
+    revealRow(row)
+    flashElement(row)
+    row.querySelector<HTMLButtonElement>('[data-edit]')?.focus({ preventScroll: true })
+  }, [categories, busy])
+
 
   if (lastCategories !== categories) {
     setLastCategories(categories)
     setPendingOrder(null)
   }
   // What the table draws: the dropped order while its save is in flight, else the server's.
-  const shown = pendingOrder ?? categories
+  const shown = (pendingOrder ?? categories).map((row) => ({ ...row, ...rowUpdates[row.id] }))
   const nameOf = new Map(shown.map((category) => [category.id, category.name]))
 
   // Returns its promise: every write RETURNS the reload it starts, so the card stays busy — grips
@@ -115,9 +139,13 @@ export default function CategoriesCard() {
   }
 
   const cancelEdit = () => {
+    if (editingId !== null) findRow(editingId)?.querySelector<HTMLButtonElement>('[data-edit]')?.focus()
     setEditingId(null)
     setForm(EMPTY_CATEGORY)
+    setFormError(null)
   }
+  useEscapeCancel(formRef, cancelEdit, editingId !== null)
+  const latest = useLatest({ editingId, cancelEdit, load, rows: categories })
 
   const submit = () => {
     const name = form.name.trim()
@@ -132,49 +160,72 @@ export default function CategoriesCard() {
     const request = editingId !== null ? updateCategory(editingId, body) : createCategory(body)
     void track(() =>
       request
-        .then(() => {
-          cancelEdit()
+        .then((saved) => {
+          landingId.current = saved.id
+          setEditingId(null)
+          setForm(EMPTY_CATEGORY)
           return load()
         })
         .catch((err: unknown) => setFormError(message(err, 'Save failed'))),
     )
   }
 
-  // ONLY is_active on the wire: the name and position are untouched columns here.
-  const toggleActive = (category: CategoryOut) => {
-    setFormError(null)
-    void track(() =>
-      updateCategory(category.id, { is_active: !category.is_active })
-        .then(() => load())
-        .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
-    )
+  // One-click changes draw at once. Grips wait for the reload; only this row's controls wait.
+  const changeRow = (category: CategoryOut, patch: Partial<CategoryOut>, label: string) => {
+    if (rowUpdates[category.id] !== undefined) return
+    setRowUpdates((current) => ({ ...current, [category.id]: patch }))
+    void track(async () => {
+      try {
+        const { batchId } = await updateCategoryLogged(category.id, patch)
+        await latest.current.load()
+        toast.success(label, batchId === null ? undefined : { action: { label: 'Undo', onAction: () => {
+          void track(async () => {
+            try {
+              await undoBatch(batchId)
+              landingId.current = category.id
+              await latest.current.load()
+              toast.success(`Restored ${category.name}`)
+            } catch (err) {
+              toast.error(errorDetail(err))
+              findRow(category.id)?.querySelector<HTMLButtonElement>('[data-edit]')?.focus()
+            }
+          })
+        } } })
+      } catch (err) {
+        toast.error(errorDetail(err))
+      } finally {
+        setRowUpdates((current) => { const next = { ...current }; delete next[category.id]; return next })
+      }
+    })
   }
 
-  // ONLY kind on the wire — toggleActive's rule: the name and position are untouched columns
-  // here. Clicking the kind a row already has is a no-op: Segmented reports every click,
-  // including one on the active button, and a PATCH that changed nothing would still write a
-  // change-log batch offering to "undo" it (L2 hooks cover PATCH /categories, spec §6).
+  const toggleActive = (category: CategoryOut) => changeRow(
+    category, { is_active: !category.is_active }, `${category.is_active ? 'Retired' : 'Restored'} ${category.name}`,
+  )
+
   const setKind = (category: CategoryOut, next: CategoryKind) => {
     if (next === category.kind) return
-    setFormError(null)
-    void track(() =>
-      updateCategory(category.id, { kind: next })
-        .then(() => load())
-        .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
-    )
+    changeRow(category, { kind: next }, `${category.name} is now ${KINDS.find((kind) => kind.value === next)?.label} ? every month recalculated`)
   }
 
   const remove = (category: CategoryOut) => {
-    // The server's guard sentence names the monthly-row count; it is about a table row,
-    // so it rides the toast layer rather than the form banner (AccountsCard's rule).
-    void track(() =>
-      deleteCategory(category.id)
-        .then(() => {
-          if (category.id === editingId) cancelEdit()
-          return load()
-        })
-        .catch((err: unknown) => toast.error(message(err, 'Delete failed'))),
-    )
+    const rows = [...document.querySelectorAll<HTMLElement>('#categories [data-settings-row]')]
+    const index = rows.findIndex((row) => row === findRow(category.id))
+    const neighbour = rows[index + 1] ?? rows[index - 1]
+    void track(() => deleteWithUndo({
+      name: `category ${category.name}`,
+      row: findRow(category.id),
+      request: () => deleteCategory(category.id),
+      onDeleted: async () => {
+        if (latest.current.editingId === category.id) latest.current.cancelEdit()
+        await latest.current.load()
+      },
+      focusAfter: () => neighbour?.isConnected
+        ? neighbour.querySelector<HTMLButtonElement>('[data-delete]')
+        : formRef.current?.querySelector<HTMLInputElement>('input') ?? null,
+      onRestored: () => latest.current.load(),
+      restoredRow: () => findRow(category.id),
+    }))
   }
 
   // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
@@ -260,6 +311,7 @@ export default function CategoriesCard() {
       {loaded && (
         <>
           <form
+            ref={formRef}
             className="category-form"
             onSubmit={(e) => {
               e.preventDefault()
@@ -275,16 +327,16 @@ export default function CategoriesCard() {
               />
             </label>
             <div className="settings-card-actions">
-              <button type="submit" className="button button-primary" disabled={busy}>
+              <BusyButton type="submit" className="button button-primary" busy={busy && Object.keys(rowUpdates).length === 0} inert={busy}>
                 {editingId !== null ? 'Save category' : 'Add category'}
-              </button>
+              </BusyButton>
               {editingId !== null && (
                 <button type="button" className="button" onClick={cancelEdit}>
                   Cancel
                 </button>
               )}
+              {formError && <span role="alert" className="save-status is-error">{formError}</span>}
             </div>
-            <FeedBanner error={formError} />
           </form>
           {categories.length === 0 ? (
             <p className="empty-note">No categories yet — add the first one above.</p>
@@ -292,7 +344,8 @@ export default function CategoriesCard() {
             <>
               <CategoriesTable
                 categories={shown}
-                busy={busy}
+                busy={busy && Object.keys(rowUpdates).length === 0}
+                pendingIds={Object.keys(rowUpdates).map(Number)}
                 editingId={editingId}
                 reorder={reorder}
                 onEdit={(category) => {
@@ -355,6 +408,7 @@ export default function CategoriesCard() {
 function CategoriesTable({
   categories,
   busy,
+  pendingIds,
   editingId,
   reorder,
   onEdit,
@@ -364,6 +418,7 @@ function CategoriesTable({
 }: {
   categories: CategoryOut[]
   busy: boolean
+  pendingIds: number[]
   editingId: number | null
   reorder: UseReorder<number>
   onEdit: (category: CategoryOut) => void
@@ -389,9 +444,13 @@ function CategoriesTable({
           </tr>
         </thead>
         <tbody>
-          {categories.map((category) => (
+          {categories.map((category) => {
+            const rowLocked = locked || pendingIds.includes(category.id)
+            return (
             <tr
               key={category.id}
+              data-settings-row={category.id}
+              aria-current={category.id === editingId ? true : undefined}
               className={category.id === editingId ? 'is-editing' : undefined}
               {...reorder.itemProps(category.id)}
             >
@@ -406,7 +465,7 @@ function CategoriesTable({
                   ariaLabel={`Kind for ${category.name}`}
                   // disabled while a request is in flight, like the row's other controls: a second
                   // PATCH would race the reload that follows the first and the picker would flicker back.
-                  options={KINDS.map((k) => ({ ...k, disabled: locked }))}
+                  options={KINDS.map((k) => ({ ...k, disabled: rowLocked }))}
                   value={category.kind}
                   onChange={(next) => onKind(category, next)}
                 />
@@ -415,24 +474,24 @@ function CategoriesTable({
                 <span className="badge">{category.is_active ? 'Active' : 'Retired'}</span>
               </td>
               <td className="row-actions">
-                <button type="button" className="button" aria-label={`Edit ${category.name}`} disabled={locked} onClick={() => onEdit(category)}>
+                <BusyButton data-edit type="button" className="button" aria-label={`Edit ${category.name}`} inert={rowLocked} onClick={() => onEdit(category)}>
                   Edit
-                </button>
-                <button
+                </BusyButton>
+                <BusyButton
                   type="button"
                   className="button"
                   aria-label={category.is_active ? `Retire ${category.name}` : `Restore ${category.name}`}
-                  disabled={locked}
+                  inert={rowLocked}
                   onClick={() => onToggleActive(category)}
                 >
                   {category.is_active ? 'Retire' : 'Restore'}
-                </button>
-                <button type="button" className="button" aria-label={`Delete ${category.name}`} disabled={locked} onClick={() => onRemove(category)}>
+                </BusyButton>
+                <BusyButton data-delete type="button" className="button" aria-label={`Delete ${category.name}`} inert={rowLocked} onClick={() => onRemove(category)}>
                   Delete
-                </button>
+                </BusyButton>
               </td>
             </tr>
-          ))}
+          )})}
         </tbody>
       </table>
     </div>
