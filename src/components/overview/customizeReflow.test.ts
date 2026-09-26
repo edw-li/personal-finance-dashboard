@@ -29,9 +29,11 @@ function box(left: number, top: number): DOMRect {
   return { left, top, right: left + 100, bottom: top + 50, width: 100, height: 50, x: left, y: top, toJSON: () => ({}) } as DOMRect
 }
 
-/** A container of children at the given boxes, each with a spy for animate() (jsdom has none). */
+/** A container 1200px wide holding children at the given boxes, each with a spy for animate() (jsdom
+ *  has none, and lays nothing out). */
 function container(boxes: DOMRect[]) {
   const root = document.createElement('div')
+  root.getBoundingClientRect = () => ({ ...box(0, 0), right: 1200, width: 1200, bottom: 2000, height: 2000 }) as DOMRect
   const animate = vi.fn()
   for (const rect of boxes) {
     const child = document.createElement('div')
@@ -66,6 +68,14 @@ describe('flipChildren', () => {
     const { root, animate } = container([box(0, 200)])
     flipChildren(root, ['spending'], new Map([['spending', box(600, 0)]]))
     expect(animate).toHaveBeenCalledWith([{ translate: '600px -200px' }, { translate: 'none' }], { duration: MOTION_MS.fast, easing: EASE_OUT })
+  })
+
+  // A half-width card that now runs the full row starts from its old left edge — which would hang it
+  // ~580px past the grid's right side for the length of the glide, flashing a horizontal scrollbar.
+  it('never slides a child past the container’s sides — a card that grew keeps only its vertical travel', () => {
+    const { root, animate } = container([{ ...box(0, 400), right: 1200, width: 1200 } as DOMRect])
+    flipChildren(root, ['spending'], new Map([['spending', box(600, 0)]]))
+    expect(animate).toHaveBeenCalledWith([{ translate: '0px -400px' }, { translate: 'none' }], { duration: MOTION_MS.fast, easing: EASE_OUT })
   })
 
   it('fades in a child that was not there before', () => {

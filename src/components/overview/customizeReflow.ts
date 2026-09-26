@@ -45,11 +45,14 @@ export function childRects(container: Element | null, ids: readonly string[]): M
  * was, and one that was not there before fades in — --t-fast on the house curve, so the page
  * rearranging behind the popover reads as the same cards moving, not cards popping in and out. WAAPI
  * (the LocalSectionPanel idiom) on `translate`, so a card's scroll-linked reveal, which rides
- * `transform`, composes with it. Widths snap: a span change is not a move. Nothing under reduced
- * motion, or where animate() is missing (jsdom).
+ * `transform`, composes with it. Widths snap: a span change is not a move. The sideways travel is
+ * clamped to the container: a card that grew (a half-width chart now running the full row) would start
+ * hanging past the grid's side, and the page flashed a horizontal scrollbar for the length of the
+ * glide. Nothing under reduced motion, or where animate() is missing (jsdom).
  */
 export function flipChildren(container: Element | null, ids: readonly string[], before: ReadonlyMap<string, DOMRect>): void {
   if (container === null || prefersReducedMotion()) return
+  const bounds = container.getBoundingClientRect()
   ids.forEach((id, index) => {
     const child = container.children[index] as HTMLElement | undefined
     if (child === undefined || typeof child.animate !== 'function') return
@@ -59,7 +62,7 @@ export function flipChildren(container: Element | null, ids: readonly string[], 
       return
     }
     const now = child.getBoundingClientRect()
-    const dx = Math.round(was.left - now.left)
+    const dx = Math.min(Math.max(Math.round(was.left - now.left), Math.ceil(bounds.left - now.left)), Math.floor(bounds.right - now.right))
     const dy = Math.round(was.top - now.top)
     if (dx === 0 && dy === 0) return
     child.animate([{ translate: `${dx}px ${dy}px` }, { translate: 'none' }], { duration: MOTION_MS.fast, easing: EASE_OUT })
