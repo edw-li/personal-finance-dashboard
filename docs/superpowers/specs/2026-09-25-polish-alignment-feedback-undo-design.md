@@ -1,6 +1,7 @@
 # Polish: layouts that end together, tile rows, feedback where you act, exact undo, a sidebar that fits (2026-09-25) — design record
 
-**Status:** designed and approved 2026-09-25; not yet implemented. Stop at LOCAL main — no push, no deploy (the user
+**Status:** designed and approved 2026-09-25; implementation merged, final browser verification in progress. Includes the
+user's 2026-09-26 footer and badge amendments below. Stop at LOCAL main — no push, no deploy (the user
 pushes and deploys). Backend AND frontend change; no migration (the `change_log` table already exists).
 
 **The ask, verbatim:** after the 2026-09-24 polish audit (archived in `docs/reviews/2026-09-24-polish-audit/` —
@@ -106,7 +107,10 @@ colour outside `src/theme/tokens.ts`. Copy names the noun. Money shown is never 
   - `.sidebar-search` bottom margin 0.6rem → 0.4rem.
 
   Compact density composes with it (its own rules still apply). `overflow-y: auto` stays as the fallback below ~700 px.
-- **Footer** becomes ONE row: `[email, ellipsised, flex 1] [theme icon button] [log-out icon button]`.
+- **Footer** becomes ONE row: `[full email, flex 1] [theme icon button] [log-out icon button]`.
+  The user's 2026-09-26 preview feedback supersedes ellipsis: remove excess address padding so the full current email
+  fits at the existing 210px sidebar width; longer identities wrap. Log out uses the existing red `--negative` token,
+  including hover.
   - Icon buttons: 28×28 px, `aria-label` ("Switch to light theme" / "Log out") and a `title` tooltip, the existing focus ring
     and hover.
   - The environment pill and build hash leave the visible footer: the email row's `title` reads
@@ -215,18 +219,19 @@ but not the host or the card (`chartInteractions.css:1` sets only `min-width`).
 
 ### 4.1 Structure
 
-- **Subgrid:** `.kpi-row` stays the grid. Each `.stat-tile` becomes `display: grid; grid-row: span 4;
-  grid-template-rows: subgrid; row-gap: 0`, with four children in order:
-  1. the label;
-  2. the badge slot (`.stat-badge-row`, empty when the tile has no badge);
-  3. the value;
-  4. the delta (empty when none).
+The user's 2026-09-26 preview feedback replaces the original separate badge row with a badge beside the title.
+
+- **Subgrid:** `.kpi-row` stays the grid. Each `.stat-tile` uses `display: grid; grid-row: span 3;
+  grid-template-rows: subgrid; row-gap: 0`, with three children in order:
+  1. the header (title and optional badge);
+  2. the value;
+  3. the delta (empty when none).
 
   Implicit rows are `auto`; the row gap between tile lines stays the row's `gap`.
-- **Badge:** it moves out of the label line into row 2, so a badge never wraps under a label. In a line where no tile has a
-  badge, row 2 is 0 px tall.
+- **Badge:** it stays at the header's top right, beside the title. There is no separate badge track or placeholder
+  between title and value on unbadged cards. Long titles can wrap while the badge stays at the top right.
 - **Value row:** `align-items: last baseline`, so a hero and normal tiles share a baseline.
-- **Wrapped tiles** (`CashflowStrip`'s `role="group"` wrappers): the wrapper spans 4 rows as a subgrid, and the tile inside does
+- **Wrapped tiles** (`CashflowStrip`'s `role="group"` wrappers): the wrapper spans 3 rows as a subgrid, and the tile inside does
   the same.
 - **Spacing:** the tile's own padding and the 0.45 rem / 0.35 rem label and delta spacing are kept as margins inside the rows.
 

@@ -230,9 +230,10 @@ Motion uses tokens only and is zeroed under reduced motion.
 
 ### C4 — StatTile (L2)
 - Props are unchanged.
-- Markup: `.stat-tile` renders four children in order: `.stat-label`, `.stat-badge-row` (always present; empty without a
-  badge), `.stat-value`, `.stat-delta` (always present; empty without a delta).
-- The tile is `grid-row: span 4; grid-template-rows: subgrid` of its `.kpi-row`.
+- Updated by the user's 2026-09-26 preview feedback: `.stat-tile` renders three children in order: `.stat-header`
+  (title on the left, optional badge at the top right), `.stat-value`, `.stat-delta` (empty without a delta).
+- The tile and its ghost use `grid-row: span 3; grid-template-rows: subgrid` of their `.kpi-row`. There is no separate
+  badge track or empty badge placeholder; shared header/value/delta tracks retain row alignment.
 
 ### C5 — ChartCard (L1)
 - New optional prop `fill?: boolean`, defaulting to `span === 6`. It grows the plot to the card's height inside a stretched
@@ -299,7 +300,7 @@ The Monthly correction also removes the obsolete empty-month repair action while
 refresh regressions failed before that correction, then all 190 Monthly tests passed; independent review confirmed
 focus and month-scope behavior.
 
-Final code gates at product commit `c30c76bcc7c8808f642788e7b5f41c8db8550bd3`:
+Last wholly green full code gates at product commit `c30c76bcc7c8808f642788e7b5f41c8db8550bd3`:
 
 - App and node `tsc -p --noEmit`: clean.
 - ESLint: 0 errors, 26 existing warnings.
@@ -307,6 +308,24 @@ Final code gates at product commit `c30c76bcc7c8808f642788e7b5f41c8db8550bd3`:
 - Production build: passed in 17.92 seconds, with the existing chunk-size advisory.
 - Backend: 2,845 passed / 4 skipped in 90.14 seconds. Backend tree
   `9dcde78043e5d9dbb13e1ed53de82c1e601919c6` is unchanged by the frontend integration fixes.
+
+Cold browser verification then found What-if initial layout shifts of 0.123 and 0.248. `0b3290c2` stabilizes its first
+form/preview and keeps the controls in one full-width row. Four new regressions failed before the fix; all 64 affected
+tests passed afterward. Twenty browser cases across all viewport/theme combinations passed 160 checks, maximum CLS
+0.023983, and both themes' What-if Apply/dirty-draft Undo flows restored the exact original inputs.
+
+At `0b3290c2`, app/node types, full lint (0 errors / 26 warnings) and build (18.56s) passed. The full frontend run had
+4,875 passes and one async assertion race in TransactionsPanel (273.50s): the callback fired before React committed the
+editor reset. `01b1aed3` waits for the visible Add button; its complete 73-test suite passed. The full run is retained as
+a failed attempt, not relabelled green.
+
+The user's live-preview amendments keep the complete email beside the 28px controls at the existing 210px sidebar
+width, give Log out the red token, and place tile badges beside titles. The final footer passed 20 browser combinations
+and 43 focused tests. Tiles and their ghosts share three tracks; narrow steady headers accommodate two title lines,
+with no reserved badge row. The affected 50 tile/skeleton/CSS tests and app type check passed, as did targeted lint.
+The refined browser preparation passed 410 checks, including all 38 Net worth and 38 Spending months at both 1280 and
+1440. Per the user's explicit request to avoid heavyweight reruns for these cosmetic changes, validation uses focused
+checks plus the continuing full browser matrix; no new full-suite pass is claimed for the amended product.
 
 Gate logs and interrupted/failed attempts are preserved in ignored `scratchpad/codex-takeover-*` files. Lane V's
 fresh-copy browser acceptance and final report remain the last step; its plan records source provenance, measured
