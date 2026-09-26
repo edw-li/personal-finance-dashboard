@@ -18,6 +18,8 @@
 - [x] Keep authentication secrets in ignored token files, never logs or tracked manifests. Local auth setup is allowed only on the two V copies. The default probe fences mutations; writable mode additionally requires an explicit twin URL and local source manifest.
 - [x] Verify `/auth/me`, schema and local database identity before opening a browser. Both identities/schema were reconfirmed after the final product update; the read copy reports read-only transactions. Close each context/browser in `finally`; stop only V-owned servers on completion.
 
+The user later requested an ordinary local preview. Ownership of writable backend **8091** and its existing private data/runtime directories transferred to the coordinator for that preview; V must leave it running. V's eventual cleanup is limited to **8089/5279/5280** and its own headless browsers. The coordinator separately verifies ordinary preview proxy traffic because the V harness uses the explicit direct-backend transport described above.
+
 The older audit copy (`finance_polish_audit`) and lane copies (`finance_polish_w5`–`w8`) supply historical evidence, never the final fresh-copy verdict. The original read-only dump invocation was recovered by the Settings agent; V executed it once and restored identical bytes into both private databases.
 
 ## 2. Reusable driver and report
