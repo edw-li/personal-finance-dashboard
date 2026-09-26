@@ -92,6 +92,7 @@ function assertTiles(id, rows, oneLine = false) {
     check(id, `Tile row ${index + 1}: mixed tiles have real second lines`, secondLines.ok, secondLines, { blankBand: baseline.mixedTileBlankBand, bareTilesBySurface: baseline.mixedBareTiles })
     const realTiles = row.tiles.filter(tile => !tile.ghost)
     check(id, `Tile row ${index + 1}: badges share the title header without a blank badge track`, realTiles.length > 0 && realTiles.every(tile => tile.header !== null && tile.legacyBadgeRows === 0 && (!tile.badge || tile.badgePlacement !== null && tile.badgePlacement.titleOverlap > 0 && tile.badgePlacement.gapAfterTitle >= -1 && Math.abs(tile.badgePlacement.rightInset) <= 1)), realTiles.map(({ label, badge, header, legacyBadgeRows, badgePlacement }) => ({ label, badge, header, legacyBadgeRows, badgePlacement })))
+    check(id, `Tile row ${index + 1}: info icons stay beside the final title word`, realTiles.every(tile => tile.labelIcon === null || tile.labelIcon.sameLine), realTiles.map(({ label, labelIcon }) => ({ label, labelIcon })))
     const counts = row.layout.split('+').map(Number)
     const lastFull = row.tiles.length === 5 && counts.join('+') === '2+2+1' && row.tiles.at(-1).w >= row.w - 2
     check(id, `Tile row ${index + 1} has no orphan fifth tile`, row.tiles.length !== 5 || ['5', '3+2'].includes(row.layout) || lastFull, { layout: row.layout, width: row.w, lastTileWidth: row.tiles.at(-1)?.w })
@@ -383,8 +384,10 @@ async function monthsGroup(options) {
         observed.push({ month, selected, rendered, height: row?.h ?? null, lines: row ? judge(row) : null,
           secondLines: row ? secondLineCoverage(row) : null,
           namedSecondLines: route !== '/spending' || requiredSecondLines.spending.every(label => row?.tiles.some(tile => tile.label === label && tile.deltaLines > 0 && !!tile.delta?.trim())),
+          titleIcons: row?.tiles.map(({ label, labelIcon }) => ({ label, labelIcon })) ?? null,
         })
       }
+      check(id, `${route}: every offered month's info icons stay beside their title`, observed.length > 1 && observed.every(month => month.titleIcons?.every(tile => tile.labelIcon === null || tile.labelIcon.sameLine)), observed.map(({ month, titleIcons }) => ({ month, titleIcons })))
       check(id, `${route}: every offered month's mixed and named second lines remain present`, observed.length > 1 && observed.every(month => month.secondLines?.ok && month.namedSecondLines), observed.map(({ month, secondLines, namedSecondLines }) => ({ month, secondLines, namedSecondLines })), { blankBand: baseline.mixedTileBlankBand, bareTiles: route === '/spending' ? baseline.mixedBareTiles.spending : undefined })
       if (options.width === 1440) check(id, `${route}: every offered month's deltas fit one line at 1440`, observed.length > 1 && observed.every(month => month.lines?.length > 0 && month.lines.every(line => line.maxDeltaLines <= 1)), observed.map(month => ({ month: month.month, lines: month.lines })))
       check(id, `${route}: every offered month has stable tile-row height`, observed.length > 1 && observed.every(o => o.height !== null) && measure.spread(observed.map(o => o.height)) <= 1, observed, route === '/net-worth' ? baseline.netWorthMonthHeights : undefined)

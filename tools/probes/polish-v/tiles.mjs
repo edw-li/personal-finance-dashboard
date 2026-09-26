@@ -44,6 +44,25 @@ export async function tileRows(page) {
         const delta = tile.querySelector('.stat-delta')
         const badge = tile.querySelector('.stat-badge')
         const labelBox = label?.getBoundingClientRect(), badgeBox = badge?.getBoundingClientRect(), headerBox = header?.getBoundingClientRect()
+        const labelIcon = (() => {
+          const icon = label?.querySelector('.metric-info-button svg, .info-hint svg')
+          if (!icon) return null
+          const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT)
+          const words = []
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (node.textContent.trim() && !node.parentElement.closest('button, [role="tooltip"]')) words.push(node)
+          }
+          const text = words.at(-1), match = text?.textContent.match(/\S+\s*$/u)
+          if (!text || !match) return { sameLine: false, reason: 'Info icon has no measurable title word' }
+          const range = document.createRange()
+          range.setStart(text, match.index)
+          range.setEnd(text, match.index + match[0].trimEnd().length)
+          const wordBox = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0).at(-1)
+          const glyph = icon.getBoundingClientRect()
+          const overlap = wordBox ? Math.min(wordBox.bottom, glyph.bottom) - Math.max(wordBox.top, glyph.top) : null
+          return { word: match[0].trim(), overlap, gap: wordBox ? glyph.left - wordBox.right : null,
+            sameLine: !!wordBox && overlap >= Math.min(wordBox.height, glyph.height) / 2 && glyph.left >= wordBox.right - 1 }
+        })()
         return {
           label: (label?.textContent ?? '').trim().slice(0, 40),
           ghost: tile.classList.contains('skeleton-tile'),
@@ -51,6 +70,7 @@ export async function tileRows(page) {
           valueBaseline: baselineOf(value),
           valueTop: value ? round(value.getBoundingClientRect().top + scrollY) : null,
           badge: badge ? badge.textContent.trim() : null,
+          labelIcon,
           header: headerBox ? { top: round(headerBox.top), bottom: round(headerBox.bottom), right: round(headerBox.right) } : null,
           legacyBadgeRows: tile.querySelectorAll('.stat-badge-row').length,
           badgePlacement: badgeBox && labelBox && headerBox ? {
