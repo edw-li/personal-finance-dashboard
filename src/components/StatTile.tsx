@@ -118,7 +118,7 @@ export default function StatTile({
               ? '▼'
               : ''
   const clauses = delta === undefined ? [] : clausesOf(delta)
-  const glyphSpan = glyph ? <span aria-hidden="true">{glyph} </span> : null
+  const glyphSpan = glyph ? <span className="stat-delta-glyph" aria-hidden="true">{glyph} </span> : null
   return (
     <div className={hero ? 'stat-tile stat-tile-hero' : 'stat-tile'}>
       {/* Four lines, always, in this order (2026-09-25 polish spec §4.1, contract C4). Inside a row

@@ -124,3 +124,12 @@ describe("the calendar strip's own five-across (CalendarPage.css)", () => {
     expect(CAL).not.toMatch(/\.cal-strip \{[^}]*margin-bottom/)
   })
 })
+
+// The hero's "▲ $126,583 (+15.7%) since Sep 1 · 21 days" measured 239.14px against a 238.56px delta box
+// at 1440 (Edge): the glyph's own space closes by 0.1em so the arrow binds to its figure and the
+// spec's example fits its one line (§4.3). The words are unchanged.
+describe('the delta glyph (spec §4.3)', () => {
+  it('tightens only the space after the ▲/▼', () => {
+    expect(CSS).toContain('.stat-delta-glyph { word-spacing: -0.1em; }')
+  })
+})

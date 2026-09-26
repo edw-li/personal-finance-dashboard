@@ -157,6 +157,8 @@ describe('StatTile four lines', () => {
     // The words read exactly as before: the clauses add no text.
     expect(document.querySelector('.stat-delta')?.textContent).toBe('▲ $126,583 (+15.7%) since Sep 1 · 21 days')
     expect(document.querySelector('.stat-delta-clause span[aria-hidden="true"]')?.textContent).toBe('▲ ')
+    // Its own class, so its trailing space can close a hair (panels.css) without touching the words.
+    expect(document.querySelector('.stat-delta-clause span[aria-hidden="true"]')?.className).toBe('stat-delta-glyph')
   })
 
   it('never splits inside parentheses, and leaves a one-clause delta as plain text', () => {

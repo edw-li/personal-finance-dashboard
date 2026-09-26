@@ -289,6 +289,13 @@
   display: inline-block;
 }
 
+/* The ▲/▼ binds to its figure: its own space closes by 0.1em (1.3px). The hero's "▲ $126,583 (+15.7%)
+   since Sep 1 · 21 days" measured 239.14px against a 238.56px delta box at 1440 in Edge — the spec's
+   own example, a hair over its one line. The words are unchanged. */
+.stat-delta-glyph {
+  word-spacing: -0.1em;
+}
+
 /* A steady row keeps one height as its month changes (the Overview, Net worth, Spending; spec §4.3):
    its badge line and one delta line stand whether or not the month on show fills them. The reserve is
    an invisible no-break space in the badge's own box and in the delta's own type, so a reserved line is
