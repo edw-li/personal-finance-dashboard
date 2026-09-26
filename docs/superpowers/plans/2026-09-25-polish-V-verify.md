@@ -29,7 +29,7 @@ The older audit copy (`finance_polish_audit`) and lane copies (`finance_polish_w
 
 ## 3. Matrix: both themes at every viewport
 
-Each group runs dark and light at **1280×800, 1366×768, 1440×900, 1536×864, 1920×1080**. Sidebar additionally checks comfortable and compact density. Motion/focus spot checks add reduced motion at 1280×800 light and 1440×900 dark.
+Each group runs dark and light at **1280×800, 1366×768, 1440×900, 1536×864, 1920×1080**. Sidebar additionally checks comfortable and compact density. The fresh flow artifacts separately verify reduced motion at **1280×800 light** (L7 budget/matrix) and **1366×768 dark** (L6 native-date focus, alongside normal motion). The original plan named 1440×900 dark; the actual fresh trace used the smaller viewport where the focus defect was reproduced. The 500-case matrix uses normal motion.
 
 | Group | Acceptance and actual measurement |
 |---|---|
