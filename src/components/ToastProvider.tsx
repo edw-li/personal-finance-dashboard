@@ -9,11 +9,14 @@ import {
 } from 'react'
 import type { ReactNode } from 'react'
 import { MOTION_MS } from '../theme/motion'
+import { errorDetail } from '../api/client'
 import './toast.css'
 
 export interface ToastAction {
   label: string
-  onAction: () => void
+  /** An async action keeps its control mounted until it settles. False means its confirmation
+   *  was declined: keep the action available rather than consuming the notification. */
+  onAction: () => void | Promise<unknown>
 }
 
 export interface ToastOptions {
@@ -35,6 +38,7 @@ interface ToastEntry {
   action?: ToastAction
   /** Exit phase: still rendered (with .toast-leaving) but no longer armable. */
   leaving?: boolean
+  acting?: boolean
 }
 
 // Long enough to read and reach Undo, short enough never to queue up (hover pauses it).
@@ -67,6 +71,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   // first activation, and a habitual double-click lands inside that window — the second
   // press must not re-fire the action (every host's Undo re-POSTs a deleted row).
   const firedActions = useRef(new Set<number>())
+  const alive = useRef(true)
   // TWO latches, ORed into "paused", never one shared flag: the pointer and the keyboard
   // hold the clock for different reasons, so a pointer leaving a region the keyboard is
   // still inside must not start the countdown under the user's hands.
@@ -106,6 +111,8 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 
   const arm = useCallback(
     (id: number) => {
+      // A confirmation may have moved focus outside the toast. Its anchor still has to stand.
+      if (firedActions.current.has(id)) return
       timers.current.set(
         id,
         setTimeout(() => dismiss(id), AUTO_DISMISS_MS),
@@ -180,9 +187,11 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   // setState into a dead tree. The maps are copied per the ref-in-cleanup rule — they are
   // created once, but the lint rule cannot know that.
   useEffect(() => {
+    alive.current = true
     const pending = timers.current
     const leaving = removalTimers.current
     return () => {
+      alive.current = false
       for (const timer of pending.values()) clearTimeout(timer)
       for (const timer of leaving.values()) clearTimeout(timer)
       pending.clear()
@@ -204,14 +213,34 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
           <button
             type="button"
             className="toast-action"
+            aria-busy={toast.acting || undefined}
+            aria-disabled={toast.acting || toast.leaving || undefined}
             onClick={() => {
-              // Consume FIRST: an action that itself toasts (an undo that fails)
-              // must not race a dismiss aimed at the wrong entry.
-              dismiss(toast.id)
-              // ...and exactly once: the button outlives this click by LEAVE_MS.
-              if (firedActions.current.has(toast.id)) return
+              if (toast.leaving || firedActions.current.has(toast.id)) return
               firedActions.current.add(toast.id)
-              action.onAction()
+              clearTimeout(timers.current.get(toast.id))
+              timers.current.delete(toast.id)
+              const settle = (answer: unknown) => {
+                if (!alive.current || !firedActions.current.has(toast.id) || removalTimers.current.has(toast.id)) return
+                if (answer === false) {
+                  firedActions.current.delete(toast.id)
+                  setToasts(current => current.map(entry => entry.id === toast.id ? { ...entry, acting: false } : entry))
+                  if (!hoverPaused.current && !focusPaused.current) arm(toast.id)
+                } else dismiss(toast.id)
+              }
+              try {
+                const result = action.onAction()
+                if (result !== undefined && typeof result.then === 'function') {
+                  setToasts(current => current.map(entry => entry.id === toast.id ? { ...entry, acting: true } : entry))
+                  void Promise.resolve(result).then(settle, err => {
+                    if (alive.current) push('error', errorDetail(err))
+                    settle(undefined)
+                  })
+                } else settle(undefined)
+              } catch (err) {
+                push('error', errorDetail(err))
+                settle(undefined)
+              }
             }}
           >
             {action.label}
