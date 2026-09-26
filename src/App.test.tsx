@@ -41,6 +41,10 @@ vi.mock('./components/Layout', async () => {
       <button onClick={(event) => {
         void confirm({ anchor: event.currentTarget, title: 'Leave the page?', confirmLabel: 'Leave' })
       }}>Ask a question</button>
+      <button onClick={(event) => {
+        void confirm({ anchor: event.currentTarget, title: 'Reset the lots?', confirmLabel: 'Reset',
+          body: <>Their history is on <Link to="/portfolio">the portfolio page</Link>.</> })
+      }}>Ask with a link</button>
       <Suspense fallback={<p>Loading page</p>}><Outlet /></Suspense>
     </>
   }
@@ -101,5 +105,18 @@ describe('the in-app confirm (2026-09-25 polish spec §6.3)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask a question' }))
     const popover = screen.getByRole('alertdialog', { name: 'Leave the page?' })
     expect(popover.parentElement).toBe(document.body)
+  })
+
+  // Mounted inside the router: a router Link in a question's body would otherwise throw above every
+  // error boundary and blank the whole app (review #3).
+  it("renders a router Link in a question's body, and the Link navigates", async () => {
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Page /' })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask with a link' }))
+    const link = screen.getByRole('link', { name: 'the portfolio page' })
+    expect(link.closest('[role="alertdialog"]')).not.toBeNull()
+    expect(link.getAttribute('href')).toBe('/portfolio')
+    fireEvent.click(link)
+    expect(await screen.findByRole('heading', { name: 'Page /portfolio' })).toBeTruthy()
   })
 })

@@ -38,10 +38,12 @@ export default function App() {
       <AuthProvider>
         <SessionPrefs />
         <ToastProvider>
-          {/* The one in-app confirm (2026-09-25 polish spec §6.3): inside the toasts, so a question
-              and the Undo that may follow it share one layer; outside the router, which it never needs. */}
-          <ConfirmProvider>
-            <BrowserRouter>
+          <BrowserRouter>
+            {/* The one in-app confirm (2026-09-25 polish spec §6.3): inside the toasts, so a question and
+                the Undo that may follow it share one layer, and inside the router, so a question's body
+                may hold a router Link — outside it, rendering one throws above every error boundary and
+                blanks the app. */}
+            <ConfirmProvider>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
                 <Route element={<ProtectedRoute />}>
@@ -73,8 +75,8 @@ export default function App() {
                   </Route>
                 </Route>
               </Routes>
-            </BrowserRouter>
-          </ConfirmProvider>
+            </ConfirmProvider>
+          </BrowserRouter>
         </ToastProvider>
       </AuthProvider>
     </ThemeProvider>
