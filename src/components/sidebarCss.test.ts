@@ -52,10 +52,10 @@ describe('the sidebar on a short screen (Layout.css)', () => {
 const SHELL = flat('shell/shell.css')
 
 describe('the compact account footer (shell.css)', () => {
-  it('gives the identity its full width and wraps long addresses instead of cutting them off', () => {
+  it('fits the full identity beside its icons and wraps long addresses instead of cutting them off', () => {
     expect(SHELL).toMatch(/\.sidebar-footer \{[^}]*display: flex;[^}]*flex-wrap: wrap;[^}]*align-items: center;/)
     expect(SHELL).toMatch(
-      /\.sidebar-footer-email \{[^}]*flex: 0 0 100%;[^}]*min-width: 0;[^}]*overflow-wrap: anywhere;/,
+      /\.sidebar-footer-email \{[^}]*flex: 1;[^}]*min-width: 0;[^}]*padding: 0;[^}]*overflow-wrap: anywhere;/,
     )
     expect(SHELL).not.toMatch(/\.sidebar-footer-email \{[^}]*(?:overflow: hidden|text-overflow: ellipsis|white-space: nowrap);/)
   })

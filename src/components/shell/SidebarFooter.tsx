@@ -27,9 +27,9 @@ export function getLastSystemStatus(): SystemStatus | null {
 
 // Identity at the bottom of the sidebar (2026-09-03 shell spec §12) — who is signed in, which
 // deployment and which build, so two tabs (dev vs prod) can never be confused — plus a one-click
-// theme toggle and Log out. The full-width address sits above the two compact icon buttons so the
-// signed-in identity stays readable (2026-09-26 request). The environment and build ride its
-// tooltip; Settings › Data › System states them too.
+// theme toggle and Log out. The full address shares one compact row with the icon buttons;
+// longer identities wrap within their available space (2026-09-26 request). The environment
+// and build ride its tooltip; Settings › Data › System states them too.
 export default function SidebarFooter({ buildHash }: { buildHash: string }) {
   const { email, logout } = useAuth()
   const { theme, resolved, setTheme } = useTheme()

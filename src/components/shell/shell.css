@@ -217,8 +217,8 @@
 
 /* ── Sidebar footer (rendered by SidebarFooter) ─────────────────────────── */
 
-/* The signed-in address gets the sidebar's full width (2026-09-26 request). The compact
-   icon row below it preserves laptop-height fit without cutting the identity short. */
+/* Removing the address's inner padding leaves room for the full identity beside both
+   28px icons at the existing sidebar width. Longer identities wrap, never ellipsise. */
 .sidebar-footer {
   margin-top: auto;
   padding: 0.5rem 0.25rem 0;
@@ -234,9 +234,9 @@
 }
 
 .sidebar-footer-email {
-  flex: 0 0 100%;
+  flex: 1;
   min-width: 0;
-  padding: 0 0.5rem;
+  padding: 0;
   line-height: 1.2;
   overflow-wrap: anywhere;
 }
