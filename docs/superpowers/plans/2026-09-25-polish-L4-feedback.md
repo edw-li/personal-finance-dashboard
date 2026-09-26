@@ -770,13 +770,16 @@ describe('feedback.css', () => {
     const css = flat(feedback)
     const motion = inside(css, '@media (prefers-reduced-motion: no-preference) {')
     expect(motion).toContain('.busy-spinner { animation: busy-spin 0.8s linear infinite; }')
-    expect(css.slice(0, css.indexOf('@media (prefers-reduced-motion: no-preference)'))).not.toContain('busy-spin')
+    // The keyframes' NAME, not the class that shares its first letters.
+    expect(css.slice(0, css.indexOf('@media (prefers-reduced-motion: no-preference)'))).not.toMatch(
+      /busy-spin(?![\w-])/,
+    )
   })
 
-  it('fades a leaving row and takes it out of reach, on the fast token', () => {
+  it('fades a leaving row and takes it out of reach, on the fast token — whatever its own rules say', () => {
     const leaving = declarationsFor(feedback, '[data-leaving]')
-    expect(leaving).toContain('opacity: 0;')
-    expect(leaving).toContain('pointer-events: none;')
+    expect(leaving).toContain('opacity: 0 !important;')
+    expect(leaving).toContain('pointer-events: none !important;')
     expect(leaving).toContain('transition: opacity var(--t-fast) var(--ease-out);')
   })
 
@@ -784,8 +787,10 @@ describe('feedback.css', () => {
     const supports = inside(flat(feedback), '@supports (interpolate-size: allow-keywords) {')
     const fold = declarationsFor(supports, ':not(tr)[data-leaving]')
     expect(fold).toContain('interpolate-size: allow-keywords;')
-    expect(fold).toContain('block-size: 0;')
-    expect(fold).toContain('padding-block: 0;')
+    // Important: a row's own box rules (a more specific padding, an inline style) must not leave a
+    // sliver standing — measured in Edge, a 10px inline padding kept a folded row 21px tall.
+    for (const declaration of ['block-size', 'min-block-size', 'padding-block', 'margin-block', 'border-block-width'])
+      expect(fold).toContain(`${declaration}: 0 !important;`)
     expect(fold).toContain('block-size var(--t-fast) var(--ease-out)')
   })
 
@@ -980,25 +985,28 @@ describe('feedback.css', () => {
 /* ── A row leaving (useDeleteWithUndo) ─────────────────────────────── */
 /* The row fades while its delete runs, and cannot be pressed again; it leaves the tree when the list
    reloads. A refused delete simply takes the attribute away — no transition back: the row is just
-   there again. */
+   there again. `!important` because a transient state must win over whatever the row's own rules (or
+   an inline style) say about its opacity and box; the fade still runs — a transition outranks
+   important declarations in the cascade. */
 [data-leaving] {
-  opacity: 0;
-  pointer-events: none;
+  opacity: 0 !important;
+  pointer-events: none !important;
   transition: opacity var(--t-fast) var(--ease-out);
 }
 
 /* A table row cannot be given a height, so it fades in place; any other row also folds its height
    away where the browser can interpolate to `auto` — declared in the same rule that sets the 0
    (measured in Edge: the after-change style's interpolate-size is the one the transition reads).
-   Elsewhere it fades only. */
+   Elsewhere it fades only. The box goes to 0 whatever set it: measured in Edge, a row whose padding
+   out-ranked this rule folded to a 21px sliver. */
 @supports (interpolate-size: allow-keywords) {
   :not(tr)[data-leaving] {
     interpolate-size: allow-keywords;
-    block-size: 0;
-    min-block-size: 0;
-    padding-block: 0;
-    margin-block: 0;
-    border-block-width: 0;
+    block-size: 0 !important;
+    min-block-size: 0 !important;
+    padding-block: 0 !important;
+    margin-block: 0 !important;
+    border-block-width: 0 !important;
     overflow: clip;
     transition:
       opacity var(--t-fast) var(--ease-out),
