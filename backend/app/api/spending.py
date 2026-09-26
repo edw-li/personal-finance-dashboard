@@ -47,6 +47,7 @@ from app.services.money import (
     quantize_money,
     require_first_of_month,
 )
+from app.services.month_review import lock_review_inputs
 from app.services.month_writes import write_spending
 from app.services.net_worth_calc import get_swr_pct, investable_bases
 from app.services.ordering import (
@@ -225,7 +226,9 @@ async def delete_category(
     an Undo (which replays in reverse) brings the category back first and then everything
     that hung off it, ids included (2026-09-25 polish spec §6.1). The category is read FOR
     UPDATE first, so a month row, budget or reward link another tab writes meanwhile waits
-    rather than leaving with the cascade unimaged."""
+    rather than leaving with the cascade unimaged — and before that the month-review table
+    locks, as delete_account takes them and for its reason."""
+    await lock_review_inputs(db)
     category = await _get_category(db, category_id, lock=True)
     row_count = (
         await db.execute(

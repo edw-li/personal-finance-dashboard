@@ -230,9 +230,9 @@ async def lock_parent[M](db: AsyncSession, model: type[M], pk: object) -> M | No
     be removed or unlinked by the FK's ON DELETE. populate_existing: the image is the row as
     locked, even in a session that already holds it.
 
-    Accepted: a writer that already holds the month-review table locks and then needs this row
-    (a month save racing the delete of its own account) can deadlock with the delete; Postgres
-    aborts one of the two, and neither is half-written."""
+    A parent that is a month-review input (an account, a spending category) takes
+    lock_review_inputs BEFORE this, in undo_batch's order: a month save holds those table locks
+    while it writes under the row, and a row lock taken first deadlocked with it."""
     return await db.get(model, pk, with_for_update=True, populate_existing=True)
 
 

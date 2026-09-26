@@ -28,7 +28,7 @@ from app.schemas.ordering import OrderIn
 from app.services import clock
 from app.services.changelog import ChangeBatch, batch_header, change_batch, lock_parent, row_image
 from app.services.money import mom_pct, require_first_of_month
-from app.services.month_review import load_review_book
+from app.services.month_review import load_review_book, lock_review_inputs
 from app.services.month_writes import write_balances
 from app.services.net_worth_calc import (
     ZERO,
@@ -321,7 +321,10 @@ async def delete_account(
     account LAST, so an Undo (which replays in reverse) brings the account back and relinks
     them (2026-09-25 polish spec §6.1). The account is read FOR UPDATE first, so a balance,
     component or card link another tab writes meanwhile waits rather than leaving with the
-    cascade unimaged."""
+    cascade unimaged — and before that the month-review table locks, the month save's own, in
+    undo_batch's order (review locks, then rows): row lock first, a save holding them and writing
+    a balance for this account deadlocked with the delete, and Postgres aborted the save."""
+    await lock_review_inputs(db)
     account = await _get_account(db, account_id, lock=True)
     balance_count = (
         await db.execute(
