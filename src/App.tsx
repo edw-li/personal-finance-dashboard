@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import { ROUTE_CHUNKS } from './components/routeChunks'
 import ThemeProvider from './components/shell/ThemeProvider'
 import ToastProvider from './components/ToastProvider'
+import { ConfirmProvider } from './components/feedback/confirm'
 import { AuthProvider } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -37,39 +38,43 @@ export default function App() {
       <AuthProvider>
         <SessionPrefs />
         <ToastProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route element={<ProtectedRoute />}>
-                {/* Detail history belongs to the signed-in shell. Unmount the whole
-                    stack on logout, including evidence opened from another panel. */}
-                <Route element={<DetailPanelProvider><Layout /></DetailPanelProvider>}>
-                  <Route
-                    path="/"
-                    element={
-                      <LandingRedirect>
-                        <OverviewPage />
-                      </LandingRedirect>
-                    }
-                  />
-                  <Route path="/update" element={<MonthlyUpdatePage />} />
-                  <Route path="/net-worth" element={<NetWorthPage />} />
-                  <Route path="/spending" element={<SpendingPage />} />
-                  <Route path="/portfolio" element={<PortfolioPage />} />
-                  <Route path="/credit-cards" element={<CreditCardsPage />} />
-                  <Route path="/taxes" element={<TaxesPage />} />
-                  <Route path="/espp" element={<EsppPage />} />
-                  <Route path="/paycheck" element={<PaycheckPage />} />
-                  <Route path="/comp" element={<CompPage />} />
-                  <Route path="/calendar" element={<CalendarPage />} />
-                  <Route path="/projection" element={<ProjectionPage />} />
-                  <Route path="/settings" element={<SettingsPage />} />
-                  <Route path="/guide" element={<GuidePage />} />
-                  <Route path="*" element={<NotFoundPage />} />
+          {/* The one in-app confirm (2026-09-25 polish spec §6.3): inside the toasts, so a question
+              and the Undo that may follow it share one layer; outside the router, which it never needs. */}
+          <ConfirmProvider>
+            <BrowserRouter>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route element={<ProtectedRoute />}>
+                  {/* Detail history belongs to the signed-in shell. Unmount the whole
+                      stack on logout, including evidence opened from another panel. */}
+                  <Route element={<DetailPanelProvider><Layout /></DetailPanelProvider>}>
+                    <Route
+                      path="/"
+                      element={
+                        <LandingRedirect>
+                          <OverviewPage />
+                        </LandingRedirect>
+                      }
+                    />
+                    <Route path="/update" element={<MonthlyUpdatePage />} />
+                    <Route path="/net-worth" element={<NetWorthPage />} />
+                    <Route path="/spending" element={<SpendingPage />} />
+                    <Route path="/portfolio" element={<PortfolioPage />} />
+                    <Route path="/credit-cards" element={<CreditCardsPage />} />
+                    <Route path="/taxes" element={<TaxesPage />} />
+                    <Route path="/espp" element={<EsppPage />} />
+                    <Route path="/paycheck" element={<PaycheckPage />} />
+                    <Route path="/comp" element={<CompPage />} />
+                    <Route path="/calendar" element={<CalendarPage />} />
+                    <Route path="/projection" element={<ProjectionPage />} />
+                    <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/guide" element={<GuidePage />} />
+                    <Route path="*" element={<NotFoundPage />} />
+                  </Route>
                 </Route>
-              </Route>
-            </Routes>
-          </BrowserRouter>
+              </Routes>
+            </BrowserRouter>
+          </ConfirmProvider>
         </ToastProvider>
       </AuthProvider>
     </ThemeProvider>
