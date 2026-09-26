@@ -2507,3 +2507,103 @@ Record what changed against the plan and why, the before → after numbers per s
 git add docs/superpowers/plans/2026-09-25-polish-L1-layout.md
 git commit -m "docs(plan): polish L1 as built — measurements, gates, deviations"
 ```
+
+---
+
+## As built (2026-09-25)
+
+All eighteen tasks done, TDD throughout (every test was run red before its code). Branch `feat/polish-layout`, 22 commits on
+657e3d62 — not pushed, not merged.
+
+### What changed against the plan, and why
+
+1. **Tax tables — the weights are calibrated pixels, and each column is charged its gaps** (`f19e6773`, after Task 12).
+   Edge showed the row-unit estimate choosing the split after Medicare: columns 1,404 vs 1,068 px, 337 px apart. Measured on the
+   production copy a bracket row is 61.5 px and a table's fixed parts 88.5 px (Federal 519, State 642, Medicare 211, Social
+   Security 348, Disability 415, Capital gains 273), so `groupWeight` now charges calibrated pixels (row 62, table 88, strip
+   margin 9, helper 31, offer 32, an earner's own table 89 + rows, 11 between strip items) and `balancedSplit(weights, gap)`
+   charges each column its 1rem gaps (`STACK_GAP = 16`). The split now falls after State: 1,504 vs 1,621 px — the best
+   contiguous split for these tables.
+2. **Tax tables — contiguous, not alternating** (Task 12, deliberate). The spec says "tables assigned alternately by estimated
+   height". A contiguous split keeps the DOM, Tab and reading order in JURISDICTIONS order in two columns and in one (an
+   alternating one would reorder the tables for keyboard and screen-reader users, and in the stacked narrow layout). The split is
+   read off the SAVED tables and held per (status, empty-or-not), so adding rows or saving never moves a table — or the focused
+   Save — to the other stack (a move would remount it and drop focus).
+3. **Tax tables at 1920 — two columns, per the spec.** The old auto-fill grid had three columns at 1920 (card 1,210 px, gaps up
+   to 447 px); two stacks make the card 1,432 px with no gaps. Possible follow-up for the user: a third stack from ~1,600 px of
+   page.
+4. **Spending › Trends, All categories — BOTH cards span 12**, not only Category trends: Savings rate alone at span 6 would sit
+   beside a ~570 px half-row hole, the very thing OU-16 fixes on the Overview.
+5. **ChartCard gained a second prop, `reserveControls`** (besides C5's `fill`), for the Spending pair's reserved controls row.
+   `fill` never applies to a card with an `aside` (its plot sits in the aside wrapper, which does not grow) — no such span-6 card
+   exists today; the guard keeps a future one from collapsing its chart.
+6. **The FLIP clamps its sideways travel to the grid** (`76bb2cf0`, after Task 9). Filmed in Edge: hiding Portfolio performance
+   started Recent spending — now full width — at its old left edge, ~580 px past the grid, and the page flashed a horizontal
+   scrollbar for 120 ms. Now 0 px of horizontal overflow across hide/show of both charts and Year to date. Widths snap (a span
+   change is not a move). The tile row is FLIPped too, found from the deeper grid rather than given a ref, to stay out of L2's
+   tile markup.
+7. **Allocation's cap lets go while "Missing quotes" is open** (the reader's own list must not be buried), applies only while
+   the aside sits beside the plot (card ≥ 900 px), and not in the Expand dialog (outside the slot). The plot-centring rule is
+   under the slot too (the dialog's plot column must stretch).
+8. **Card detail — the pinned "action row" is the add-credit form** (the card's last form row, the Settings §3.3 analogy), with
+   the rewards line under it; the chart card fills its row through the span-6 default. CSS only; `CardDetail.tsx` untouched.
+9. **Guide foot** — Previous only on numbered rails; no Next on the last task, no Previous on the first; the buttons are named
+   for the task they lead to ("Next: Look afterwards"); focus moves onto the newly selected rail row (the rail's arrow-key idiom).
+10. **The deeper spans live in a small module** (`customizeReflow.ts`: `deeperSpans`, `childRects`, `flipChildren`), called from
+    OverviewPage.tsx; the page computes the shown order (an empty Year to date never separates a pair) and wires the FLIP.
+
+### Measured in headless Edge on the production copy (both themes; `work-L1/results-*.json`)
+
+| Surface | Before | After |
+|---|---|---|
+| Sidebar overflow, comfortable | 1280×800 **86**, 1366×768 **118**, 1536×864 **22**, 1440×900 0 px | **0** at all four (and 1920×1080) |
+| Sidebar overflow, compact | 1280×800 **18**, 1366×768 **50** px | **0** everywhere |
+| Theme / Log out in view | hidden at 1280×800 and 1366×768 (both), 1536×864 (Log out) | both in view everywhere, 28×28 px |
+| Search pill | "Search or ju…" truncated at every comfortable width | "Search…", never truncated |
+| Nav at ≥ 901 px of height | — | first link tops identical at 1920×1080 (nothing moved); the indicator still lands on its row (31 px rows at 768, 37 at 1080) |
+| Pairs, Table closed (1280/1440/1920) | Overview 63 · Trends 84/68/36 · Paycheck 109/95/97 · ESPP 17 · card detail 20/44/0 px | **0** on all five, both themes |
+| Pairs, either Table open, and closed again | 292–460 px apart | **0** in every state |
+| Trends plot tops | 288 vs 302 px (heights 260 vs 220) | 302 vs 302 px (floor 260 on both) |
+| Overview: blank under "Changes" | 134 / 100 / 66 px | **0** (limit 24) |
+| Overview: columns | 0 (by stretching Changes) | 0 (the trend fills); trend Table open → Data status' note pinned, blank 242–310 → **0** |
+| Calendar: labels → first week | 65 px | **8 px** (limit 12) |
+| Tax tables | 1280: one column, card 2,642 px; 1440: ragged gaps ≤ 152 px, card 1,590; 1920: three columns, gaps ≤ 447, card 1,210 | two stacks at 1280/1440/1920, gaps 16 px (the stack gap), card 1,448 / 1,448 / 1,432 px; column bottoms 117 px apart (independent) |
+| Allocation card height across the five breakdowns | 431/725/431/461/431 px (spread 294; 310 at 1280) | **431** on all five (spread **0**) |
+| Budget meter ends | 1119.1 vs 1111.6 px; empty track #1e222c on #171a21 | one end (1111.6 at 1440); track `--fill` (#262b36 dark, #e6ebf2 light) |
+| Pace meter ends | 1098 vs 1070.5 px | one end (1070.5 at 1440) |
+| Guide numbered rail | no Next, no progress | "Step 1 of 18 · Next →"; two Nexts → "Step 3 of 18", focus on the selected row |
+| Chart Table reveal (px of the 364 px twin in view) | Net worth 21 · Taxes 0 · Spending 86 · Overview trend 280 | **364** on all four |
+
+Interactive checks (Edge): Customize — hiding Portfolio performance runs Recent spending across the row (span 12, 1,151 px);
+showing it again appends it after Money flow, both span 12, the new card fading in over 120 ms; 0 console errors. Expand on a
+filling card (ESPP Lot anatomy) — the plot fills the dialog (680 px in 852); after Esc the pair is equal again. With the detail
+dock open (ESPP, 368 px cards) the pair still ends together. Screenshots in `shots/L1/after*/`.
+
+### Gates
+
+- `npx tsc -p tsconfig.app.json --noEmit`: clean. `npx tsc -p tsconfig.node.json --noEmit`: clean.
+- `npx eslint .`: 0 errors, 26 warnings (the baseline).
+- `npx vitest run --maxWorkers=4`: **309 files, 4,541 tests passed** (220 s). The three stderr blocks in the run
+  (LotAnatomyCard's jsdom navigation, WhatsDue, exportImage) are pre-existing — LotAnatomyCard's reproduces with the base
+  ChartCard.
+
+### Outside-scope touches
+
+- `src/guide/GuideCard.tsx` — passes the neighbours and the focus-moving select to TaskDetail (its only renderer).
+- `src/guide/content/start.tsx` — the "The footer" fact said the footer shows which deployment this is; it now describes the
+  one-row footer (deployment and build on the address's tooltip).
+- `src/components/Layout.test.tsx` — the shell-boundary tests waited for the retired "dev" pill; they wait for the tooltip now.
+- New files: `src/components/overview/customizeReflow.ts`, `src/components/taxes/bracketColumns.ts`, and the tests
+  `sidebarCss`, `chartFillCss`, `customizeReflow`, `bracketColumns`, `taxesCss`, `allocationCss`, `carddetailCss`,
+  `budgetsCss`, `paceCss`.
+
+### Left undone / notes for the coordinator
+
+- Card detail's credit rows still wrap their buttons ("Resets Jan / 1") — PCC-28's other half, not in spec §3.1; a nowrap would
+  overflow the card at dock widths.
+- Tax tables' TPC-12a/b/c (always-lit Saves, the echo line, the clipped "$1,485,906.(") are other items / lane L7.
+- `src/components/paletteBus.ts`'s comment still names "Search or jump…" (comment only; not this lane's file).
+- By design: while one card's Table is open its partner's plot grows to match (~590–750 px); the Overview trend's Table open
+  stretches Data status (its note pinned) — both as the spec accepts.
+- The shared backend on :8077 was intermittently slow under other lanes' load (one capture caught a 15 s client-timeout abort
+  of the investments feed); the endpoints answer in ~30 ms otherwise. Unrelated to this lane.
