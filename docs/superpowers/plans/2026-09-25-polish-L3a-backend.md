@@ -2476,3 +2476,83 @@ Run: `$PY -m ruff format --check app/api/portfolio.py app/api/calendar.py app/ap
 git add ../docs/superpowers/plans/2026-09-25-polish-L3a-backend.md
 git commit -m "docs(plan): L3a as built — gates, counts, deviations"
 ```
+
+---
+
+## As built (2026-09-25)
+
+All twelve tasks landed as written, one commit each, on `feat/polish-undo-a` (cut from `657e3d62`). No schema change,
+no migration, no service file touched.
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| `pytest -n 4` (full backend suite, `FINANCE_TEST_DB=finance_test_l3a`) | **2,774 passed, 4 skipped** in 87.9 s — the 4 warnings are the pre-existing `SyntaxWarning` in `tests/test_restore_points.py:531` |
+| `ruff check app tests` | All checks passed |
+| `ruff format --check` on the 11 touched files | 11 files already formatted |
+| Lane tests | 27 new: `test_changelog_portfolio.py` 13, `test_changelog_calendar.py` 11, `test_changelog_completions.py` 3; the pin test stays 2 tests with two more modules and two EXEMPT entries |
+
+Every new test was seen failing first for the planned reason (`KeyError: 'x-change-batch'`, a short `(op, table)`
+shape, the missing `_override_label`, the pin naming `create_feed_token`). The overlap test showed the hazard live
+before Task 3: the older edit's Undo answered 200 and moved the row back. The cascade tests also pass with
+`-W error::sqlalchemy.exc.SAWarning` (no zero-row DELETE anywhere), and the portfolio pin fails against the pre-lane
+`portfolio.py` (checked, then restored).
+
+### Per-route result
+
+| Route | Status | Label | Header |
+|---|---|---|---|
+| `portfolio.update_portfolio_account` | logged | Changed the owner of {label} | 200, when the owner changed |
+| `portfolio.create_security` | logged | Added security {ticker} | 201 |
+| `portfolio.update_security` | logged | Edited security {ticker} | 200, when something changed |
+| `portfolio.delete_security` | logged (events, closes, quote, then security) | Deleted security {ticker} | 204 |
+| `portfolio.reorder_transactions` | logged (one update per renumbered row) | Moved {txn} / Reordered {n} transactions | 200, when the order changed |
+| `portfolio.create_transaction` | logged (+ minted label first) | Added {ticker} {type} of {date} / … (undated) | 201 |
+| `portfolio.update_transaction` | logged (+ minted label first; flushed before imaging) | Edited {txn} | 200, when something changed |
+| `portfolio.delete_transaction` | logged | Deleted {txn} | 204 |
+| `portfolio.create_dividend` | logged (+ minted label first) | Added {ticker} dividend of {date} | 201 |
+| `portfolio.update_dividend` | logged (+ minted label first; flushed before imaging) | Edited {ticker} dividend of {date} | 200, when something changed |
+| `portfolio.delete_dividend` | logged | Deleted {ticker} dividend of {date} | 204 |
+| `portfolio.update_classification` | logged since 09-13, now pinned | unchanged | unchanged (already answered it) |
+| `portfolio.save_allocation_targets` | logged since 09-13, now pinned | unchanged | unchanged (already answered it) |
+| `calendar.create_custom_event` | logged | Added calendar event {title} | 201 |
+| `calendar.update_custom_event` | logged | Edited calendar event {title} | 200, when something changed |
+| `calendar.delete_custom_event` | logged | Deleted calendar event {title} | 204 |
+| `calendar.put_override` | logged (insert or update; refreshed before imaging) | Hid / Unhid / Marked … done / Reopened / Set your figure for / Cleared your figure for / Edited the note on / Edited {event} | 200, when something changed |
+| `calendar.delete_override` | logged | Cleared your edits on {event} | 204 |
+| `calendar.create_feed_token` | logged, image without `token_hash` | Created calendar feed link {label} | 201 |
+| `calendar.feed_ics` | EXEMPT (pinned with reason) | — | none |
+| `calendar.revoke_feed_token` | EXEMPT (pinned with reason) | — | none |
+| `spending.create_category` / `update_category` / `put_category_budget` | already logged; now answer the header | unchanged | 201 / 200 / 200, when something changed |
+| `spending.delete_category` | completed: reward links nulled + budgets deleted, imaged, before the category | Deleted category {name} | 204 |
+| `net_worth.create_account` / `update_account` | already logged; now answer the header | unchanged | 201 / 200, when something changed |
+| `net_worth.delete_account` | completed: component links + card links nulled, imaged, before the account | Deleted account {name} | 204 |
+
+`{event}` = the calendar's own label + the key's day, e.g. `Tax deadline — Q3 estimated payment of Sep 15, 2026`;
+a key no event carries reads `calendar event {key}`.
+
+### Deviations and notes
+
+1. **`long_day` import moved from Task 1 to Task 2** — ruff's F401 (first used there). Nothing else deviated from
+   the task code.
+2. **Feed-link image without the hash** (decision 4) is a deliberate departure from whole-row images: the create's
+   Undo still deletes the row exactly; an Undo of that Undo refuses with `REPLAY_REFUSAL` instead of reviving the link.
+   Tested.
+3. **Naming an overridden event composes the calendar for the key's day** (decision 3) — one `_compose_for` per
+   override write (the tax engine runs only when the day is today or later). Tested for a tax deadline, a custom event,
+   the overdue monthly reminder (window runs on to today) and two keys no event carries.
+4. **Cost of an exact security delete**, measured with a throwaway probe (not committed): 800 price rows delete in
+   0.27 s; the Undo takes 1.12 s, because `undo_batch` replays one INSERT per row. Fine for a rare action; a bulk replay
+   would be a `services/changelog.py` change, out of this lane's scope.
+5. **Beyond the brief's list, also tested:** the Undo of a transaction create refuses (`DEPENDENT_REFUSAL`) while
+   another row files under the label it minted; the Undo of a security create refuses once a refresh priced it; an
+   Undo of a transaction reorder waits for the ledger's order lock (the existing `ORDERED_LISTS` already covers it).
+6. **Stale comments left for the coordinator** (services are out of scope): `services/ordering.py` ("an Activity-card
+   Undo (the two logged lists)") and `services/changelog.py` ("An Undo that rewrites accounts or spending categories
+   rewrites a list's order too") now undersell: the ledger's reorder is logged as well. The behaviour is already right.
+7. **Shared test files:** `tests/test_changelog_pin.py` (merge by union with L3b — both lanes append after
+   `"taxes.py"`) and `tests/test_reorder_serialization.py` (this lane changed only the two `reorder_transactions` calls at
+   lines 125-135; L3b's card calls sit in a separate hunk).
+8. **Not this lane's:** the Activity card's ⓘ copy listing the new kinds (spec §6.1, last bullet) is frontend
+   (`src/components/settings/ActivityCard.tsx`, lane L5).
