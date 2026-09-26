@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { launch, open, BASE, settle, provenance } from './flows-harness.mjs'
+import { launch, open, BASE, settle, sleep, provenance } from './flows-harness.mjs'
 
 assert.equal(BASE, 'http://127.0.0.1:5280')
 const OUTPUT = path.resolve(process.env.FLOW_OUT ?? 'scratchpad/polish-v/fresh-L7')
@@ -69,13 +69,18 @@ try {
     return batch
   }
   const undo = async (batch, name) => {
+    const restoredText = `Restored ${deadline.label}`
+    const priorToasts = await page.locator('.toast').filter({ hasText: restoredText }).count()
     const answer = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().includes(`/activity/batches/${batch}/undo`))
     await page.locator('.toast').filter({ has: page.getByRole('button', { name: 'Undo', exact: true }) }).last().getByRole('button', { name: 'Undo', exact: true }).click()
     assert.equal((await answer).status(), 200)
     outstanding.delete(batch)
-    await page.getByText(`Restored ${deadline.label}`, { exact: true }).last().waitFor()
+    await page.waitForFunction(({ text, prior }) => [...document.querySelectorAll('.toast')].filter(node => node.textContent.includes(text)).length > prior, { text: restoredText, prior: priorToasts })
+    const focusTrace = [{ phase: 'new restoration toast', focus: await active() }]
+    for (const delay of [16, 50, 250]) { await sleep(delay); focusTrace.push({ phase: `${delay}ms later`, focus: await active() }) }
+    await settle(page, 0)
     assert.deepEqual(await currentEvent(), deadline)
-    note(name, { key: deadline.key, focus: await keptFocus(name) })
+    note(name, { key: deadline.key, focusTrace, focus: await keptFocus(name) })
   }
   await eventRow.click()
   const doneBatch = await write(() => page.getByRole('button', { name: deadline.done ? 'Reopen' : 'Mark done', exact: true }).click())
