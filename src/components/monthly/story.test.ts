@@ -46,6 +46,14 @@ describe("monthStory (2026-09-23 spec §M5)", () => {
     expect(flat.tone).toBeNull()
   })
 
+  // Whole dollars, but never a coloured "▼ $0" (2026-09-25 polish review): a move under a dollar keeps
+  // its cents, so the glyph and the tone never point at a figure that reads as nothing.
+  it('keeps the cents of a move under a dollar', () => {
+    const small = monthStory('2026-09-01', ready(summary({ mom_delta: '-0.40' })))
+    expect(small.text).toBe("September's change: ▼ -$0.40 (Sep 1 → Oct 1)")
+    expect(small.tone).toBe('negative')
+  })
+
   it('no next 1st yet', () => {
     const story = monthStory('2026-09-01', { status: 'missing' })
     expect(story.text).toBe("September's change appears once Oct 1 balances are recorded")

@@ -19,11 +19,14 @@ const wholeCurrency = new Intl.NumberFormat('en-US', {
 })
 
 /** "$126,583" — the amount in a stat tile's delta (2026-09-25 polish spec §4.3): whole dollars, while
- *  the tile's value keeps its cents. A figure that rounds to nothing prints "$0", never "-$0". */
+ *  the tile's value keeps its cents. Under a dollar the round is a lie (formatCurrencyCompact's rule):
+ *  a tile's glyph and colour are read from the unrounded figure (utils/tone.ts), so "▲ $0" would claim
+ *  a movement it does not print — the cents stay. Exact zero is a bare "$0", never "-$0". */
 export function formatCurrencyWhole(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return '—'
   const n = Number(value)
-  return wholeCurrency.format(Math.abs(n) < 0.5 ? 0 : n)
+  if (n === 0) return wholeCurrency.format(0)
+  return Math.abs(n) < 1 ? currency.format(n) : wholeCurrency.format(n)
 }
 
 export function formatCurrencyCompact(value: string | number | null | undefined): string {

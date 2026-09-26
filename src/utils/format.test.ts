@@ -170,13 +170,19 @@ describe('formatCurrencyWhole', () => {
     expect(formatCurrencyWhole('126583.02')).toBe('$126,583')
     expect(formatCurrencyWhole('-2911.11')).toBe('-$2,911')
     expect(formatCurrencyWhole(1234.5)).toBe('$1,235')
-    expect(formatCurrencyWhole('-0.5')).toBe('-$1')
+    expect(formatCurrencyWhole('-1.5')).toBe('-$2')
   })
 
-  it('prints a figure that rounds to nothing as "$0", never "-$0"', () => {
-    expect(formatCurrencyWhole('-0.49')).toBe('$0')
-    expect(formatCurrencyWhole('0.49')).toBe('$0')
+  // A tile's glyph and colour are read from the unrounded figure (utils/tone.ts), so a rounded "$0"
+  // under a green ▲ would claim a movement and print none. Under a dollar the round is a lie
+  // (formatCurrencyCompact's precedent): the cents stay; exact zero keeps its bare "$0".
+  it('keeps the cents under a dollar, and prints exact zero as "$0"', () => {
+    expect(formatCurrencyWhole('-0.49')).toBe('-$0.49')
+    expect(formatCurrencyWhole('0.49')).toBe('$0.49')
+    expect(formatCurrencyWhole('-0.5')).toBe('-$0.50')
+    expect(formatCurrencyWhole(0.999)).toBe('$1.00')
     expect(formatCurrencyWhole(0)).toBe('$0')
+    expect(formatCurrencyWhole('-0.00')).toBe('$0')
   })
 
   it('dashes a missing figure, like formatCurrency', () => {
