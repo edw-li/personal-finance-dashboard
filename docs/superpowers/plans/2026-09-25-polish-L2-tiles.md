@@ -2364,7 +2364,8 @@ git commit -m "feat(paycheck): one Summary tile row, no tile nested in the break
 
 Branch `feat/polish-tiles`, 20 commits on `657e3d62`: the plan (`465c04e7`), Tasks 1–15 (`f4c92055` … `e5495786`), the
 three browser-found fixes (`61ea0079` glyph, `035b1a48` tax deadline, `799d70de` label line + pinned band), then this
-section. 51 files. Nothing pushed, nothing merged.
+section. 51 files. Nothing pushed, nothing merged. Then the review round — `main` merged in and fourteen fix commits,
+under "Review round" at the end of this section; the numbers above it are the first round's.
 
 ### Measured before → after
 
@@ -2422,8 +2423,10 @@ row at 1440). Scripts and JSON in `scratchpad/work-L2/` (`measure.mjs`, `ghost.m
     when there are two or more to tell apart.
 16. **Ghost numbers:** `--m-stat-tile` / `--m-stat-tile-bare` and the fixed ghost min-heights are gone (ghosts stand
     in the real lines); `STAT_TILE` is the measured 101 px, used only by card ghosts standing in for a tile row
-    (`compVesting` 71 → 57); `paycheckBreakdown` 581 → 450 (no tile inside the card any more).
-17. **The skeleton API takes more than the spec's variants:** besides `five | dense | lone`, `GhostRowSpec` takes
+    (`compVesting` 71 → 57, and 41 in the review round); `paycheckBreakdown` 581 → 450 (no tile inside the card any
+    more; 396, the measured card, in the review round).
+17. **The skeleton API takes more than the spec's variants:** besides `five | dense` (`lone` retired in the review
+    round — no row wore it), `GhostRowSpec` takes
     `steady`, `hero` and `className` (the calendar's `cal-strip` keeps its five-across from 880 px; the Projection's
     band is sticky and padded). Without them the ghost and the landed row differ at 1280.
 18. **The What-if, Monthly Review and Credit cards rows** were found mixed (or five-tile) by the audit and given the
@@ -2455,9 +2458,9 @@ spending line); Paycheck (one row); and the three skeleton rows. Card detail's v
 
 ### Known remainders
 
-- At 1280 the Overview / Net worth hero's two clauses wrap (between clauses, as §4.3 wants), so those steady rows are
-  one delta line taller than their ghost there (+18 px) and can differ by a line between months; the one-line
-  acceptance is at 1440, where it holds.
+- ~~At 1280 the Overview / Net worth hero's two clauses wrap, so those steady rows are one delta line taller than their
+  ghost there and can differ by a line between months~~ — fixed in the review round (two lines reserved from 980 to
+  1150 px of page).
 - Paycheck on a truly cold load (no household snapshot) ghosts 3 slots; a two-person household lands 4 tiles, whose
   narrower hero figure is 3 px (1440) / 6 px (1280) shorter.
 - A month's story note ("· spending not entered yet") adds a delta line in the months it applies (none on the copy).
@@ -2473,3 +2476,65 @@ spending line); Paycheck (one row); and the three skeleton rows. Card detail's v
 - `npx eslint .` — 0 errors, 26 warnings (the baseline).
 - `npx vitest run --maxWorkers=4` — 301 files, 4,519 tests passed.
 - My vite on 5272 stopped; no headless Edge left running; the shared :8077 backend untouched.
+
+## Review round (2026-09-25, after merging main)
+
+The independent review said "ready with fixes". `main` @`5b9da791` (L1 layout, L4 feedback, L3a/b/c undo) merged in as
+`ca718c35` without conflicts; the suite on the merged tree before any fix: 320 files, 4,751 passed. Then fourteen
+commits, `0d76b5c6` … `fdf33b48`, and this section:
+
+| # | Review item | What changed | Commits |
+|---|---|---|---|
+| 1 | The space under a row grew 16 px where the next block has a top margin of its own | The tiles' bottom margins sit inside the grid, so they no longer collapse with a follower's margin — they stack. The two followers that carry one stand down: `.kpi-row + .tax-jurisdiction-detail` keeps only the rest of its 1.1rem (`calc(1.1rem - var(--density-grid-gap))`), and `.kpi-row.review-kpis + .review-changes > .review-changes-head:first-child` leaves the space to the row's own 1.25rem. The `.kpi-row` comment says why; both rules pinned (tileRowCss.test.ts). The lane probe measures the gap now (`tiles-lib.mjs` `below`) | `9aa66864`, `bcb0e944` |
+| 2 | Whole dollars could print a coloured "▲ $0" | `formatCurrencyWhole` keeps the cents under a dollar (formatCurrencyCompact's rule — the glyph and colour read the unrounded figure); exact zero stays "$0" | `0d76b5c6` |
+| 3 | Paycheck's pair flipped with L1's fill: a 37 px (21 at 1280) blank band under NET PAY | FlowPanel's plot floor 320 → 280, under the breakdown's own height, so the list sets the row and the plot fills the rest (C5). The breakdown feed's ghost is the measured card (`paycheckBreakdown` 450 → 396) | `65a2a7dd` |
+| 4 | Net worth's steady row went 142.2 ↔ 159.2 px across months at 1280 | A steady row with a hero reserves two delta lines from 980 to 1150 px of page (`min-height: 2lh`, the Projection band's pattern): the hero's longest words across every month ("▲ $126,583 (+15.7%) since Sep 1 · 21 days", 237.9 px) need a 1148 px row. The ghost row wears the same classes | `77f38640` |
+| 5 | Spending's "vs <previous month>" ignored comparability | The previous month counts only when `eligible_savings` says so ("No Jun to compare"); an entered $0 take-home reads "$0 take-home", never "no take-home entered" | `f993d1f2` |
+| 6 | Comp's vesting ghost stood 16 px tall | `compVesting: ghostCardBody(STAT_TILE)` — the ghost card's own margin is the row's 1rem; `TILE_ROW` is gone | `fd87e8a3` |
+| 7 | Nothing stopped a non-tile child of a `.kpi-row` | `tileRowFence.test.ts`: walks every `.tsx` AST (noNativeConfirm's way) — a row holds `StatTile` / `GhostTile` / `JurisdictionTile` or a one-tile `.stat-tile-slot`, through fragments, conditionals, `&&`, `.map` / `Array.from` callbacks and a same-file table of tiles (the Overview's); anything opaque fails. Proven by planting a `<p>` in Comp's row | `22a29443` |
+| 8 | Dead code | `.kpi-row-lone` and the `lone` ghost variant retired (no row wore them since the Paycheck and ESPP strips) | `e4323010` |
+| 9 | Wording | Spending's Living line names only the outflows the month had ("No tax or transfers" for neither, whole dollars); Net pay's change is unsigned beside its glyph ("▼ $859 vs Jun"); the guide places the employer match in its tile; the calendar legs no longer count an event whose amount the sum leaves out, and the unreachable `card_credit` noun is gone; What-if's rate line is the move between the two rates it displays (and empty when the engine gave none) | `f993d1f2`, `954456ea`, `a096292f` |
+| 10 | Tests | `versusMonthBefore` with a null current month and an ineligible previous one; FI ratio's line at exactly 1.0 ("Target reached") and without a target (empty) | `f993d1f2`, `954456ea` |
+| — | Found while re-measuring | "1 eligible months" (the history's first month) → "1 eligible month"; the Review's Cash outflow said "tax $0 · transfers $0" beside Spending's "No tax or transfers" for the same month — one helper now (`utils/format` `outflowsLine`) | `3a5c8178`, `f67bfd07` |
+
+### Re-measured (headless Edge 153, the production copy on :8077)
+
+- **#1** — lowest tile edge → next box, every tile row on 16 routes; before = main's tile CSS (the L1 worktree), after = this
+  branch: Taxes totals → "By jurisdiction" 17.6 → **33.6** → 17.6 px at 1440 and 1280 (compact at 1440: 15.8, as
+  before); Monthly Review → "Changes since last save" 20 → **36** → 20 px (compact 18, as before). Every other row
+  equals its pre-L2 gap: 16 px (compact 14.4), the Projection band 24 (22.4). Scripts: `fix-L2/gaps2.mjs`, `gaps-*.txt`.
+- **#3** — Paycheck at 1280 / 1440 / 1920, dark and light: breakdown and flow cards 472 / 456 / 456 px, ending on one
+  line, 0 px of blank band in either (was 493 with 21 / 37 / 37 px under NET PAY); the sankey fills to 299 / 283 /
+  283 px, labels clear. The feed ghost: 456 px box at every width (was 510) — 0 px against the pair at 1440 / 1920,
+  16 px short at 1280 (the hint runs three lines there).
+- **#4** — Net worth at 1280 across ten ribbon months: 159.2 px in all ten (was 142.2 / 159.2); its ghost 158.6.
+  Overview 159.2 (ghost 158.6), Spending unchanged at 138.8; 1440 / 1920 unchanged (147.5 / 156.6, one line).
+- **#6** — Comp, the block under the vesting row, ghost → landed: 248.0 → 248.3 px at 1440, 248.0 → 247.4 at 1280
+  (was 264: +15.7 / +16.6).
+- The lane probe again (`measure.mjs`, 12 routes × 1280 / 1440 / 1920, both themes): value baselines 0.0 on every
+  line of every row; one delta line at 1440 on the Overview, Net worth and Spending; the space under every row 16 px
+  except the Taxes totals 17.6, the Review 20 and the Projection band 24; light identical to dark in geometry.
+
+### Outside-scope touches added in the round
+
+- `src/components/taxes/taxes.css` — the one follower rule (#1).
+- `src/guide/content/pages-income.tsx` — one step's copy (#9).
+- `src/utils/format.ts` — `outflowsLine`, shared by Spending and the Review.
+- `src/components/espp/PositionStrip.test.tsx`, `src/pages/EsppPage.test.tsx` — their assertions on the retired
+  `.kpi-row-lone`, now positive (the row is the five-tile one).
+- New test file `src/components/tileRowFence.test.ts`.
+
+### Remainders after the round
+
+- Net worth at 1280 still lands its first card 42 px below where its ghost stood — all of it above the tile row (the
+  frame's scope area), as before L2 (67 px then, with the row's own 25).
+- The Review's month story is a sentence and runs two lines in its card at every width (spec §M5's words).
+- Portfolio's Realized gains stays bare (out of scope), and the Paycheck remainders above stand.
+
+### Gates on the merged tree (review round)
+
+- `npx tsc -p tsconfig.app.json --noEmit` — clean; `npx tsc -p tsconfig.node.json --noEmit` — clean.
+- `npx eslint .` — 0 errors, 26 warnings (the baseline).
+- `npx vitest run --maxWorkers=4` — 321 files, 4,766 tests passed (320 / 4,751 on the merged tree before the round).
+- Both vite servers stopped (mine on 5272, the baseline on 5283); no headless Edge left running; the shared :8077
+  backend untouched.
