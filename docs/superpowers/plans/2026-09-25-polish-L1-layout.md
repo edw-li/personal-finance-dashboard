@@ -2536,15 +2536,17 @@ one commit per task plus three browser-pass fixes (tax split calibration, guide 
    beside a ~570 px half-row hole, the very thing OU-16 fixes on the Overview.
 5. **ChartCard gained a second prop, `reserveControls`** (besides C5's `fill`), for the Spending pair's reserved controls row.
    `fill` never applies to a card with an `aside` (its plot sits in the aside wrapper, which does not grow) — no such span-6 card
-   exists today; the guard keeps a future one from collapsing its chart.
+   exists today; the guard keeps a future one from collapsing its chart. **Spending › Trends opts out of `fill`** after review
+   (below): its linked month axes must share a line, so both plots hold 260 px and the stretched card pins its caption instead.
 6. **The FLIP clamps its sideways travel to the grid** (`76bb2cf0`, after Task 9). Filmed in Edge: hiding Portfolio performance
    started Recent spending — now full width — at its old left edge, ~580 px past the grid, and the page flashed a horizontal
    scrollbar for 120 ms. Now 0 px of horizontal overflow across hide/show of both charts and Year to date. Widths snap (a span
    change is not a move). The tile row is FLIPped too, found from the deeper grid rather than given a ref, to stay out of L2's
    tile markup.
-7. **Allocation's cap lets go while "Missing quotes" is open** (the reader's own list must not be buried), applies only while
-   the aside sits beside the plot (card ≥ 900 px), and not in the Expand dialog (outside the slot). The plot-centring rule is
-   under the slot too (the dialog's plot column must stretch).
+7. **Allocation's aside is exactly the plot's height but never below its own content** (after review, below): the list keeps a
+   10rem floor, and when the aside's own lines grow — more caveats, the Missing quotes list open — the aside grows instead of
+   spilling. It applies only while the aside sits beside the plot (card ≥ 900 px), and not in the Expand dialog (outside the
+   slot). The plot-centring rule is under the slot too (the dialog's plot column must stretch).
 8. **Card detail — the pinned "action row" is the add-credit form** (the card's last form row, the Settings §3.3 analogy), with
    the rewards line under it; the chart card fills its row through the span-6 default. CSS only; `CardDetail.tsx` untouched.
 9. **Guide foot** — Previous only on numbered rails; no Next on the last task, no Previous on the first; the buttons are named
@@ -2563,7 +2565,8 @@ one commit per task plus three browser-pass fixes (tax split calibration, guide 
 | Nav at ≥ 901 px of height | — | first link tops identical at 1920×1080 (nothing moved); the indicator still lands on its row (31 px rows at 768, 37 at 1080) |
 | Pairs, Table closed (1280/1440/1920) | Overview 63 · Trends 84/68/36 · Paycheck 109/95/97 · ESPP 17 · card detail 20/44/0 px | **0** on all five, both themes |
 | Pairs, either Table open, and closed again | 292–460 px apart | **0** in every state |
-| Trends plot tops | 288 vs 302 px (heights 260 vs 220) | 302 vs 302 px (floor 260 on both) |
+| Trends plot tops | 14 px apart (canvas tops 288 vs 302; heights 260 vs 220) | **0** (302 vs 302; both held at 260) |
+| Trends plot bottoms — the linked month axes | 26 px apart (this lane's first version: 110 / 94 / 62 px at 1280/1440/1920) | **0** at 1280/1440/1920, both themes, closed and with either Table open |
 | Overview: blank under "Changes" | 134 / 100 / 66 px | **0** (limit 24) |
 | Overview: columns | 0 (by stretching Changes) | 0 (the trend fills); trend Table open → Data status' note pinned, blank 242–310 → **0** |
 | Calendar: labels → first week | 65 px | **8 px** (limit 12) |
@@ -2583,9 +2586,48 @@ dock open (ESPP, 368 px cards) the pair still ends together. Screenshots in `sho
 
 - `npx tsc -p tsconfig.app.json --noEmit`: clean. `npx tsc -p tsconfig.node.json --noEmit`: clean.
 - `npx eslint .`: 0 errors, 26 warnings (the baseline).
-- `npx vitest run --maxWorkers=4`: **309 files, 4,541 tests passed** (220 s). The three stderr blocks in the run
-  (LotAnatomyCard's jsdom navigation, WhatsDue, exportImage) are pre-existing — LotAnatomyCard's reproduces with the base
-  ChartCard.
+- `npx vitest run --maxWorkers=4`: **309 files, 4,548 tests passed** (226 s, after the review fixes; 4,541 before them). The
+  three stderr blocks in the run (LotAnatomyCard's jsdom navigation, WhatsDue, exportImage) are pre-existing —
+  LotAnatomyCard's reproduces with the base ChartCard.
+
+### Review fixes (2026-09-25, verdict "ready with fixes")
+
+1. **Spending › Trends month axes** (`87e5704c`). The span-6 `fill` default let the Savings rate plot soak up the footer
+   difference (a two-line hint vs the chip row), so the plot BOTTOMS — the linked month axes — sat 110 / 94 / 62 px apart at
+   1280 / 1440 / 1920; the first measurement read tops only. Both Trends cards now pass `fill={false}` and hold 260 px from one
+   top; a non-filling card that its row stretches pins its caption row to its foot
+   (`.chart-card-slot .chart-card:not(.chart-card-fill) > .chart-card-row-caption { margin-top: auto }`), so the cards still end
+   together. Measured (`work-L1/trends.mjs`; the pair record in `measure.mjs` now carries `plotBottomsDiff` too): card bottoms,
+   plot tops and plot bottoms **0 px** at 1280 / 1440 / 1920 in both themes — closed, with the Savings Table open, with the
+   Category Table open, and closed again. Before the lane: cards 84 / 68 / 36, tops 14, bottoms 26 px.
+2. **Sidebar footer** (`32044fba`). The three comments that still spoke of the pill now speak of the email's tooltip; the
+   buttons keep the row's end by `justify-content: flex-end` on the row, not `:first-of-type { margin-left: auto }`.
+3. **Dev vs prod at a glance** (`4fb683d9`). Off production (`status.environment !== 'prod'`) the email takes `.is-nonprod`
+   (`color: var(--warn)`, the retired pill's dev colour) and its title reads `{email} · dev (not production) · build {hash}`;
+   production and an unanswered status stay untinted. Edge: rgb(201, 133, 0) dark and rgb(153, 101, 0) light, both `--warn`;
+   the sidebar still fits in all 20 contexts.
+4. **Credits card empty states** (`3a6ad2ad`). As a column its children no longer collapse margins; the empty notes drop theirs
+   (`.card-detail .card-grid > .card > .empty-note { margin: 0 }`), their 1.5rem padding carrying the air. Edge, on all seven
+   cards without credits: 12 px above "No credits tracked." and 9.6 px below (first version 25.6 / 23.2; the old block flow
+   13.6 / 13.6). No card on the copy shows "No multipliers yet" (all have rates); the same rule covers it.
+5. **FLIP re-entry** (`d361dd7b`). Every glide and fade carries `FLIP_ANIMATION_ID`; before reading a child's new box
+   `flipChildren` cancels its own in-flight animation on it (a CSS reveal is left alone), while the "from" box is still read on
+   screen, mid-glide. Edge: Reset to defaults landing 43 px into a glide took the card back from exactly there
+   (1048 → 1062 → 1076 → … → 1091, no jump); the old read would have jumped it ~94 px.
+6. **Allocation list floor** (`34639bee`). The aside is `height: var(--chart-h); min-height: min-content` and the list box
+   `flex: 1 1 0; min-height: 10rem` (header + three rows). Edge, both themes: 431 px on all five breakdowns; with four extra
+   caveats the list holds 160 px and the card grows to 495 with nothing past its edge; a tall block (the Missing quotes list
+   open) grows it to 763 — so that list's own `:has([open])` release is gone.
+7. **Notes the review asked for:**
+   - **The tax-table breakpoint is 900 px of page, not ~1000 — deliberately.** At a 1280 window the page container is ≈990 px
+     (1280 − 16 scrollbar − 210 sidebar − 64 page padding), so a 1000 px breakpoint would drop 1280 — the audit's own complaint
+     (TPC-12d) — to one column. At 900 px the two stacks are ≈413 px each, room for a bracket table (≈395 px); below it (the
+     dock open at 1280–1440) one column.
+   - **Settings › System's "Build" fact is lane L5's** (spec §2's other half); this lane moved the build and environment into
+     the footer email's tooltip only.
+   - **For L2's merge: the Overview FLIP relies on `.kpi-row` holding one element per tile** (`childRects` maps the row's
+     children by index to `layout.tiles`). If the tile row gains a wrapper or a non-tile child, update `tileRow()` /
+     `childRects` in OverviewPage.tsx — a mismatch would only animate the wrong tile, never break the layout.
 
 ### Outside-scope touches
 
