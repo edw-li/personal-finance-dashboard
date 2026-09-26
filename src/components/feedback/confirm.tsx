@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import type { KeyboardEvent, ReactNode, RefObject } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { usePopoverDismiss } from '../usePopoverDismiss'
 import BusyButton from './BusyButton'
 import { placeConfirm } from './confirmPlacement'
+import { focusablesIn } from './focusable'
 import '../panels.css'
 import './feedback.css'
 
@@ -74,8 +75,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     settled.answer(yes)
   }, [])
 
-  // A question the provider can no longer show (it unmounted: a logout) answers "no" — a promise left
-  // pending would hold its caller forever. Answering twice is harmless: a promise settles once.
+  // A question whose provider unmounts answers "no" — a promise left pending would hold its caller
+  // forever. (The provider lives above the routes, so a logout does not unmount it: there the anchor
+  // leaving the page answers first — see the popover's tree watch.) Answering twice is harmless: a
+  // promise settles once.
   useEffect(() => {
     if (question === null) return
     return () => question.answer(false)
@@ -92,6 +95,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     </ConfirmContext.Provider>
   )
 }
+
+/** A body that says something: not absent, not an empty string, not a bare boolean or null. */
+const says = (body: ReactNode) => body !== undefined && body !== null && typeof body !== 'boolean' && body !== ''
 
 const unprovided: Ask = () => {
   throw new Error('useConfirm() asked outside a <ConfirmProvider> — App.tsx mounts one; a test renders its own')
@@ -122,14 +128,48 @@ function ConfirmPopover({
   const bodyId = useId()
   const [typed, setTyped] = useState('')
   const armed = typedArm === undefined || typed.trim() === typedArm.expected
+  const hasBody = says(options.body)
   const cancel = useCallback(() => onSettle(question, false), [onSettle, question])
-  const confirm = () => {
+  // Named apart from `confirm`: the native-confirm fence counts a bare confirm() call with no options
+  // object, and this is the popover's own yes.
+  const answerYes = () => {
+    // An orphaned question never answers yes: a Confirm pressed after the control that asked left the
+    // page — before the tree watch below noticed — takes the no.
+    if (!anchor.isConnected) {
+      cancel()
+      return
+    }
     if (armed) onSettle(question, true)
   }
 
-  // Escape (caught in the capture phase, ahead of the detail panel's own) and a pointerdown outside
-  // both the popover and its anchor answer "no" — the house dismissal contract.
+  // A pointerdown outside both the popover and its anchor answers "no" — the house dismissal contract.
+  // (Its Escape half never fires here: the window listener below claims the key first.)
   usePopoverDismiss(true, cancel, anchorRef, surfaceRef)
+
+  // Escape is this popover's before anyone else's. A window capture listener runs ahead of every
+  // document one — an outer menu's usePopoverDismiss included (TaxYearMenu, FilingStatusMenu, the
+  // wizard's kebab), which would otherwise close first and take the anchor with it; that one sees the
+  // key claimed and yields, as does the detail panel's. An Escape ending an IME composition is not ours.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return
+      event.preventDefault()
+      cancel()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [cancel])
+
+  // An anchor can leave with no scroll and no resize — its menu closed, its list reloaded, the page
+  // left. Watch the tree while the question is open, and let the question go with its anchor.
+  useEffect(() => {
+    if (typeof MutationObserver === 'undefined') return
+    const watch = new MutationObserver(() => {
+      if (!anchor.isConnected) cancel()
+    })
+    watch.observe(document.body, { childList: true, subtree: true })
+    return () => watch.disconnect()
+  }, [anchor, cancel])
 
   // Beside the anchor before the first paint, and after it on every scroll (capture: scroll events do
   // not bubble) and resize. An anchor that has left the page takes its question with it.
@@ -164,15 +204,19 @@ function ConfirmPopover({
     cancelRef.current?.focus({ preventScroll: true })
   }, [])
 
-  // Tab walks the popover's own controls and wraps at both ends.
-  const trapTab = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Tab') return
-    const stops = Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>('input, button') ?? [])
+  // Tab walks everything in the popover that takes the caret — a link in the body too — and wraps at
+  // both ends. The surface itself (tabIndex −1) holds the caret after a click on its text, so both
+  // ways out of it are edges.
+  const trapTab = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const surface = surfaceRef.current
+    if (event.key !== 'Tab' || surface === null) return
+    const stops = focusablesIn(surface)
     const first = stops[0]
     const last = stops[stops.length - 1]
     if (first === undefined || last === undefined) return
-    const edge = event.shiftKey ? first : last
-    if (document.activeElement !== edge) return
+    const active = document.activeElement
+    const atEdge = active === surface || active === (event.shiftKey ? first : last)
+    if (!atEdge) return
     event.preventDefault()
     const wrapTo = event.shiftKey ? last : first
     wrapTo.focus()
@@ -185,14 +229,18 @@ function ConfirmPopover({
       role="alertdialog"
       aria-modal="true"
       aria-labelledby={titleId}
-      aria-describedby={options.body === undefined ? undefined : bodyId}
+      aria-describedby={hasBody ? bodyId : undefined}
       data-tone={tone}
+      tabIndex={-1}
       onKeyDown={trapTab}
+      // A press inside the question is not "outside" for a menu it was asked from: the menu's
+      // document listener never hears it (the portal's own React listener stops it at <body>).
+      onPointerDown={(event) => event.stopPropagation()}
     >
       <p id={titleId} className="confirm-popover-title">
         {options.title}
       </p>
-      {options.body !== undefined && (
+      {hasBody && (
         <div id={bodyId} className="confirm-popover-body">
           {options.body}
         </div>
@@ -209,7 +257,7 @@ function ConfirmPopover({
             onKeyDown={(event) => {
               if (event.key !== 'Enter') return
               event.preventDefault()
-              confirm()
+              answerYes()
             }}
           />
         </label>
@@ -222,7 +270,7 @@ function ConfirmPopover({
           type="button"
           className={tone === 'danger' ? 'button danger-button' : 'button button-primary'}
           aria-disabled={!armed}
-          onClick={confirm}
+          onClick={answerYes}
         >
           {options.confirmLabel}
         </BusyButton>
