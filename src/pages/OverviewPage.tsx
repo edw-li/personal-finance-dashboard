@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { fetchCalendar } from '../api/calendar'
 import { fetchCoverage } from '../api/coverage'
@@ -62,9 +62,10 @@ import { metricReceipt } from '../utils/metricReceipt'
 import { REVIEW_LABELS } from '../api/monthReview'
 import OverviewChanges from '../components/overview/OverviewChanges'
 import OverviewCustomize from '../components/overview/OverviewCustomize'
-import { deeperSpans } from '../components/overview/customizeReflow'
+import { childRects, deeperSpans, flipChildren } from '../components/overview/customizeReflow'
 import { useAssistantView } from '../components/assistant/viewState'
 import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
+import type { OverviewLayout } from '../prefs/overviewLayout'
 import { getLocal, setLocal, subscribe } from '../prefs/prefsStore'
 import type {
   CalendarEvent,
@@ -437,6 +438,27 @@ export default function OverviewPage() {
   const ytdDraws = showYtd || (ytd === null && (wealth.busy || investments.busy || spending.busy))
   const shownDeeper = layout.cards.filter((id) => id !== 'ytd' || ytdDraws)
   const deeperSpan = deeperSpans(shownDeeper)
+  // …and the reflow glides (spec §3.2): the boxes are read in the Customize change handler, BEFORE the
+  // new layout commits, and played in a layout effect after it — the page never paints in between. The
+  // tile row is found from the deeper grid rather than given a ref of its own: its markup is the tile
+  // lane's, and one child per tile is all this needs.
+  const deeperRef = useRef<HTMLDivElement>(null)
+  const reflowFrom = useRef<{ tiles: Map<string, DOMRect>; cards: Map<string, DOMRect> } | null>(null)
+  const tileRow = () => deeperRef.current?.closest('.overview-page')?.querySelector('.kpi-row') ?? null
+  const applyLayout = (next: OverviewLayout) => {
+    reflowFrom.current = { tiles: childRects(tileRow(), layout.tiles), cards: childRects(deeperRef.current, shownDeeper) }
+    setLayout(next)
+    setLocal('overview_layout', next)
+  }
+  // Unkeyed on purpose: it runs after every commit and does nothing unless a Customize change left
+  // boxes to play from; the ids it plays to are this render's.
+  useLayoutEffect(() => {
+    const from = reflowFrom.current
+    if (from === null) return
+    reflowFrom.current = null
+    flipChildren(tileRow(), layout.tiles, from.tiles)
+    flipChildren(deeperRef.current, shownDeeper, from.cards)
+  })
 
   // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
   // paycheck is entered but whose spending is not comes back with an explicit "0.00". A
@@ -773,7 +795,7 @@ export default function OverviewPage() {
              button stays live while a load is in flight: an impatient second click is
              harmless, the body dims to show the work, and seqRef decides which answer
              lands. */
-          <><OverviewCustomize value={layout} onChange={next => { setLayout(next); setLocal('overview_layout', next) }} /><button type="button" className="button" onClick={reload}>
+          <><OverviewCustomize value={layout} onChange={applyLayout} /><button type="button" className="button" onClick={reload}>
             Refresh
           </button></>
         }
@@ -937,7 +959,7 @@ export default function OverviewPage() {
                 />
               </aside>
             </div>
-            <div className="overview-deeper card-grid">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
+            <div ref={deeperRef} className="overview-deeper card-grid">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
           </>
         )}
       </PageFrame>

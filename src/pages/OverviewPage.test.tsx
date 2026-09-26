@@ -2602,6 +2602,26 @@ describe('OverviewPage deeper spans follow the chosen order', () => {
     expect(spanOf(/Portfolio performance/)).toBe(6)
     expect(spanOf(/Recent spending/)).toBe(6)
   })
+
+  // The popover's reflow is FLIPped (spec §3.2). jsdom lays every box at 0,0, so nothing "moves" —
+  // but a view shown again has no old box, and fades in.
+  it('fades a view shown again from the Customize popover in', async () => {
+    const animate = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'animate', { value: animate, configurable: true, writable: true })
+    onTestFinished(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, 'animate')
+    })
+    serve()
+    renderPage()
+    await screen.findByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
+    animate.mockClear()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
+    const flow = screen.getByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) }).closest('.chart-card-slot')
+    const fades = animate.mock.instances.filter((_, i) => JSON.stringify(animate.mock.calls[i][0]) === JSON.stringify([{ opacity: 0 }, { opacity: 1 }]))
+    expect(fades).toEqual([flow])
+  })
 })
 
 // 2026-09-23 spec §C2: the money flow folds by the SPENDING PAGE's category set, in the same
