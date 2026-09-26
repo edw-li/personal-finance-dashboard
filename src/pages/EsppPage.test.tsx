@@ -691,6 +691,8 @@ describe('EsppPage — lots', () => {
 
     // Un-sell: blanking both boxes has to send an explicit null for EACH. An omitted key
     // is a no-op on PATCH, so a body that dropped them would leave the lot sold.
+    // The first save includes its reload; Edit stays inert until the refreshed list lands.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit lot from Aug 30, 2024' }).getAttribute('aria-disabled')).not.toBe('true'))
     fireEvent.click(screen.getByRole('button', { name: 'Edit lot from Aug 30, 2024' }))
     expect(field('Sold date').value).toBe('2025-10-15')
     expect(field('Sold price').value).toBe('120.00000')
