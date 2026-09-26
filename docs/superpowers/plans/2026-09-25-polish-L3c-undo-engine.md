@@ -1621,3 +1621,97 @@ git commit -m "docs(plan): L3c as built — gates, counts, timing, deviations"
 | 5. Paycheck Undo locks; round trips for card and reward-category deletes; matrix 422 partway; credit 422; REPLAY after name and focal-year reuse | 5 |
 | 6. Added / Edited; matrix label by what changed, tested | 6 |
 | Gates: full `-n 4`, ruff check + format; "As built" with timing | 7 |
+
+---
+
+## As built (2026-09-25)
+
+All seven tasks landed as written, one commit each, on `feat/polish-undo-engine` (cut from `bdb87301`, which already
+holds L3a and L3b). No schema change, no migration, no response-shape change. Not pushed, not merged.
+
+| Commit | Task |
+|---|---|
+| `03eade73` docs(plan): lane L3c — undo engine follow-up | plan |
+| `b05d4127` test(changelog): one exact-undo helper module — exact_undo absorbs changelog_asserts | 1 |
+| `70c21658` fix(changelog): a later change and its standing Undo cancel out — "undo those first" is true | 2 |
+| `b0c682f4` fix(deletes): the five dependent deletes lock their row FOR UPDATE before reading what hangs off it | 3 |
+| `7c684a37` perf(changelog): an Undo re-inserts each run of rows into one table with one multi-row INSERT | 4 |
+| `09f8bc15` test(changelog): the L3b review's gaps | 5 |
+| `fe6fe5d5` fix(labels): Added/Edited everywhere, and a matrix save names conditions apart from multipliers | 6 |
+
+(plus this "As built" commit.)
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| `pytest -n 4` (full backend suite, `FINANCE_TEST_DB=finance_test_l3c`) | **2,830 passed, 4 skipped** in 97.5 s (baseline on `bdb87301`: 2,811 passed, 4 skipped in 81.5 s) |
+| `ruff check app tests` | All checks passed |
+| `ruff format --check app tests` | 314 files already formatted |
+| New tests | **19**: `test_undo_chains.py` 3, `test_dependent_delete_locks.py` 6 (5 routes + the lock's mode), grouped re-insert 2 (`test_changelog_portfolio.py` statement count, `test_changelog_credit_cards.py` refusal guard), the review's gaps 7 (`test_changelog_paycheck.py` 1, `test_changelog_credit_cards.py` 5, `test_changelog_comp.py` 1), matrix label 1 |
+| Changed tests | the categories overlap test and the two card-page overlap tests now retry and succeed; the card-delete and reward-category-delete tests use shared seeds; `cell()` takes `note`; five files' label strings; every L3b helper call site (Task 1) |
+
+Every red run matched its prediction: Task 1 none (81 passed before and after); Task 2 `6 failed` (`assert False is True`,
+five `409 == 200`); Task 3 the `ImportError`, then — with the helper alone, routes untouched — the five route cases on
+`no statement contained 'FOR UPDATE'` while the lock-mode race test passed; Task 4 `1 failed` (`price_history: 803`
+vs `1`; the refusal guard green before and after, as planned); Task 6 `7 failed` on the old verbs and on
+`'Edited 1 reward multiplier'`.
+
+Task 5's tests pin behaviour that already held, so each was shown to bite with a temporary mutation, then reverted
+(`git diff --stat app/` empty afterwards):
+
+| Test | Mutation | Failure seen |
+|---|---|---|
+| paycheck Undo takes the review locks first | drop `paycheck_profiles` from `REVIEW_INPUT_TABLES` | `no statement contained 'LOCK TABLE'` |
+| card / reward-category round trips | `_reinsert` returns without writing | rows missing; the card's pin replay refused (`409 == 200`) |
+| matrix save 422 partway | `await batch.commit()` right after the first cleared cell | a `ChangeLog` row survives |
+| `update_card_credit` 422 | `credit.label = body.label` above the validation | `db.dirty` holds the credit |
+| reward-category name reuse, focal-year reuse | the Activity route stops mapping `IntegrityError` | the `UniqueViolationError` escapes as a 500 |
+
+### Undo timing — an 800-close security (throwaway probe, same box, deleted after use)
+
+| | Undo POST | `INSERT INTO price_history` statements |
+|---|---|---|
+| before (`bdb87301`) | 1.158 / 1.114 / 0.972 s — median **1.11 s** | 800 |
+| after (Task 4) | 0.497 / 0.644 / 0.684 / 0.516 / 0.716 / 0.444 / 0.799 / 0.458 s — median **≈0.58 s** | **1** (≈30 ms) |
+
+One further "after" run took 2.42 s — the first request of its process — and did not reproduce in the eight runs
+above. Where the remaining ≈0.5 s goes (profiled): ≈0.27 s of SQL, of which ≈0.16 s is `superseded`'s self-join. That
+is a test-database artifact which also sat in the baseline: on the freshly written, never-ANALYZEd `change_log` the
+planner picks a nested loop (802 inner index scans, 172 ms); after `ANALYZE change_log` the same query is a 0.28 ms hash
+join. The rest is Python and ORM — the Undo's own 802 change-log rows built and inserted, and the Activity route reading
+them back for its answer. A production Undo (analyzed statistics) should come in below both numbers.
+
+### Deviations and notes
+
+1. **Commit staging.** The plan's Task 1 commit used `git add -A tests/`; every commit staged explicit paths instead,
+   because the untracked timing probe sat in `tests/` until Task 4.
+2. **Two mutations were swapped for more direct ones** (table above): the matrix-422 check inserted
+   `await batch.commit()` after the first cleared cell (same effect as moving the commit); the replay-refusal check
+   un-mapped `IntegrityError` in the Activity route instead of making `_reinsert` swallow it (a swallowed error leaves the
+   transaction aborted and fails on the next statement — less direct).
+3. **`ruff format`** re-flowed the matrix-422 test's PUT onto one line; nothing else changed shape.
+4. **`test_changelog_service.py`'s three "Created account Brokerage" were hand-set sample labels,** not route output;
+   they follow the product's voice now too.
+
+### For the coordinator
+
+- **How `superseded` decides now:** a later change is a batch with an entry on one of the batch's `(table, pk)` after
+  its last entry; it counts only when it *stands* (an even number of Undos above it in its chain) and is not the Undo of
+  a batch that is itself later. So a change and its standing Undo cancel, a redo brings the change back, an Undo of the
+  redo cancels the whole chain, and an Undo of an *older* batch is an ordinary later change (the redo it would allow
+  would re-apply what its images carry — `test_a_redo_refuses_once_an_older_changes_undo_rewrote_its_rows`). The
+  listing's `undoable` reads the same function.
+- **Accepted, documented in `lock_parent`:** a month save that already holds the review-table locks and then needs the
+  row being deleted (saving a balance for the very account another tab is deleting) can deadlock with the delete;
+  Postgres aborts one request and nothing is half-written. Before this lane the same race silently cascaded the new
+  balance away. Taking `lock_review_inputs` first in `delete_account` / `delete_category` would serialize the two
+  instead — table-level locking the brief did not ask for; a candidate follow-up.
+- **Not covered by the parent lock** (out of the brief's scope, the cascade): a child re-pointed *away* from the row, or
+  edited in place, by another tab during the delete.
+- **Labels:** an account's or category's one-click Retire/Restore now reads "Edited account …" / "Edited category …";
+  toggle verbs like the cards' "Archived/Unarchived" were not asked for.
+- **Left alone:** `services/month_status._undone` still walks `undone_by` one query per link (it could read
+  `_undo_links` once); the `superseded` self-join has no `(table_name, pk)` index — fine with statistics, worth a look if
+  the log grows large; the Activity card's ⓘ copy is frontend (lane L5). L3b's plan still shows the old matrix label in
+  its contract table; this record supersedes it.
