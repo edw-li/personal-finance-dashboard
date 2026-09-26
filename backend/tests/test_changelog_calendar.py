@@ -249,7 +249,7 @@ async def test_a_new_feed_link_is_logged_without_its_hash_and_undo_takes_it_back
     assert (row.op, row.table_name, row.label) == (
         "insert",
         "calendar_feed_tokens",
-        "Created calendar feed link Phone",
+        "Added calendar feed link Phone",
     )
     # The credential never sits in the log, not even as its hash.
     assert "token_hash" not in row.after and row.after["label"] == "Phone"

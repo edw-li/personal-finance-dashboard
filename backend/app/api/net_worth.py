@@ -226,7 +226,7 @@ async def create_account(
     db.add(account)
     await db.flush()
     batch.record_insert(account)
-    batch.label = f"Created account {account.name}"
+    batch.label = f"Added account {account.name}"
     response.headers.update(batch_header(await batch.commit()))
     return account
 
@@ -304,7 +304,7 @@ async def update_account(
     for field, value in updates.items():
         setattr(account, field, value)
     batch.record_update(account, before)
-    batch.label = f"Updated account {account.name}"
+    batch.label = f"Edited account {account.name}"
     response.headers.update(batch_header(await batch.commit()))
     return account
 

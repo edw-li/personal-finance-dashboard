@@ -1018,7 +1018,7 @@ async def create_feed_token(
     await db.refresh(row)  # created_at is a server default
     image = {column: value for column, value in row_image(row).items() if column != "token_hash"}
     batch.record(row.__tablename__, pk_of(row), None, image)
-    batch.label = f"Created calendar feed link {row.label}"
+    batch.label = f"Added calendar feed link {row.label}"
     response.headers.update(batch_header(await batch.commit()))
     return FeedTokenCreated(
         id=row.id, label=row.label, created_at=row.created_at, last_used_at=None, token=plaintext

@@ -114,6 +114,23 @@ def _reorder_label(
     return f"Reordered {len(moved)} {plural}"
 
 
+def _matrix_label(multipliers: int, conditions: int) -> str:
+    """A matrix save's label, by what it changed: the cells whose multiplier was added,
+    changed or cleared, and the cells where only the condition moved — the note and the
+    monthly bonus cap the matrix marks with ⁺. A save that only capped a bonus must not claim
+    it edited a multiplier."""
+
+    def cells(count: int) -> str:
+        return f"{count} reward multiplier{'' if count == 1 else 's'}"
+
+    condition = "condition" if conditions == 1 else "conditions"
+    if not conditions:
+        return f"Edited {cells(multipliers)}"
+    if not multipliers:
+        return f"Edited the {condition} on {cells(conditions)}"
+    return f"Edited {cells(multipliers)} and the {condition} on {conditions} more"
+
+
 # --- reward categories (matrix rows) ------------------------------------------------------
 
 
@@ -351,8 +368,9 @@ async def put_reward_rates(
     """Bulk matrix save: upsert cells, delete where multiplier is null. ATOMIC — any
     validation failure raises before the single commit, applying nothing. Returns the
     full post-save cell list (the matrix re-renders without a second fetch). Every cell it
-    adds, changes or clears is a row of ONE change batch, so one Undo reverts the whole save;
-    an all-unchanged save records nothing and names no batch."""
+    adds, changes or clears is a row of ONE change batch, so one Undo reverts the whole save,
+    and its label counts multipliers apart from conditions (_matrix_label); an all-unchanged
+    save records nothing and names no batch."""
     seen: set[tuple[int, int]] = set()
     for entry in body:
         key = (entry.card_id, entry.category_id)
@@ -387,6 +405,7 @@ async def put_reward_rates(
         for rate in (await db.execute(select(RewardRate))).scalars()
     }
     added: list[RewardRate] = []
+    multipliers = conditions = 0
     for entry in body:
         key = (entry.card_id, entry.category_id)
         row = existing.get(key)
@@ -394,6 +413,7 @@ async def put_reward_rates(
             if row is not None:
                 batch.record_delete(row)
                 await db.delete(row)
+                multipliers += 1
             continue
         multiplier = quantize_money(entry.multiplier, "multiplier", max_abs=MULTIPLIER_MAX_ABS)
         if multiplier <= 0:
@@ -419,11 +439,15 @@ async def put_reward_rates(
             row.note = entry.note
             row.monthly_cap = cap
             batch.record_update(row, before)
+            after = row_image(row)
+            if after["multiplier"] != before["multiplier"]:
+                multipliers += 1
+            elif after != before:
+                conditions += 1  # the note or the cap alone
     await db.flush()  # the new cells' ids, which their images need
     for rate in added:
         batch.record_insert(rate)
-    changed = batch.rows
-    batch.label = f"Edited {changed} reward multiplier{'' if changed == 1 else 's'}"
+    batch.label = _matrix_label(multipliers + len(added), conditions)
     response.headers.update(batch_header(await batch.commit()))
     return await _all_rates(db)
 

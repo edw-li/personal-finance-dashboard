@@ -22,15 +22,15 @@ async def test_account_and_category_writes_answer_their_batch(auth_client, db):
     account = await auth_client.post(
         f"{NW}/accounts", json={"name": "Brokerage", "group": "taxable"}
     )
-    await named(account, "Created account Brokerage")
+    await named(account, "Added account Brokerage")
     account_path = f"{NW}/accounts/{account.json()['id']}"
     retire = {"is_active": False}
-    await named(await auth_client.patch(account_path, json=retire), "Updated account Brokerage")
+    await named(await auth_client.patch(account_path, json=retire), "Edited account Brokerage")
     category = await auth_client.post(f"{SP}/categories", json={"name": "Dining"})
-    await named(category, "Created category Dining")
+    await named(category, "Added category Dining")
     category_path = f"{SP}/categories/{category.json()['id']}"
     kind = {"kind": "transfer"}
-    await named(await auth_client.patch(category_path, json=kind), "Updated category Dining")
+    await named(await auth_client.patch(category_path, json=kind), "Edited category Dining")
     budget = {"amount": "400.00", "effective_month": "2026-09-01"}
     await named(
         await auth_client.put(f"{category_path}/budget", json=budget),

@@ -148,7 +148,7 @@ async def create_category(
     db.add(category)
     await db.flush()
     batch.record_insert(category)
-    batch.label = f"Created category {category.name}"
+    batch.label = f"Added category {category.name}"
     response.headers.update(batch_header(await batch.commit()))
     return category
 
@@ -208,7 +208,7 @@ async def update_category(
     for field, value in updates.items():
         setattr(category, field, value)
     batch.record_update(category, before)
-    batch.label = f"Updated category {category.name}"
+    batch.label = f"Edited category {category.name}"
     response.headers.update(batch_header(await batch.commit()))
     return category
 

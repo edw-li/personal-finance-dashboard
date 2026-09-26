@@ -55,12 +55,18 @@ def category(name: str, sort_order: int = 0, **over) -> RewardCategory:
     return RewardCategory(name=name, slug=name.lower(), sort_order=sort_order, **over)
 
 
-def cell(card_id: int, category_id: int, multiplier: str | None, cap: str | None = None) -> dict:
+def cell(
+    card_id: int,
+    category_id: int,
+    multiplier: str | None,
+    cap: str | None = None,
+    note: str | None = None,
+) -> dict:
     return {
         "card_id": card_id,
         "category_id": category_id,
         "multiplier": multiplier,
-        "note": None,
+        "note": note,
         "monthly_cap": cap,
     }
 
@@ -330,6 +336,36 @@ async def test_a_one_cell_save_is_singular_and_an_unchanged_save_names_no_batch(
     again = await auth_client.put(RATES, json=[cell(v, t, "2.00")])
     assert again.status_code == 200, again.text
     assert "x-change-batch" not in again.headers
+
+
+async def test_a_matrix_save_is_named_for_what_it_changed(auth_client, db):
+    """A cell whose multiplier was added, changed or cleared counts as a multiplier; a cell
+    whose multiplier stayed while its note or monthly cap moved — its condition, the ⁺ the
+    matrix shows — is named as a condition, never as an edited multiplier."""
+    venture = card("Venture X")
+    travel, dining, groceries = category("Travel"), category("Dining", 1), category("Groceries", 2)
+    db.add_all([venture, travel, dining, groceries])
+    await db.flush()
+    db.add_all(
+        [
+            RewardRate(card_id=venture.id, category_id=travel.id, multiplier=Decimal("2.00")),
+            RewardRate(card_id=venture.id, category_id=dining.id, multiplier=Decimal("3.00")),
+        ]
+    )
+    await db.commit()
+    v, t, d, g = venture.id, travel.id, dining.id, groceries.id
+    capped = await auth_client.put(RATES, json=[cell(v, t, "2", cap="500")])
+    assert label_of(await logged(db, capped)) == "Edited the condition on 1 reward multiplier"
+    noted = await auth_client.put(
+        RATES, json=[cell(v, t, "2", cap="500", note="portal"), cell(v, d, "3", note="Uber only")]
+    )
+    assert label_of(await logged(db, noted)) == "Edited the conditions on 2 reward multipliers"
+    mixed = await auth_client.put(
+        RATES, json=[cell(v, t, "5", cap="500", note="portal"), cell(v, d, "3"), cell(v, g, "4")]
+    )
+    assert label_of(await logged(db, mixed)) == (
+        "Edited 2 reward multipliers and the condition on 1 more"
+    )
 
 
 async def test_a_matrix_save_that_fails_partway_records_nothing(auth_client, db):

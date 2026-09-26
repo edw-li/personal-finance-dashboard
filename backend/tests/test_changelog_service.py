@@ -56,7 +56,7 @@ async def test_batch_records_insert_update_delete_and_skips_unchanged(db):
     account.sort_order = 2
     batch.record_update(account, before, month=date(2026, 9, 1))
     batch.record_update(account, row_image(account))  # unchanged pair: nothing recorded
-    batch.label = "Created account Brokerage"
+    batch.label = "Added account Brokerage"
     batch.month = date(2026, 8, 1)  # the default month for rows that named none
     assert batch.rows == 2
     batch_id = await batch.commit()
@@ -69,7 +69,7 @@ async def test_batch_records_insert_update_delete_and_skips_unchanged(db):
     assert rows[0].before is None and rows[0].after["slug"] == "brokerage"
     assert rows[1].before["sort_order"] == 1 and rows[1].after["sort_order"] == 2
     assert {r.batch_id for r in rows} == {batch_id}
-    assert {r.label for r in rows} == {"Created account Brokerage"}
+    assert {r.label for r in rows} == {"Added account Brokerage"}
     assert {r.actor for r in rows} == {"me@example.com"}
     assert rows[0].at == rows[1].at  # one stamp per batch
     # The write itself was committed by the same call.
@@ -118,7 +118,7 @@ async def test_a_batch_committed_under_the_dev_override_is_stamped_on_that_day(d
     await db.flush()
     batch = ChangeBatch(db)
     batch.record_insert(account)
-    batch.label = "Created account Brokerage"
+    batch.label = "Added account Brokerage"
     await batch.commit()
     at = (await db.execute(select(ChangeLog.at))).scalar_one()
     assert at.astimezone(ZoneInfo("America/Los_Angeles")).date() == date(2026, 10, 3)
