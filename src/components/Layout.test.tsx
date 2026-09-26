@@ -367,11 +367,16 @@ describe('Layout — assistant mount', () => {
   })
 
   // The palette's discoverability, and the bus that carries the ask: the row is in the
-  // sidebar, the palette is mounted next to <main>, and neither imports the other.
+  // sidebar, the palette is mounted next to <main>, and neither imports the other. The label is
+  // "Search…" (2026-09-25 polish spec §2): "Search or jump…" was ellipsised at every width.
   it('offers a visible search row that opens the palette', () => {
     renderShell()
     expect(screen.queryByRole('combobox', { name: 'Command palette' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: /Search or jump/ }))
+    const row = screen.getByRole('button', { name: /^Search…/ })
+    expect(row.querySelector('span')?.textContent).toBe('Search…')
+    // The key hint stays beside it.
+    expect(row.querySelector('kbd')?.textContent).toMatch(/K$/)
+    fireEvent.click(row)
     expect(screen.getByRole('combobox', { name: 'Command palette' })).toBeTruthy()
   })
 

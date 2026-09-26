@@ -185,7 +185,9 @@ export default function Layout() {
               below, and a context would re-render the whole shell on every keystroke. */}
           <button type="button" className="sidebar-search" onClick={requestPaletteOpen}>
             <Search size={14} aria-hidden="true" />
-            <span>Search or jump…</span>
+            {/* "Search…", not "Search or jump…" (2026-09-25 polish spec §2): the long label was cut
+                to "Search or ju…" at every width; the key hint says the rest. */}
+            <span>Search…</span>
             <kbd aria-label={isMac ? 'Command K' : 'Control K'}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
           </button>
           <nav aria-label="Primary" ref={navRef}>
