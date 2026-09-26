@@ -16,7 +16,10 @@ describe('skeletonMetrics', () => {
     expect(CSS).toContain(`--m-export-row: ${CHART_CARD_ROWS.exportRow}px`)
     expect(CSS).toContain(`--m-zoom-row: ${CHART_CARD_ROWS.zoom}px`)
     expect(CSS).toContain(`--m-caption-row: ${CHART_CARD_ROWS.caption}px`)
-    expect(CSS).toContain(`--m-stat-tile: ${STAT_TILE}px`)
+    // The tile has no CSS twin any more (2026-09-25 polish §4.6: ghosts stand in the real lines);
+    // STAT_TILE is the measured one-delta tile at 1440, for card ghosts standing in for a tile row.
+    expect(CSS).not.toContain('--m-stat-tile')
+    expect(STAT_TILE).toBe(101)
     expect(CSS).toContain(`--m-owner-strip: ${OWNER_STRIP}px`)
     // A declared twin nobody READS reserves nothing: the header rows are min-heights on the real
     // header, which is what lets chartCardBox quote one number for every controls variant.
@@ -31,7 +34,7 @@ describe('skeletonMetrics', () => {
     // A real header is not the ghost's stand-in label: charging CARD_CHROME here under-counted a
     // card with controls by 21px and over-counted a bare one by 6.
     expect([chartCardBox(320), chartCardBox(360, { controls: true, zoomable: true }), chartCardBox(280, { zoomable: true, footer: true })]).toEqual([421, 497, 428])
-    expect([FEED_SKELETON.paycheckBreakdown, FEED_SKELETON.compVesting, FEED_SKELETON.compEvents, FEED_SKELETON.esppLots, FEED_SKELETON.esppOfferings]).toEqual([581, 71, 357, 315, 216])
+    expect([FEED_SKELETON.paycheckBreakdown, FEED_SKELETON.compVesting, FEED_SKELETON.compEvents, FEED_SKELETON.esppLots, FEED_SKELETON.esppOfferings]).toEqual([567, 57, 357, 315, 216])
   })
   it('pins the scope row and its ghost to ONE height, and leaves `:empty` able to hide the row', () => {
     // The sticky row is 0px while ScopeBar has nothing to put in it and ~50px once the owner

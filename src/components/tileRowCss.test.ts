@@ -58,6 +58,11 @@ describe('tile rows share one grid (spec §4.1)', () => {
     expect(CSS).toContain('.stat-delta-clause { display: inline-block; }')
   })
 
+  it('lets a ghost tile take its row’s subgrid like any tile', () => {
+    // GhostTile renders .stat-tile.skeleton-tile, so the subgrid selectors above reach it unchanged.
+    expect(CSS).not.toMatch(/\.skeleton-tile \{[^}]*min-height/)
+  })
+
   it('reserves the badge line and one delta line on a steady row, in their own boxes', () => {
     expect(CSS).toContain(
       '.stat-badge, .kpi-row-steady .stat-badge-row:empty::before { padding: 0.05rem 0.45rem; font-size: 0.7rem; font-weight: 500; }',

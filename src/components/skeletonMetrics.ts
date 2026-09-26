@@ -11,10 +11,11 @@ export const CARD_CHROME = 60
 export const HINT_LINE = 18
 export const TABLE_ROW = 33
 export const FORM_ROW = 51
-/** The real .stat-tile (the audit measured 115 against the ghost's 76): 0.9 + 1rem padding + 2
- *  border + label 11 + 7.2 + value 26 + delta 13 + 5.6. */
-export const STAT_TILE = 115
-/** A .kpi-row's tile plus the row's own 1rem bottom margin. */
+/** The real .stat-tile with one delta line, measured at 1440 in Edge (2026-09-25 polish §4.6): 14.4 +
+ *  1 border + 15.3 label + 7.2 + 23.8 figure + 5.6 + 17 delta + 16 + 1. Ghost TILES need no number —
+ *  they stand in the real lines — so this is only for a CARD ghost standing in for a tile row. */
+export const STAT_TILE = 101
+/** A .kpi-row's tile plus the 1rem the row leaves under it. */
 export const TILE_ROW = STAT_TILE + 16
 /** The .networth-owner-strip BOX only — dt 15 + dd (2 margin + 24 line) = 41. Its 1rem margin is
  *  .skeleton-strip's `margin`, not part of this number: counting it twice stood the ghost 16px

@@ -1927,7 +1927,10 @@ describe('OverviewPage — skeleton first paint (2026-08-27 spec §3)', () => {
     // ghost form — four tiles and four cards — not a centered line of text.
     expect(container.querySelector('.page-skeleton')).toBeNull()
     expect(container.querySelectorAll('.kpi-row .stat-tile')).toHaveLength(4)
-    expect(Array.from(container.querySelectorAll('.kpi-row .stat-value')).every(value => value.textContent === '—')).toBe(true)
+    // Every tile is a ghost set in the real lines (2026-09-25 polish §4.6) — no figure at all — or an
+    // honest dash: never a fabricated $0.00.
+    expect(Array.from(container.querySelectorAll('.kpi-row .stat-tile:not(.skeleton-tile) .stat-value')).every(value => value.textContent === '—')).toBe(true)
+    expect(Array.from(container.querySelectorAll('.kpi-row .skeleton-tile .stat-value')).every(value => value.textContent === '')).toBe(true)
     expect(screen.getByRole('heading', { name: 'Net worth trend' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: /Up next/ })).toBeTruthy()
     expect(screen.getAllByRole('status').length).toBeGreaterThan(0)

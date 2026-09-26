@@ -794,37 +794,35 @@
 
 .skeleton-value {
   width: 65%;
-  height: 1.45rem;
+  height: 0.8em;
 }
 
-/* The boxes the real layout occupies: a 76px tile ghost under a 115px tile moved every page's
-   first paint by 39px a row (motion spec §7). One variable per row, read by the REAL row and by
-   the empty twin the skeleton leaves in its place — parity by construction, not two numbers that
-   happen to agree; src/components/skeletonMetrics.ts mirrors them and its test pins the pair. */
+/* The owner strip's box (motion spec §7): one variable, read by the REAL strip and by the empty
+   twin the skeleton leaves in its place — parity by construction; src/components/skeletonMetrics.ts
+   mirrors it and its test pins the pair. */
 .page-skeleton,
 .loading-fallback {
-  --m-stat-tile: 115px;
-  /* The delta-less tile (2026-09-13 polish §9): 115 minus the .stat-delta line — 0.8rem type at
-     the system-ui line height (≈17px) plus its 0.35rem top margin (5.6px) — rounded like every
-     twin here. Lane V's CLS smoke on Credit cards and Portfolio is the check on the number. */
-  --m-stat-tile-bare: 93px;
   --m-owner-strip: 41px;
 }
 
-/* Parity with the loaded blocks (motion spec §7): a ghost tile must stand as tall as the real
-   .stat-tile it is replaced by, delta line and all — the --m-* variables above hold the numbers. */
-.skeleton-tile {
-  min-height: var(--m-stat-tile);
+/* A ghost tile draws its blocks INSIDE the real tile's lines (2026-09-25 polish spec §4.6): each block
+   is an inline-block in the line box of the real .stat-label, .stat-value-figure and .stat-delta, so
+   the ghost stands exactly as tall as the tile that replaces it — the same type sets every line, in
+   every row variant, at every width. The fixed ghost heights that stood in for this (115px, the bare
+   93px) were right at one width only: OU-01 measured a 76px ghost under a 145px tile, PE-09 115
+   against 103. Middle-aligned blocks shorter than their line never set its height. */
+.skeleton-tile .skeleton {
+  display: inline-block;
+  vertical-align: middle;
 }
 
-.skeleton-tile-bare {
-  min-height: var(--m-stat-tile-bare);
+.skeleton-tile .skeleton-label {
+  margin: 0;
 }
 
 .skeleton-delta {
   width: 50%;
-  height: 0.8rem;
-  margin-top: 0.35rem;
+  height: 0.75em;
 }
 
 .skeleton-strip {

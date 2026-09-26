@@ -56,32 +56,55 @@ describe('SkeletonCard', () => {
   })
 })
 
-describe('ghost parity (motion spec §7)', () => {
-  it('draws tiles at the real tile box — delta line included — and the owner strip on request', () => {
+describe('ghost parity (motion spec §7; 2026-09-25 polish spec §4.6)', () => {
+  const lines = (tile: Element) => [...tile.children].map((child) => child.className)
+
+  it('draws each ghost as the real tile’s four lines, a block inside three of them', () => {
     const { rerender } = render(<PageSkeleton tiles={2} strip />)
     const tiles = document.querySelectorAll('.kpi-row .stat-tile.skeleton-tile')
     expect(tiles.length).toBe(2)
+    expect(lines(tiles[0])).toEqual(['stat-label', 'stat-badge-row', 'stat-value', 'stat-delta'])
     expect(tiles[0].querySelectorAll('.skeleton').length).toBe(3) // label, value, delta
+    expect(tiles[0].querySelector('.stat-value > .stat-value-figure > .skeleton-value')).not.toBeNull()
+    expect(tiles[0].querySelector('.stat-badge-row')?.childNodes.length).toBe(0)
     expect(document.querySelector('.skeleton-strip')?.getAttribute('aria-hidden')).toBe('true')
     rerender(<PageSkeleton tiles={2} />)
     expect(document.querySelector('.skeleton-strip')).toBeNull()
   })
-  it('reserves a lone KPI row on its own, with the SAME tile the page skeleton draws', () => {
-    // ESPP's $25k strip has no page-level skeleton above it: its box is reserved here or the
-    // page moves 118px when the modeler answers (2026-09-05 lane V smoke, cls/espp).
-    render(<SkeletonTileRow lone label="Loading the $25k headline…" />)
+
+  it('takes the real row’s variant, steadiness, hero and page class', () => {
+    render(<PageSkeleton tiles={{ count: 5, row: 'five', className: 'cal-strip' }} />)
+    expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row kpi-row-5 cal-strip')
+    cleanup()
+    render(<PageSkeleton tiles={{ count: 5, row: 'dense', hero: true }} />)
+    expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row kpi-row-dense')
+    const ghosts = document.querySelectorAll('.stat-tile.skeleton-tile')
+    expect(ghosts[0].classList.contains('stat-tile-hero')).toBe(true)
+    expect(ghosts[1].classList.contains('stat-tile-hero')).toBe(false)
+    cleanup()
+    render(<PageSkeleton tiles={{ count: 4, steady: true }} />)
+    expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row kpi-row-steady')
+  })
+
+  it('reserves a five-tile or lone KPI row on its own, with the SAME tile the page skeleton draws', () => {
+    // ESPP's strip ghosts its own row (no page-level skeleton above it): the row must be the strip's
+    // five-tile row, or it wraps 4 + 1 and the strip lands 147px shorter (PE-09).
+    render(<SkeletonTileRow tiles={5} row="five" label="Loading the ESPP headline…" />)
     const row = document.querySelector('.kpi-row')
-    expect(row?.className).toContain('kpi-row-lone')
+    expect(row?.className).toBe('kpi-row kpi-row-5')
     expect(row?.getAttribute('aria-hidden')).toBe('true')
-    expect(row?.querySelectorAll('.stat-tile.skeleton-tile .skeleton').length).toBe(3)
-    expect(screen.getByRole('status').textContent).toBe('Loading the $25k headline…')
+    expect(row?.querySelectorAll('.stat-tile.skeleton-tile .skeleton').length).toBe(15)
+    expect(screen.getByRole('status').textContent).toBe('Loading the ESPP headline…')
     // …and it rides the same delay every other ghost does, so a fast answer shows nothing.
     expect(document.querySelector('.loading-fallback')).not.toBeNull()
     cleanup()
+    render(<SkeletonTileRow row="lone" />)
+    expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row kpi-row-lone')
+    cleanup()
     render(<SkeletonTileRow tiles={3} />)
-    expect(document.querySelectorAll('.stat-tile.skeleton-tile').length).toBe(3)
-    expect(document.querySelector('.kpi-row')?.className).not.toContain('kpi-row-lone')
+    expect(document.querySelector('.kpi-row')?.className).toBe('kpi-row')
   })
+
   it('leaves no hand-written ghost height at the call sites this lane owns', () => {
     // A literal here is a number nobody can check against the block it stands in for.
     const page = (name: string) => readFileSync(path.join(__dirname, '..', 'pages', `${name}.tsx`), 'utf8')
@@ -109,26 +132,24 @@ describe('ghost parity (motion spec §7)', () => {
     expect(tile?.getAttribute('aria-hidden')).toBe('true')
   })
 
-  it('gives a page-level ghost row the same tile height variable the page skeleton reads', () => {
-    // --m-stat-tile was declared on .page-skeleton alone, so a SkeletonTileRow's ghosts — which
-    // ride .loading-fallback and never sit inside a page skeleton — fell back to their content
-    // box (~95px) and the row grew 20px when the first feed landed. jsdom computes no custom
-    // properties, so the pin is on the stylesheet's own text, like this file's other CSS pins.
-    const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8').replace(/\s+/g, ' ')
-    expect(css).toContain('.page-skeleton, .loading-fallback { --m-stat-tile: 115px;')
-    render(<SkeletonTileRow tiles={2} />)
-    expect(document.querySelector('.skeleton-tile')?.closest('.loading-fallback')).not.toBeNull()
+  // The fixed ghost heights (--m-stat-tile 115px, the bare 93px) were right at one width: OU-01 measured
+  // a 76px ghost under a 145px tile, PE-09 115 against 103. A ghost set in the real lines needs none.
+  it('stands the ghost blocks in the real lines, with no fixed tile height anywhere', () => {
+    const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ')
+    expect(css).not.toContain('--m-stat-tile')
+    expect(css).toContain('.skeleton-tile .skeleton { display: inline-block; vertical-align: middle; }')
+    expect(css).toContain('.skeleton-tile .skeleton-label { margin: 0; }')
+    expect(css).toContain('.skeleton-value { width: 65%; height: 0.8em; }')
+    expect(css).toContain('.skeleton-delta { width: 50%; height: 0.75em; }')
   })
-  it('draws a delta-less ghost on request, at the shorter box a delta-less tile occupies', () => {
-    // Credit cards' and Portfolio's tiles carry no delta line (2026-09-13 polish §9): a
-    // three-block ghost under them stood 22px taller than the row that replaced it.
+
+  it('draws a delta-less ghost on request: two blocks and an empty delta line', () => {
+    // Credit cards' tiles carry no delta line (2026-09-13 polish §9): an empty line costs 0px.
     render(<GhostTile delta={false} />)
     const tile = document.querySelector('.stat-tile.skeleton-tile') as HTMLElement
     expect(tile.querySelectorAll('.skeleton').length).toBe(2) // label, value
     expect(tile.className).toContain('skeleton-tile-bare')
-    const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8').replace(/\s+/g, ' ')
-    expect(css).toContain('--m-stat-tile-bare: 93px;')
-    expect(css).toContain('.skeleton-tile-bare { min-height: var(--m-stat-tile-bare); }')
+    expect(tile.querySelector('.stat-delta')?.childNodes.length).toBe(0)
   })
 
   it('accepts a tiles object so a page can ghost a delta-less row, and a count still draws the full tile', () => {
