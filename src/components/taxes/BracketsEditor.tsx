@@ -589,6 +589,7 @@ export default function BracketsEditor({
       delete next[key]
       return next
     })
+    requestAnimationFrame(() => sectionRef.current?.querySelector<HTMLElement>(`[data-bracket-key="${key}"] button`)?.focus({ preventScroll: true }))
   }
 
   /**

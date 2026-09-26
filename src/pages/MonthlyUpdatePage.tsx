@@ -970,12 +970,18 @@ function MonthlyUpdateWizard() {
   // the month-review PUT writes both parts in one — so one request reverses it. `after` (reload,
   // or return to the month) runs once the reversal landed; a refused one changed nothing.
   const undoChange = async (batchId: string, done: string, after: () => void) => {
+    const anchor = document.activeElement
     try {
       await undoBatch(batchId)
       toast.success(done)
       after()
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Undo failed')
+    } finally {
+      requestAnimationFrame(() => {
+        if (document.activeElement !== anchor && document.activeElement !== document.body) return
+        document.querySelector<HTMLElement>('.monthly-update-page .wizard-step.active')?.focus({ preventScroll: true })
+      })
     }
   }
 
@@ -1146,7 +1152,7 @@ function MonthlyUpdateWizard() {
           toast.success(`${saveMessage(receipt, closed)}${nextDue === null ? '' : ` · Next due: ${nextDue.name}`}`, {
             action: {
               label: 'Undo',
-              onAction: () => void undoChange(batchId, `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
+              onAction: () => undoChange(batchId, `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
             },
           })
         }
@@ -1231,7 +1237,7 @@ function MonthlyUpdateWizard() {
               action: {
                 label: 'Undo',
                 onAction: () =>
-                  void undoChange(batchId, `Undone — ${name} are back.`, () => {
+                  undoChange(batchId, `Undone — ${name} are back.`, () => {
                     // Back to the part's own step on that month; the nonce covers the same month.
                     reloadMonth()
                     setParams(() => new URLSearchParams({ month: deleted, step: part === 'balances' ? 'balances' : 'spending' }))
@@ -1241,7 +1247,9 @@ function MonthlyUpdateWizard() {
       )
       if (loadedMonth.current !== loaded) return
       closeActions()
-      actionsTriggerRef.current?.focus({ preventScroll: true })
+      // Deleting the last stored part removes this kebab after reloading. The step
+      // control remains mounted throughout the read and is the stable return target.
+      anchor.closest('.monthly-update-page')?.querySelector<HTMLElement>('.wizard-step.active')?.focus({ preventScroll: true })
       // The receipt and the restored banner describe rows that no longer exist.
       setLastSave(null)
       setRestoredParts((current) => ({ ...current, [part]: false }))
@@ -1272,7 +1280,7 @@ function MonthlyUpdateWizard() {
           : {
               action: {
                 label: 'Undo',
-                onAction: () => void undoChange(batchId, `Undone — ${formatMonth(repaired)}'s rows are back.`, reloadMonth),
+                onAction: () => undoChange(batchId, `Undone — ${formatMonth(repaired)}'s rows are back.`, reloadMonth),
               },
             },
       )
@@ -1607,7 +1615,7 @@ function MonthlyUpdateWizard() {
   }
 
   return (
-    <div className="page">
+    <div className="page monthly-update-page">
       <PageFrame
         title={`Monthly update — ${formatMonth(month)}`}
         subheader={

@@ -1,6 +1,6 @@
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ApiError, describeError } from '../api/client'
 import { undoBatch } from '../api/lifecycle'
 import {
@@ -13,6 +13,7 @@ import {
   FILING_STATUS_LABELS,
   patchTaxYear,
   putTaxInputs,
+  putTaxInputsLogged,
 } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { useAssistantView } from '../components/assistant/viewState'
@@ -27,7 +28,7 @@ import { figureText } from '../components/taxes/inputUnits'
 import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
 import { clearTaxDraft, clearYearDrafts, inputsDraftKey } from '../components/taxes/taxDrafts'
-import type { TaxSection } from '../components/taxes/taxSections'
+import type { TaxNavigate } from '../components/taxes/taxSections'
 import TaxYearMenu from '../components/taxes/TaxYearMenu'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
 // TYPE-only, and deliberately its own statement: the page test mocks this module's RUNTIME
@@ -37,6 +38,8 @@ import type { OverrideDefinition } from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
 import { useToast } from '../components/ToastProvider'
 import { useConfirm } from '../components/feedback/confirm'
+import { flashElement } from '../components/feedback/reveal'
+import { useLatest } from '../components/reorder/useLatest'
 import { currentYear } from '../utils/months'
 import { useProductToday } from '../utils/productToday'
 import type {
@@ -128,6 +131,8 @@ function detailKey(year: number, filingStatus: FilingStatus): string {
 const PAGE_SECTIONS = [{"id":"summary","label":"Summary"},{"id":"whatif","label":"What-if"},{"id":"inputs","label":"Inputs"},{"id":"tables","label":"Tax tables"}] as const
 
 export default function TaxesPage() {
+  const navigate = useNavigate()
+  const location = useLocation()
   const views = useLocalSections(PAGE_SECTIONS, 'summary', { resolveLegacy: ({ searchParams, hash }) => searchParams.has('whatif') || searchParams.has('whatif-lot') || searchParams.has('sale_ticker') || searchParams.has('espp_lot') ? 'whatif' : hash.includes('bracket') ? 'tables' : hash.includes('input') ? 'inputs' : null })
   // The selected tax year lives in the URL (2026-09-03 sandbox lane T). Every card on this
   // page answers for ONE year — the what-if card most of all, whose entries mean nothing
@@ -193,6 +198,7 @@ export default function TaxesPage() {
   // What the two editors report about their own unsaved work — a reload destroys it, so
   // every path that reloads asks first.
   const [inputsDirty, setInputsDirty] = useState(false)
+  const inputsDirtyRef = useLatest(inputsDirty)
   const [bracketsDirty, setBracketsDirty] = useState(false)
   // A save (or a filing-status flip) moves the engine's answer for one year, which moves
   // that year's column in the panel's ALL-years trend too. The panel owns that feed, so
@@ -204,6 +210,9 @@ export default function TaxesPage() {
   // external echo must REMOUNT it — this rides its key. The chip confirmed any discard
   // before PUTting, so the remount never eats work silently.
   const [inputsEpoch, setInputsEpoch] = useState(0)
+  const [applyBusy, setApplyBusy] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
+  const applyFlight = useRef(false)
   // The Will I owe? card reads the year's inputs, tables and status on the server, and stays
   // mounted while the other views are open: every write that moves them bumps this, and the
   // card reloads its feed (2026-09-23 spec §W4 — the strip must show a fix made in Inputs). Bumped
@@ -219,6 +228,7 @@ export default function TaxesPage() {
   // The year the page belongs to RIGHT NOW, readable from a callback that a since-unmounted
   // editor is still holding (its closure remembers the year it was rendered for).
   const currentYearRef = useRef<number | null>(null)
+  useEffect(() => () => { currentYearRef.current = null }, [])
 
   // Everything entering a year does EXCEPT the URL write. Two callers: `loadYear` below
   // (which writes ?year= too) and the in-page navigate above, which arrives with the URL
@@ -231,6 +241,7 @@ export default function TaxesPage() {
     // A create error is about the form above, and the form's own state moved on the moment
     // the user navigated — leaving the sentence there would answer a question nobody asked.
     setCreateError(null)
+    setApplyError(null)
     // Already-seen year: paint its detail instantly and revalidate underneath.
     const status = years.find((y) => y.year === year)?.filing_status ?? 'single'
     const peeked = getSnapshot<YearDetail>(detailKey(year, status))
@@ -609,13 +620,46 @@ export default function TaxesPage() {
 
   // The withholding card wrote the year's inputs from outside the form: the same landing
   // chain a save takes, plus the remount the form's protect-typed-work rule makes necessary.
-  const onVestApplied = (echo: TaxInputsOut) => {
+  const onVestApplied = (echo: TaxInputsOut, batchId?: string | null, message?: string) => {
+    if (message !== undefined) toast.success(message, batchId ? {
+      action: { label: 'Undo', onAction: () => undoAppliedInputs(echo.year, batchId) },
+    } : undefined)
+    if (isStaleEcho(echo.year)) return
     // Its confirm named the discard of any unsaved edits, and it was accepted: the draft goes
     // with them, or the remount would call the Apply's own write "the saved values changed
     // since you typed them" (§W9).
     clearTaxDraft(inputsDraftKey(echo.year))
     setInputsEpoch((n) => n + 1)
     onInputsSaved(echo) // adopts the echo, refreshes the totals and the chip counts
+  }
+
+  const undoAppliedInputs = async (year: number, batchId: string): Promise<boolean> => {
+    const anchor = actionAnchor()
+    if (currentYearRef.current === year && inputsDirtyRef.current) {
+      const seq = seqRef.current
+      if (!await confirm({ anchor: actionAnchor(), title: `Discard unsaved inputs for ${year}?`, body: 'Undo restores the saved inputs and replaces the edits in the Inputs view.', confirmLabel: 'Undo and discard edits', tone: 'default' })) return false
+      if (currentYearRef.current !== year || seqRef.current !== seq) return false
+    }
+    let undone = false
+    try {
+      await undoBatch(batchId)
+      undone = true
+      const echo = await fetchTaxInputs(year)
+      onVestApplied(echo)
+      toast.success(`Restored the inputs for ${year}.`)
+      return true
+    } catch (err) {
+      if (undone) throw new Error(`The inputs for ${year} were restored, but their refresh failed. Reload the year to see them.`)
+      throw err
+    } finally {
+      // Both success and refusal consume this toast action. Its anchor must give focus
+      // to a surviving control before the toast leaves; a declined confirmation returns
+      // above and keeps the action available for another attempt.
+      requestAnimationFrame(() => {
+        if (document.activeElement !== anchor && document.activeElement !== document.body) return
+        pageRef.current?.querySelector<HTMLElement>('.tax-scope-bar button[aria-pressed="true"]')?.focus({ preventScroll: true })
+      })
+    }
   }
 
   // The what-if's Apply (2026-09-03 planning-sandboxes spec §8.6, §10): OVERRIDES only —
@@ -625,8 +669,8 @@ export default function TaxesPage() {
   // withholding card's Apply uses: adopt the echo, remount the form, refresh the totals and
   // the chip counts. Never a new write path, and the unsaved-edits warning rides the same
   // sentence rather than asking twice.
-  const applyOverrides = (overrides: Record<string, string | null>, changed: ChangedInput[]) => {
-    if (selectedYear === null || detail === null) return
+  const applyOverrides = async (overrides: Record<string, string | null>, changed: ChangedInput[], anchor?: HTMLElement) => {
+    if (selectedYear === null || detail === null || applyFlight.current) return
     const year = selectedYear
     const inputs = detail.inputs
     const keys = Object.keys(overrides)
@@ -642,7 +686,7 @@ export default function TaxesPage() {
     const split = keys.filter((key) => perPerson.has(key))
     if (inputs.people.length > 1 && split.length > 0) {
       const named = split.map((key) => perPerson.get(key) ?? key).join(', ')
-      setYearError(
+      setApplyError(
         `${named} ${split.length === 1 ? 'is' : 'are'} stored per person, and ${year} is filed with ` +
         `${inputs.people.length} columns — the scenario ran against their total. Edit ` +
         `${split.length === 1 ? 'it' : 'them'} in Tax inputs — ${year}, which says which person.`,
@@ -661,15 +705,21 @@ export default function TaxesPage() {
     const sentence = `This writes ${keys.length} input${keys.length === 1 ? '' : 's'} to ${year}'s stored return and reloads the Inputs view${
       inputsDirty ? ', discarding its unsaved edits' : ''
       }. Continue?`
-    if (!window.confirm([sentence, ...lines].join('\n'))) return
-    setYearError(null)
-    putTaxInputs(year, { values: overrides })
-      .then((echo) => onVestApplied(echo))
-      .catch((err: unknown) => {
-        setYearError(
-          err instanceof ApiError ? err.message : `Failed to apply the overrides to ${year}`,
-        )
-      })
+    const seq = seqRef.current
+    if (!await confirm({ anchor: actionAnchor(anchor), title: `Apply ${keys.length} override${keys.length === 1 ? '' : 's'} to ${year}?`, body: <span className="tax-apply-confirm">{[sentence, ...lines].join('\n')}</span>, confirmLabel: 'Apply overrides', tone: 'default' })) return
+    if (isStaleEcho(year) || seq !== seqRef.current || applyFlight.current) return
+    applyFlight.current = true
+    setApplyBusy(true)
+    setApplyError(null)
+    try {
+      const { data, batchId } = await putTaxInputsLogged(year, { values: overrides })
+      onVestApplied(data, batchId, `Applied ${keys.length} override${keys.length === 1 ? '' : 's'} to ${year}`)
+    } catch (err: unknown) {
+      if (!isStaleEcho(year)) setApplyError(err instanceof ApiError ? err.message : `Failed to apply the overrides to ${year}`)
+    } finally {
+      applyFlight.current = false
+      setApplyBusy(false)
+    }
   }
 
   const onBracketsSaved = (echo: TaxBracketsOut) => {
@@ -848,7 +898,39 @@ export default function TaxesPage() {
   // The panels' doors into other views (2026-09-13 polish spec §14): "Open Tax tables" in the
   // summary's missing-tables call to action, "Open Inputs" / "Open Tax tables" on the withholding
   // card. The same setter the tab strip uses, so a door pushes ?section= exactly as a tab does.
-  const goTo = (section: TaxSection) => views.setSection(section)
+  const goTo: TaxNavigate = (section, target) => {
+    if (target === undefined || detail === null) { views.setSection(section); return }
+    const people = detail.inputs.people
+    const personId = target.person === 'partner' ? people[1]?.id : target.personId
+    const items = detail.inputs.sections.flatMap(part => part.items)
+    const item = items.find(input => input.key === target.key && (personId == null || input.person_id === personId))
+    if (item === undefined) { views.setSection(section); return }
+    const owner = people.length > 1 && item.is_per_person ? item.person_id : null
+    const id = `tax-input-${target.key}${owner == null ? '' : `:${owner}`}`
+    const next = new URLSearchParams(searchParams)
+    next.set('section', section)
+    navigate({ pathname: location.pathname, search: `?${next.toString()}`, hash: `#${encodeURIComponent(id)}` }, { preventScrollReset: true })
+  }
+  useEffect(() => {
+    if (views.section !== 'inputs' || !location.hash.startsWith('#tax-input-')) return
+    let id: string
+    try { id = decodeURIComponent(location.hash.slice(1)) } catch { return }
+    let observer: MutationObserver | null = null
+    const flash = () => {
+      const field = document.getElementById(id)
+      if (field === null || field.closest('[hidden]')) return false
+      flashElement(field.closest<HTMLElement>('.tax-input-row') ?? field)
+      observer?.disconnect()
+      return true
+    }
+    const frame = requestAnimationFrame(() => {
+      if (!flash() && pageRef.current) {
+        observer = new MutationObserver(flash)
+        observer.observe(pageRef.current, { childList: true, subtree: true })
+      }
+    })
+    return () => { cancelAnimationFrame(frame); observer?.disconnect() }
+  }, [views.section, location.hash, location.key])
 
   // The scope row (2026-09-13 polish spec §12; audit S1): the year and its filing status are what
   // every card on this page answers FOR, so they live in the sticky row Paycheck's person chips
@@ -1012,6 +1094,8 @@ export default function TaxesPage() {
                   brackets={d.brackets}
                   summary={d.summary}
                   onApplyOverrides={applyOverrides}
+                  applyBusy={applyBusy}
+                  applyError={applyError}
                   defaultOpen
                 />
               </LocalSectionPanel>

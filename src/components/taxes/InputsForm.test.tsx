@@ -1233,14 +1233,14 @@ describe('InputsForm', () => {
     expect(bar.classList.contains('is-dirty')).toBe(false)
 
     fireEvent.change(screen.getByLabelText('Annual Salary'), { target: { value: '210000' } })
-    // "1 change to save · Save inputs · Ctrl+Enter", in that order.
+    // The shortcut precedes Save, keeping the action at the bar's right edge.
     expect(bar.textContent).toContain('1 change to save')
     expect(bar.textContent).toContain('Ctrl+Enter')
     expect(bar.classList.contains('is-dirty')).toBe(true)
     expectInDocumentOrder(
       screen.getByText('1 change to save'),
-      screen.getByRole('button', { name: 'Save inputs' }),
       bar.querySelector('kbd') as HTMLElement,
+      screen.getByRole('button', { name: 'Save inputs' }),
     )
   })
 })

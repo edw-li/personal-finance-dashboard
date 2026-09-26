@@ -28,7 +28,7 @@ vi.mock('../components/feedback/confirm', async (importOriginal) => {
     useConfirm: () => {
       const ask = original.useConfirm()
       return (options: import('../components/feedback/confirm').ConfirmOptions) =>
-        options.title.startsWith('Delete tax year') ? ask(options) : Promise.resolve(window.confirm(options.title))
+        options.title.startsWith('Delete tax year') ? ask(options) : Promise.resolve(window.confirm(options.title.startsWith('Apply ') ? (options.body as { props: { children: string } }).props.children : options.title))
     },
   }
 })
@@ -45,6 +45,7 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   fetchAllTaxSummaries: vi.fn(),
   fetchWithholding: vi.fn(),
   putTaxInputs: vi.fn(),
+  putTaxInputsLogged: vi.fn(),
   putTaxBrackets: vi.fn(),
   patchTaxYear: vi.fn(),
   fetchStatusOptions: vi.fn(),
@@ -113,8 +114,10 @@ vi.mock('../components/taxes/WhatIfPanel', async () => {
       year,
       definitions,
       onApplyOverrides,
+      applyError,
     }: {
       year: number
+      applyError?: string | null
       definitions?: { key: string; label: string }[]
       onApplyOverrides?: (
         overrides: Record<string, string | null>,
@@ -136,6 +139,7 @@ vi.mock('../components/taxes/WhatIfPanel', async () => {
           },
           'Apply 1 override to 2024',
         ),
+        applyError ? createElement('span', { role: 'alert' }, applyError) : null,
       ),
   }
 })
@@ -152,6 +156,7 @@ import {
   patchTaxYear,
   putTaxBrackets,
   putTaxInputs,
+  putTaxInputsLogged,
 } from '../api/taxes'
 
 // A promise this file settles by hand — the only way to hold two refreshes in flight at
@@ -464,6 +469,7 @@ const renderPage = (entry = '/taxes') =>
   )
 
 beforeEach(() => {
+  vi.mocked(putTaxInputsLogged).mockImplementation(async (year, body) => ({ data: await putTaxInputs(year, body), batchId: "inputs-batch" }))
   clearSnapshots()
   vi.mocked(fetchTaxYears).mockResolvedValue([year2023, year2024])
   vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
@@ -1481,6 +1487,70 @@ describe('TaxesPage', () => {
   // The SINGLE-column branch: annual_salary is a per-person key, but a one-person year has
   // exactly one row for it, so the household total and the primary's row are the same number
   // and the `values` shorthand writes what the scenario previewed.
+  it('undoes the exact Apply batch, asking before replacing newer input edits', async () => {
+    renderPage('/taxes?section=whatif')
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Applied 1 override to 2024', expect.objectContaining({ action: expect.any(Object) })))
+    expect(putTaxInputsLogged).toHaveBeenCalledWith(2024, { values: { annual_salary: '210000' } })
+    const undo = toast.success.mock.calls.find(call => call[0] === 'Applied 1 override to 2024')![1].action.onAction as () => Promise<boolean>
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    fireEvent.change(salary(), { target: { value: '222222' } })
+    confirmSpy.mockReturnValue(false)
+    await act(async () => { expect(await undo()).toBe(false) })
+    expect(undoBatch).not.toHaveBeenCalled()
+    expect(salary().value).toBe('$222,222.00')
+    confirmSpy.mockReturnValue(true)
+    await act(async () => { expect(await undo()).toBe(true) })
+    expect(undoBatch).toHaveBeenCalledExactlyOnceWith('inputs-batch')
+    expect(salary().value).toBe('$200,000.00')
+  })
+
+  it('offers no Undo when Apply reports a null batch', async () => {
+    vi.mocked(putTaxInputsLogged).mockResolvedValue({ data: inputsFor(2024), batchId: null })
+    renderPage('/taxes?section=whatif')
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Applied 1 override to 2024', undefined))
+  })
+
+  it('Undo for a different year preserves the active year and its newer draft', async () => {
+    renderPage('/taxes?section=whatif')
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    const undo = toast.success.mock.calls.find(call => call[0] === 'Applied 1 override to 2024')![1].action.onAction as () => Promise<boolean>
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    await waitFor(() => expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2023'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    fireEvent.change(salary(), { target: { value: '333333' } })
+    confirmSpy.mockClear()
+    await act(async () => { await undo() })
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(fetchTaxInputs).toHaveBeenLastCalledWith(2024)
+    expect(salary().value).toBe('$333,333.00')
+    expect(screen.getByRole('button', { name: '2023' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('a refused Apply Undo leaves the current inputs untouched for the toast to report', async () => {
+    renderPage('/taxes?section=whatif')
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    const undo = toast.success.mock.calls.find(call => call[0] === 'Applied 1 override to 2024')![1].action.onAction as () => Promise<boolean>
+    vi.mocked(undoBatch).mockRejectedValue(new ApiError('A later edit superseded this change', 409))
+    const reads = vi.mocked(fetchTaxInputs).mock.calls.length
+    // The real toast will consume its action on refusal. Even that path gives focus to
+    // the surviving year control before the action disappears.
+    const action = document.createElement('button')
+    document.body.append(action)
+    action.focus()
+    await expect(undo()).rejects.toThrow('A later edit superseded this change')
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: '2024' })))
+    action.remove()
+    expect(fetchTaxInputs).toHaveBeenCalledTimes(reads)
+  })
+
   it('Apply from the what-if confirms before → after, PUTs the overrides once and remounts the inputs form', async () => {
     // The PUT echo carries the moved salary — the remount is what puts it on screen,
     // because InputsForm ignores prop replacement by design.

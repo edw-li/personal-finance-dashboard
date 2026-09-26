@@ -879,6 +879,13 @@ export default function InputsForm({
               ? 'No changes yet'
               : `${changedCount} change${changedCount === 1 ? '' : 's'} to save`}
           </span>
+          {/* No aria-label on the span: naming a generic role is prohibited, and the two <kbd>s
+              already read as "Ctrl+Enter" (2026-09-13 review round). */}
+          {changedCount > 0 && (
+            <span className="drill-hint tax-save-shortcut">
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
+            </span>
+          )}
           <SaveButton
             state={saveState}
             type="submit"
@@ -887,13 +894,6 @@ export default function InputsForm({
           >
             Save inputs
           </SaveButton>
-          {/* No aria-label on the span: naming a generic role is prohibited, and the two <kbd>s
-              already read as "Ctrl+Enter" (2026-09-13 review round). */}
-          {changedCount > 0 && (
-            <span className="drill-hint tax-save-shortcut">
-              <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
-            </span>
-          )}
         </div>
       </form>
     </section>

@@ -999,7 +999,7 @@ describe('BracketsEditor — per-person tables', () => {
     expect(alert.closest('.bracket-person')).not.toBeNull()
   })
 
-  it('reports dirty work from a draft person table', () => {
+  it('reports dirty work from a draft person table and returns focus after discarding it', async () => {
     const onDirtyChange = vi.fn()
     render(
       <BracketsEditor
@@ -1016,20 +1016,22 @@ describe('BracketsEditor — per-person tables', () => {
     expect(onDirtyChange).toHaveBeenLastCalledWith(true)
 
     // And the way back out of a draft nobody meant to start: client-side, no request.
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Discard draft — Disability — Alex' }),
-    )
+    const discard = screen.getByRole('button', { name: 'Discard draft — Disability — Alex' })
+    act(() => discard.focus())
+    fireEvent.click(discard)
     expect(onDirtyChange).toHaveBeenLastCalledWith(false)
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
     expect(addFor('Disability', 'Alex')).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(addFor('Disability', 'Alex')))
   })
 
-  it('discards an EMPTY draft on Save instead of deleting a table nobody stored', () => {
+  it('discards an EMPTY draft on Save instead of deleting a table nobody stored', async () => {
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
 
     // The Social Security default has no rows, so the draft seeded from it opens empty —
     // and its Save is a save of nothing.
     fireEvent.click(addFor('Social Security', 'Alex'))
+    act(() => save('Social Security — Alex').focus())
     fireEvent.click(save('Social Security — Alex'))
 
     // Empty rows are a DELETE-ALL only for a table the server actually holds. This one was
@@ -1038,6 +1040,7 @@ describe('BracketsEditor — per-person tables', () => {
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
     expect(addFor('Social Security', 'Alex')).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(addFor('Social Security', 'Alex')))
   })
 
   it('closes the status tabs while a person save is in flight', () => {

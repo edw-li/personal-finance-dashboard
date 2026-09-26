@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../../api/client'
+import BusyButton from '../feedback/BusyButton'
 import { fetchLots } from '../../api/espp'
 import { fetchLimits } from '../../api/limits'
 import { fetchHoldings } from '../../api/portfolio'
@@ -128,6 +129,8 @@ export default function WhatIfPanel({
   brackets = null,
   summary = null,
   onApplyOverrides,
+  applyBusy = false,
+  applyError = null,
   defaultOpen = false,
 }: {
   year: number
@@ -141,7 +144,9 @@ export default function WhatIfPanel({
   summary?: TaxSummaryOut | null
   /** The page's write door: confirm before → after, PUT the inputs, remount the form. Absent
    *  → no Apply slot. */
-  onApplyOverrides?: (overrides: Record<string, string | null>, changed: ChangedInput[]) => void
+  onApplyOverrides?: (overrides: Record<string, string | null>, changed: ChangedInput[], anchor: HTMLElement) => void
+  applyBusy?: boolean
+  applyError?: string | null
   /** The What-if tab mounts this card as its sole content (2026-09-13 polish spec §8): open from
    *  the first paint, no open/close toggle. The three feeds still load lazily — on this mount,
    *  which LocalSectionPanel only performs on the tab's first visit. */
@@ -700,13 +705,14 @@ export default function WhatIfPanel({
                 after a refusal, those are two different scenarios: 210000's before → after
                 would be confirmed and 220000 written. Gated on a SETTLED run, so the numbers
                 confirmed are the numbers written. */}
-            <button
+            <BusyButton
               type="button"
               className="button button-primary"
               // Disabled says THAT it cannot run; the sentence beside it says why, so the button
               // names it — a disabled control is otherwise mute to a screen reader (BudgetPanel).
               aria-describedby={applyHintId}
-              disabled={!settled || unfinished > 0}
+              busy={applyBusy}
+              inert={!settled || unfinished > 0}
               title={
                 unfinished > 0
                   ? unfinishedSentence
@@ -714,10 +720,11 @@ export default function WhatIfPanel({
                     ? undefined
                     : 'Waiting for this scenario to finish running'
               }
-              onClick={() => onApplyOverrides({ ...scenario.overrides }, changedInputs)}
+              onClick={event => onApplyOverrides({ ...scenario.overrides }, changedInputs, event.currentTarget)}
             >
               Apply {overrideCount} override{overrideCount === 1 ? '' : 's'} to {year}
-            </button>
+            </BusyButton>
+            {applyError !== null && <span role="alert" className="feedback-status is-error">{applyError}</span>}
             <span id={applyHintId} className="drill-hint">
               {unfinished > 0
                 ? unfinishedSentence
