@@ -3,7 +3,8 @@ write records its rows in one change batch and answers X-Change-Batch, and a del
 what hangs off the row it removes, so the Activity card's Undo puts back the same rows — ids,
 ledger positions and price history included."""
 
-from datetime import UTC, date, datetime
+from collections import Counter
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -24,7 +25,8 @@ from app.models import (
 )
 from app.services.changelog import DEPENDENT_REFUSAL, OVERLAP_REFUSAL, REPLAY_REFUSAL, undo_batch
 from app.services.ordering import order_lock
-from tests.exact_undo import images, logged, shape, undo
+from tests.exact_undo import images, logged, shape, table_images, undo
+from tests.ordering_helpers import recorded_sql
 from tests.portfolio_factories import acct
 
 PORTFOLIO = "/api/v1/portfolio"
@@ -204,6 +206,38 @@ async def test_deleting_a_security_takes_its_price_rows_and_undo_puts_back_every
     )
     for model in tables:
         assert await images(db, model) == before[model]  # the same rows, ids included
+
+
+async def test_undoing_a_security_delete_re_inserts_each_table_in_one_statement(auth_client, db):
+    """Years of daily closes (the employer ticker has ~780): the Undo re-inserts them with one
+    multi-row INSERT per table, not one statement per row — and every row still comes back
+    exactly, ids included."""
+    security = await priced_security(db)
+    security_id = security.id
+    db.add_all(
+        [
+            PriceHistory(
+                security_id=security_id,
+                price_date=date(2023, 1, 2) + timedelta(days=day),
+                close=Decimal("100.0000") + day,
+            )
+            for day in range(800)
+        ]
+    )
+    await db.commit()
+    tables = (Security, SecurityDividendEvent, PriceHistory, LatestPrice)
+    before = await table_images(db, *tables)
+    deleted = await auth_client.delete(f"{SECURITIES}/{security_id}")
+    assert deleted.status_code == 204, deleted.text
+    with recorded_sql(db) as statements:
+        restored = await undo(auth_client, deleted)
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["rows"] == 807  # 2 markers, 803 closes, the quote, the security
+    inserts = Counter(sql.split()[2] for sql, _ in statements if sql.startswith("INSERT INTO"))
+    replayed = ("securities", "latest_prices", "price_history", "security_dividend_events")
+    assert {table: inserts[table] for table in replayed} == dict.fromkeys(replayed, 1)
+    assert sum(inserts.values()) <= 6  # and the Undo's own change-log rows and run
+    assert await table_images(db, *tables) == before
 
 
 async def test_undoing_a_security_delete_after_the_ticker_came_back_refuses(auth_client, db):

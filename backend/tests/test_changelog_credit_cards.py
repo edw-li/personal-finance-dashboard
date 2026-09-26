@@ -139,6 +139,31 @@ async def test_undo_restores_a_deleted_reward_category_with_its_cells(auth_clien
     assert await table_images(db, RewardCategory, RewardRate) == before
 
 
+async def test_a_grouped_re_insert_that_breaks_a_constraint_still_refuses_whole(auth_client, db):
+    """The Undo re-inserts a reward category's cells in ONE statement. When one of them can no
+    longer go back — its card was deleted since — that statement's IntegrityError is still the
+    replay refusal, and the category the same Undo had already put back goes again with it."""
+    venture, savor, groceries = card("Venture X"), card("SavorOne", 1), category("Groceries")
+    db.add_all([venture, savor, groceries])
+    await db.flush()
+    db.add_all(
+        [
+            RewardRate(card_id=venture.id, category_id=groceries.id, multiplier=Decimal("2.00")),
+            RewardRate(card_id=savor.id, category_id=groceries.id, multiplier=Decimal("3.00")),
+        ]
+    )
+    await db.commit()
+    savor_id, groceries_id = savor.id, groceries.id
+    deleted = await auth_client.delete(f"{CATEGORIES}/{groceries_id}")
+    assert deleted.status_code == 204
+    assert (await auth_client.delete(f"{CARDS}/{savor_id}")).status_code == 204
+    refused = await undo(auth_client, deleted)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == REPLAY_REFUSAL
+    assert await images(db, RewardCategory) == []
+    assert await images(db, RewardRate) == []
+
+
 async def test_a_matrix_save_that_adds_changes_and_clears_is_one_batch_undone_whole(
     auth_client, db
 ):

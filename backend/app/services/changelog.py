@@ -54,6 +54,9 @@ POST_SUMMARY_REFUSAL = (
 DEPENDENT_REFUSAL = "Other rows now depend on this one — undo the changes that added them first"
 REPLAY_REFUSAL = "Undo no longer fits the current data — a row it depends on has changed or is gone"
 
+# asyncpg binds at most 32,767 parameters per statement; a grouped re-insert splits below it.
+REINSERT_PARAMETERS = 32_000
+
 
 def pk_of(obj: object) -> dict[str, object]:
     return {
@@ -354,9 +357,20 @@ async def undone_by(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, UUID]
     return {batch_id: links[batch_id] for batch_id in batch_ids if batch_id in links}
 
 
+async def _reinsert(db: AsyncSession, table: Table, rows: list[dict[str, object]]) -> None:
+    """A run of an Undo's consecutive re-inserts into one table, as multi-row INSERTs: a
+    security's ~800 closes in one statement, not 800 round trips. Split below asyncpg's
+    parameter limit. A constraint any row breaks raises IntegrityError from here, which the
+    Activity route answers with REPLAY_REFUSAL exactly as it did row by row."""
+    per_statement = max(1, REINSERT_PARAMETERS // max(1, len(rows[0])))
+    for start in range(0, len(rows), per_statement):
+        await db.execute(insert(table).values(rows[start : start + per_statement]))
+
+
 async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> UUID:
     """Replay a batch's inverses in reverse order, in one transaction (spec §9): insert →
-    delete, update → set `before`, delete → insert `before`. Refuses (409) a summary-only
+    delete, update → set `before`, delete → insert `before`; consecutive re-inserts into one
+    table go out as one statement (_reinsert). Refuses (409) a summary-only
     or non-undoable-source batch, an already-undone batch, a batch a later change or a later
     import/restore superseded (`superseded`), and — per replayed DELETE, because only the
     current data can answer it — a row that others still depend on. Records the replay as a
@@ -399,26 +413,38 @@ async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> 
     undo = ChangeBatch(db, source="undo", actor=actor)
     undo.label = f"Undid: {rows[0].label}"
     undo.month = rows[0].month
+    # A delete's inverse is a re-insert. Consecutive ones into the same table (with the same
+    # columns) wait in `run` and go out together (_reinsert); any other step sends the run
+    # first, so every statement still executes in reverse-log order.
+    run_table: Table | None = None
+    run: list[dict[str, object]] = []
     for row in reversed(row_level):
         table = Base.metadata.tables[row.table_name]
-        where = and_(
-            *[table.c[key] == parse_cell(table.c[key], value) for key, value in row.pk.items()]
-        )
         before = {
             key: parse_cell(table.c[key], value)
             for key, value in (row.before or {}).items()
             if key in table.c
         }
+        if run and (row.op != "delete" or table is not run_table or before.keys() != run[0].keys()):
+            await _reinsert(db, run_table, run)
+            run = []
+        if row.op == "delete":
+            run_table = table
+            run.append(before)
+            undo.record(row.table_name, row.pk, None, row.before, month=row.month)
+            continue
+        where = and_(
+            *[table.c[key] == parse_cell(table.c[key], value) for key, value in row.pk.items()]
+        )
         if row.op == "insert":
             await refuse_when_depended_on(db, table, {**(row.after or {}), **row.pk})
             await db.execute(delete(table).where(where))
             undo.record(row.table_name, row.pk, row.after, None, month=row.month)
-        elif row.op == "update":
+        else:
             await db.execute(update(table).where(where).values(before))
             undo.record(row.table_name, row.pk, row.after, row.before, month=row.month)
-        else:
-            await db.execute(insert(table).values(before))
-            undo.record(row.table_name, row.pk, None, row.before, month=row.month)
+    if run:
+        await _reinsert(db, run_table, run)
     db.add(
         LifecycleRun(
             kind="undo",
