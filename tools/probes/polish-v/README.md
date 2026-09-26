@@ -6,6 +6,8 @@ This is a dev-box probe for the approved 2026-09-25 polish design §9. It does n
 
 The browser uses headless Edge with classic scrollbars. All API reads go directly to the explicit loopback backend through Playwright's transparent request forwarding. This retains real data and avoids the intermittent Vite proxy truncation observed by the earlier table-scroll and L6 probes. Successful GET retries are recorded. UI preferences are overlaid in memory; the read-only driver rejects every other mutation except the documented compute-only POSTs. It never targets a remote origin.
 
+Detail panels explicitly request the supported mode: the app docks from1290px and uses its intentional overlay below that. Hint-only ESPP tiles use the existing Assistant panel to exercise the same real dock; no assistant prompt is sent. Month stability waits for settled, correctly identified KPI data. Net worth traverses the ribbon; Spending uses each explicit month URL because its selected month also opens a detail overlay.
+
 ## Private source and stack
 
 Acquire one fresh read-only production `pg_dump` with the already authorized project SSH procedure. Use a byte-preserving pipe/file (Python `subprocess` binary streams or Git Bash; Windows PowerShell5 text redirection corrupts byte streams). Restore the same file into **new** `finance_polish_v_read` and `finance_polish_v_write` databases on `127.0.0.1:5433`. Refuse existing destinations. Do not drop or overwrite databases or run production mutations.
