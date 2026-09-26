@@ -33,6 +33,17 @@ describe('placeConfirm', () => {
     expect(placeConfirm(anchor(110, 1000), SIZE, short).placement).toBe('above') // 44 below, 96 above
   })
 
+  it('keeps inside the window top to bottom when neither side fits — a short window', () => {
+    const short = { width: 1440, height: 200 }
+    // Below wins (94px against 46px) but a 140px popover from 98 would cross the foot at 238: it rises
+    // to 200 − 8 − 140 = 52, as low as it can stand whole.
+    expect(placeConfirm(anchor(60, 1000), SIZE, short)).toEqual({ top: 52, left: 700, placement: 'below' })
+    // Above wins (96px against 44px), and from 110 − 6 − 140 = −36 it drops to the top margin.
+    expect(placeConfirm(anchor(110, 1000), SIZE, short).top).toBe(CONFIRM_MARGIN_PX)
+    // A window shorter than the popover: pinned to the top margin, its foot the part that overflows.
+    expect(placeConfirm(anchor(40, 1000), SIZE, { width: 1440, height: 100 }).top).toBe(CONFIRM_MARGIN_PX)
+  })
+
   it('keeps inside the window sideways', () => {
     expect(placeConfirm(anchor(200, 120), SIZE, VIEW).left).toBe(CONFIRM_MARGIN_PX)
     expect(placeConfirm(anchor(200, 1500), SIZE, VIEW).left).toBe(1440 - CONFIRM_MARGIN_PX - 300)

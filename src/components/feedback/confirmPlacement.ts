@@ -12,8 +12,9 @@ export interface ConfirmSpot {
  * Where the confirm popover stands (2026-09-25 polish spec §6.3; contract C3), in viewport px for
  * `position: fixed`: below its anchor with the right edges aligned — it opens toward the page, as a
  * control at the page's right edge must (panels.css's popover note) — flipped above when it would
- * cross the window's foot and there is more room above, and kept inside the window sideways. Pure, so
- * the rule is tested without a layout engine.
+ * cross the window's foot and there is more room above, and kept inside the window both ways: in a
+ * window too short for either side it rises (or drops) until it stands whole, and a window shorter
+ * than the popover pins it to the top margin. Pure, so the rule is tested without a layout engine.
  */
 export function placeConfirm(
   anchor: Pick<DOMRect, 'top' | 'bottom' | 'right'>,
@@ -23,7 +24,11 @@ export function placeConfirm(
   const roomBelow = viewport.height - CONFIRM_MARGIN_PX - (anchor.bottom + CONFIRM_GAP_PX)
   const roomAbove = anchor.top - CONFIRM_GAP_PX - CONFIRM_MARGIN_PX
   const placement = size.height <= roomBelow || roomBelow >= roomAbove ? 'below' : 'above'
-  const top = placement === 'below' ? anchor.bottom + CONFIRM_GAP_PX : anchor.top - CONFIRM_GAP_PX - size.height
+  const beside = placement === 'below' ? anchor.bottom + CONFIRM_GAP_PX : anchor.top - CONFIRM_GAP_PX - size.height
+  const top = Math.max(
+    CONFIRM_MARGIN_PX,
+    Math.min(beside, viewport.height - CONFIRM_MARGIN_PX - size.height),
+  )
   const left = Math.max(
     CONFIRM_MARGIN_PX,
     Math.min(anchor.right - size.width, viewport.width - CONFIRM_MARGIN_PX - size.width),
