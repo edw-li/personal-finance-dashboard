@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { launch, open, BASE, settle, provenance } from './flows-harness.mjs'
 
 assert.equal(BASE, 'http://127.0.0.1:5280')
@@ -58,6 +59,10 @@ const inspectFocus = async (input) => {
 }
 const domainPaths = ['/credit-cards', '/credit-cards/categories', '/credit-cards/rates', '/calendar?start=2026-09-01&end=2026-09-30', '/spending/matrix']
 const domainHashes = async () => Object.fromEntries(await Promise.all(domainPaths.map(async pathname => [pathname, createHash('sha256').update(JSON.stringify((await api(pathname)).data)).digest('hex')])))
+// Budget histories intentionally have no GET endpoint. Read only this private twin to
+// guard the fixture month and compare its exact row/whole-table cleanup, ids included.
+const budgetRows = () => JSON.parse(execFileSync('docker', ['exec', 'finance-dashboard-db-1', 'psql', '-X', '-U', 'finance', '-d', 'finance_polish_v_write', '-Atc', "SELECT COALESCE(json_agg(b ORDER BY category_id, effective_month), '[]'::json) FROM category_budgets b"], { encoding: 'utf8' }))
+const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const traceDeletion = async (button, toastText) => button.evaluate((control, toastText) => {
   const row = control.closest('tr')
   if (!row) throw new Error('The deletion trace needs the actual source row')
@@ -75,6 +80,9 @@ try {
   await page.goto(`${BASE}/credit-cards?section=manage`)
   await page.getByText('Card roster', { exact: true }).waitFor()
   report.beforeHashes = await domainHashes()
+  const initialBudgets = budgetRows()
+  assert(!initialBudgets.some(row => row.effective_month === '2099-01-01'), 'the private scratch budget month must be unused')
+  report.budgetBeforeHash = hash(initialBudgets)
   cardId = (await api('/credit-cards', 'POST', { name: cardName, annual_fee: '12', rewards_currency: 'points', point_value_cents: '1.25', person_id: null, primary_holder: 'Probe', authorized_users: 'Test', opened_on: '2025-01-10', is_active: true, account_id: null, notes: 'Temporary lane check' })).data.id
   const credit = (await api(`/credit-cards/${cardId}/credits`, 'POST', { label: 'L7 travel credit', annual_value: '80', counts: true, reset_cadence: 'calendar' })).data
   const limits = (await api(`/credit-cards/${cardId}/limits`, 'POST', { effective_date: '2025-01-10', limit_amount: '12345', note: 'L7 opening' })).data
@@ -188,6 +196,7 @@ try {
   await eventChip.waitFor()
   assert.equal(await eventChip.getAttribute('data-flash'), '')
   const eventBeforeDelete = (await api('/calendar?start=2026-09-01&end=2026-09-30')).data.events.find(event => event.id === eventId)
+  assert.equal(eventBeforeDelete?.id, eventId)
   note('Calendar Enter save lands on active day and flashes late chip', { day, eventId, focus: await active() })
   await eventChip.click()
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
@@ -205,7 +214,6 @@ try {
 
   await page.goto(`${BASE}/spending?section=budgets`)
   await page.getByRole('button', { name: /^(Edit|Set) .+ budget$/ }).first().click()
-  assert.equal(await page.getByRole('button', { name: /^Delete the Jan 2099 budget row for / }).count(), 0, 'scratch budget month must not overwrite an existing row')
   const amount = page.locator('.budget-editor input[inputmode="decimal"]')
   await inspectFocus(amount)
   await amount.fill('bad')
@@ -227,12 +235,15 @@ try {
   const match = budgetResponse.url().match(/\/spending\/categories\/(\d+)\/budget/)
   budgetCleanup = Number(match[1])
   await page.locator('.budget-editor .save-status').filter({ hasText: 'Saved' }).waitFor()
+  const budgetBeforeDelete = budgetRows().find(row => row.category_id === budgetCleanup && row.effective_month === '2099-01-01')
+  assert(budgetBeforeDelete, 'the temporary budget exists before its delete')
   const historyDelete = page.getByRole('button', { name: /^Delete the Jan 2099 budget row for / })
   await historyDelete.click()
   const deletedBudget = page.locator('.toast').filter({ hasText: /^Deleted the Jan 2099 budget row for/ }).last()
   await deletedBudget.getByRole('button', { name: 'Undo', exact: true }).click()
   await historyDelete.waitFor()
-  note('Budget errors stay in editor; save and history Undo preserve focus', { focus: await keptFocus('budget undo') })
+  assert.deepEqual(budgetRows().find(row => row.category_id === budgetCleanup && row.effective_month === '2099-01-01'), budgetBeforeDelete)
+  note('Budget errors stay in editor; save and exact history Undo preserve focus', { exactUndo: true, source: 'read-only query of private twin (no history GET exists)', focus: await keptFocus('budget undo') })
 
   await page.goto(`${BASE}/projection?whatif=annual_return:0.06`)
   const pinName = page.getByLabel('Pin label', { exact: true })
@@ -302,6 +313,8 @@ try {
   try {
     report.afterHashes = await domainHashes()
     assert.deepEqual(report.afterHashes, report.beforeHashes, 'Every touched copied-data collection must return to its original value')
+    report.budgetAfterHash = hash(budgetRows())
+    assert.equal(report.budgetAfterHash, report.budgetBeforeHash, 'The entire private budget table must return to its original value')
   } catch (error) { report.cleanup.push(String(error)); process.exitCode = 1 }
   report.completedAt = new Date().toISOString()
   writeFileSync(file('browser-report.json'), JSON.stringify(report, null, 2))
