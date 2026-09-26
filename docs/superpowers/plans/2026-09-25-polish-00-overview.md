@@ -334,6 +334,14 @@ tests preceded only the additional inline wrapper. Independent static review fou
 Per the user's explicit request to avoid heavyweight reruns for these cosmetic changes, validation uses focused
 checks plus the continuing full browser matrix; no new full-suite pass is claimed for the amended product.
 
+The completed 500-case matrix on `2f23b8f5` found a late-loading owner group could wrap the Net worth scope row
+after its content had painted (CLS 0.166327 at 1280 light). Combined ScopeBars now reserve the same 20rem owner slot
+while the household is pending and after it loads. Standalone, cached and known-solo behavior is preserved. All 41
+ScopeBar tests and app noEmit passed; targeted lint exited 0 with empty output (no lint log was created). A forced-delay
+browser comparison in both themes reproduced the old 42.1875px body movement / CLS 0.166560, then measured zero body
+movement / CLS 0.005675 with the fix. All four cases have clean post-close logs and unchanged source during the proof,
+recorded in `scratchpad/codex-cosmetic-final/scope-owner-arrival/report.json`.
+
 Gate logs and interrupted/failed attempts are preserved in ignored `scratchpad/codex-takeover-*` files. Lane V's
 fresh-copy browser acceptance and final report remain the last step; its plan records source provenance, measured
 before/after results, corrected probe attempts, cleanup and the precise product commit for each run. Nothing has

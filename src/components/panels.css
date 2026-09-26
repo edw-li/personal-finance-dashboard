@@ -886,8 +886,8 @@
   gap: 0.6rem;
 }
 
-/* Where the "Whose" label and its chips land. A ghost's WIDTH shifts nothing — only the height
-   above is arithmetic — so these two are the look. */
+/* Where the "Whose" label and its chips land. Combined bars reserve their owner's width in
+   shell.css; these inner blocks only draw the label and chips. */
 .scope-bar-ghost-label {
   width: 46px;
   height: 0.6875rem;

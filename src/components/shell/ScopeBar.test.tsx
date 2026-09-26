@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -9,7 +9,7 @@ import { fetchHousehold } from '../../api/household'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../../api/snapshotCache'
 import { hintLabel } from '../InfoHint'
 import type { HouseholdOut } from '../../types/api'
-import ScopeBar, { HOUSEHOLD_SIZE_KEY, HOUSEHOLD_SNAPSHOT } from './ScopeBar'
+import ScopeBar, { HOUSEHOLD_SIZE_KEY, HOUSEHOLD_SNAPSHOT, type ScopeBarProps } from './ScopeBar'
 import { copyOnSep23 } from '../../testing/timeFixtures'
 import { setServerToday } from '../../utils/productToday'
 
@@ -352,6 +352,74 @@ describe('ScopeBar — the row reserves its height while the household loads', (
     const { container } = mount({ owner: true })
     expect(container.querySelector('.scope-bar-ghost')).toBeTruthy()
     await waitFor(() => expect(container.querySelector('.scope-bar-ghost')).toBeNull())
+  })
+})
+
+// A late household must not push a visible range/ribbon onto another flex row. The owner
+// placeholder uses the same width class as the real group, while the other controls stay usable.
+describe('ScopeBar — reserves the owner slot in a combined bar', () => {
+  const companions: { name: string; props: ScopeBarProps }[] = [
+    { name: 'range', props: { range: true } },
+    { name: 'month', props: { month: { mode: 'view', anchor: '2026-09-01' } } },
+    { name: 'range and month', props: { range: true, month: { mode: 'view', anchor: '2026-09-01' } } },
+  ]
+
+  it.each(companions)('keeps $name controls in place when the delayed owner chips arrive', async ({ props }) => {
+    let resolveHousehold!: (household: HouseholdOut) => void
+    const pending = new Promise<HouseholdOut>((resolve) => { resolveHousehold = resolve })
+    vi.mocked(fetchHousehold).mockReturnValue(pending)
+    const { container } = mount({ owner: true, ...props })
+    const bar = container.querySelector('.scope-bar')
+    const ghost = bar?.querySelector('.scope-bar-owner.scope-bar-ghost')
+    expect(ghost).toBeTruthy()
+    expect(bar?.firstElementChild).toBe(ghost)
+    expect(ghost?.getAttribute('aria-hidden')).toBe('true')
+    expect(ghost?.querySelector('button, [role], [tabindex]')).toBeNull()
+    const range = props.range ? screen.getByRole('group', { name: 'Time range' }) : null
+    const month = props.month ? screen.getByRole('button', { name: /^Sep 2026/ }) : null
+    if (range) fireEvent.click(screen.getByRole('button', { name: 'YTD' }))
+
+    await act(async () => { resolveHousehold(HOUSEHOLD); await pending })
+
+    const owners = screen.getByRole('group', { name: 'Whose' })
+    expect(bar?.firstElementChild).toBe(owners.closest('.scope-bar-owner'))
+    expect(container.querySelector('.scope-bar-ghost')).toBeNull()
+    if (range) {
+      expect(screen.getByRole('group', { name: 'Time range' })).toBe(range)
+      expect(screen.getByRole('button', { name: 'YTD' }).getAttribute('aria-pressed')).toBe('true')
+    }
+    if (month) expect(screen.getByRole('button', { name: /^Sep 2026/ })).toBe(month)
+  })
+
+  it.each([
+    { name: 'multi-person', household: HOUSEHOLD, showOwner: true },
+    { name: 'one-person', household: ALONE, showOwner: false },
+  ])('uses the cached $name household without a ghost during revalidation', ({ household, showOwner }) => {
+    setSnapshot(HOUSEHOLD_SNAPSHOT, household)
+    vi.mocked(fetchHousehold).mockReturnValue(new Promise<HouseholdOut>(() => {}))
+    const { container } = mount({ owner: true, range: true })
+    expect(container.querySelector('.scope-bar-ghost')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Whose' }) !== null).toBe(showOwner)
+    expect(container.querySelector('.scope-bar-owner') !== null).toBe(showOwner)
+  })
+
+  it('reserves no owner width when this tab already knows the household is one person', () => {
+    sessionStorage.setItem(HOUSEHOLD_SIZE_KEY, '1')
+    vi.mocked(fetchHousehold).mockReturnValue(new Promise<HouseholdOut>(() => {}))
+    const { container } = mount({ owner: true, range: true })
+    expect(container.querySelector('.scope-bar-owner, .scope-bar-ghost')).toBeNull()
+    expect(screen.getByRole('group', { name: 'Time range' })).toBeTruthy()
+  })
+
+  it.each(['one person', 'a failure'])('retires the owner slot when the first answer is %s', async (answer) => {
+    vi.mocked(fetchHousehold).mockImplementation(() => answer === 'one person'
+      ? Promise.resolve(ALONE)
+      : Promise.reject(new Error('offline')))
+    const { container } = mount({ owner: true, range: true })
+    expect(container.querySelector('.scope-bar-owner.scope-bar-ghost')).toBeTruthy()
+    await waitFor(() => expect(container.querySelector('.scope-bar-owner, .scope-bar-ghost')).toBeNull())
+    expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Time range' })).toBeTruthy()
   })
 })
 

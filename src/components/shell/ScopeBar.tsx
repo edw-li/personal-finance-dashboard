@@ -236,7 +236,9 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
 
   const monthGroupRef = useRef<HTMLDivElement | null>(null)
   const showOwner = wantsOwner && people.length > 1
-  if (!showOwner && !range && month === undefined) {
+  const ownerPending = wantsOwner && household === null && !householdSettled && lastKnownSize !== 1
+  const combined = range === true || month !== undefined
+  if (!showOwner && !combined) {
     // Nothing to render YET is not nothing to render. While the household is unknown the owner
     // chips may still be coming, and the sticky row goes 0px (`:empty`, shell.css) to ~50px when
     // they land, taking the whole body 66px down with it — CLS 0.39 on Paycheck, whose ONLY
@@ -244,7 +246,7 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
     // the space until the answer is in. A book this tab already knows to be one person skips
     // it: there no chips are coming, and reserving room for them would BE the shift, upside
     // down. It is replaced in place, and collapses without animation if the answer is one.
-    if (!wantsOwner || household !== null || householdSettled || lastKnownSize === 1) return null
+    if (!ownerPending) return null
     return (
       <div className="scope-bar-ghost" aria-hidden="true">
         <span className="skeleton scope-bar-ghost-label" />
@@ -269,8 +271,8 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
 
   return (
     <div className="scope-bar">
-      {showOwner && (
-        <div className="scope-bar-group">
+      {showOwner ? (
+        <div className={`scope-bar-group${combined ? ' scope-bar-owner' : ''}`}>
           {/* The group below already announces itself as "Whose": this word is the sighted
               label for the very same thing, so a reader would otherwise hear it twice. */}
           <span className="eyebrow" aria-hidden="true">
@@ -285,7 +287,12 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
           />
           <InfoHint text={ownerHint ?? (showJoint ? OWNER_HINT_JOINT : OWNER_HINT_SOLO)} />
         </div>
-      )}
+      ) : ownerPending ? (
+        <div className="scope-bar-group scope-bar-owner scope-bar-ghost" aria-hidden="true">
+          <span className="skeleton scope-bar-ghost-label" />
+          <span className="skeleton scope-bar-ghost-chips" />
+        </div>
+      ) : null}
       {range && (
         <Segmented
           variant="toggle"

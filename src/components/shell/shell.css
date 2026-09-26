@@ -481,6 +481,12 @@
   gap: 0.6rem;
 }
 
+/* Only combined bars reserve an owner slot: the pending ghost and the usual two-person
+   group must wrap the range/ribbon at the same width. Longer names can still grow it. */
+.scope-bar-owner {
+  min-width: 20rem;
+}
+
 /* panels.css gives .eyebrow a bottom margin for panel headers; on this one row the label sits
    beside its control, so the bar carries its own reset instead of leaning on PageFrame's. */
 .scope-bar-group .eyebrow {
