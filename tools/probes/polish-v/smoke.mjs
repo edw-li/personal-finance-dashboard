@@ -252,6 +252,28 @@ async function walkGroup(options) {
     }
     await visit(page, actualUrl)
     if (name === 'card-detail') await page.locator('.card-detail').waitFor({ state: 'visible' })
+    // These views use their own URL keys, so visit's ?section= panel assertion does not cover them.
+    if (name === 'calendar' || name === 'calendar-list') {
+      const expectedView = name === 'calendar-list' ? 'List' : 'Grid'
+      const selected = await page.getByRole('group', { name: 'Calendar view', exact: true }).locator('button[aria-pressed="true"]').allTextContents()
+      const grid = await page.locator('.calendar-page .cal-grid').isVisible()
+      const list = await page.locator('.calendar-page .cal-list').isVisible()
+      const emptyList = await page.locator('.calendar-page .empty-note').filter({ hasText: /^Nothing this month\.$/ }).isVisible()
+      check(id, `Calendar renders the requested ${expectedView} view`, selected.length === 1 && selected[0].trim() === expectedView && (expectedView === 'List' ? !grid && (list || emptyList) : grid && !list && !emptyList), { selected, grid, list, emptyList })
+    }
+    if (name.startsWith('update-')) {
+      const step = new URL(config.base + actualUrl).searchParams.get('step')
+      const expectedStep = { balances: 'Balances', spending: 'Spending', review: 'Review' }[step]
+      const selected = await page.locator('.monthly-update-page .wizard-step.active').allTextContents()
+      const content = {
+        balances: page.locator('.monthly-update-page input[id^="bal-"]').first(),
+        spending: page.getByLabel('Household take-home', { exact: true }),
+        review: page.locator('.monthly-update-page .review-head'),
+      }[step]
+      const contentVisible = await content.isVisible()
+      const loading = await page.locator('.monthly-update-page .loading-dim.is-loading, .monthly-update-page .card[aria-busy="true"]').count()
+      check(id, `Monthly renders the requested ${expectedStep} step`, selected.length === 1 && selected[0].replace(/^\s*\d+\s*/, '').trim() === expectedStep && contentVisible && loading === 0, { selected, contentVisible, loading })
+    }
     const observed = await page.evaluate(() => ({ ...window.__polishV, url: location.pathname + location.search, heading: document.querySelector('h1')?.textContent, overflow: document.documentElement.scrollWidth - innerWidth, selectedTab: document.querySelector('[role="tab"][aria-selected="true"]')?.textContent }))
     check(id, 'Route has content and no horizontal page overflow', !!observed.heading && observed.overflow <= 1, observed)
     check(id, 'Cold route CLS is below0.1', observed.cls < .1, { cls: observed.cls, shifts: observed.shifts })
@@ -272,6 +294,28 @@ async function walkGroup(options) {
     }
     if (options.width === 1440 || options.width === 1280 || report.checks.slice(-10).some(check => !check.ok)) await snap(page, id)
   })
+}
+
+// The read-only book is fixed for the matrix. Read each requested summary once, then reuse its
+// rendered identity across viewports. A provisional snapshot's as-of can precede its month key.
+const expectedNetWorthTiles = new Map()
+async function expectedNetWorthTile(month) {
+  if (expectedNetWorthTiles.has(month)) return expectedNetWorthTiles.get(month)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(config.source?.productToday ?? '')) throw new Error('Month verification requires SOURCE_MANIFEST.productToday')
+  const summary = await api(config, `net-worth/summary?month=${month}-01`)
+  if (summary.month !== `${month}-01`) throw new Error(`Requested ${month} summary answered for ${summary.month}`)
+  const dayLabel = iso => new Intl.DateTimeFormat('en-US', {
+    month: 'short', day: 'numeric', timeZone: 'UTC',
+    ...(iso.slice(0, 4) === config.source.productToday.slice(0, 4) ? {} : { year: 'numeric' }),
+  }).format(new Date(`${iso.slice(0, 10)}T00:00:00Z`))
+  const asOf = summary.as_of === undefined ? summary.month : summary.as_of
+  const expected = {
+    month: summary.month, asOf,
+    label: asOf === null ? `Net worth — ${dayLabel(summary.month)} balances, date unknown` : `Net worth — as of ${dayLabel(asOf)}`,
+    value: summary.net_worth == null || summary.net_worth === '' ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(summary.net_worth)),
+  }
+  expectedNetWorthTiles.set(month, expected)
+  return expected
 }
 
 async function monthsGroup(options) {
@@ -295,12 +339,25 @@ async function monthsGroup(options) {
         if (await chip.getAttribute('aria-pressed') !== 'true') {
           await chip.click()
           await settle(page, 250)
-          await page.waitForFunction(() => !document.querySelector('.kpi-row .skeleton-tile'), null, { timeout: 25000 })
         }
+        const expectedTile = route === '/net-worth' ? await expectedNetWorthTile(month) : { month: `${month}-01`, label: `Living spending — ${expectedLabel}` }
+        // A selected chip and an old real row can coexist while Net worth reloads. Require the
+        // requested data's rendered label/value and a finished loading state before measuring it.
+        const renderedHandle = await page.waitForFunction(expected => {
+          const row = document.querySelector('.kpi-row-steady')
+          if (!row || row.getBoundingClientRect().height === 0 || row.closest('.loading-dim.is-loading') || row.querySelector('.skeleton-tile')) return false
+          const tile = row.querySelector('.stat-tile')
+          const label = tile?.querySelector('.stat-label')?.textContent.trim()
+          const value = tile?.querySelector('.stat-value-figure')?.textContent.trim()
+          return label === expected.label && (expected.value === undefined || value === expected.value) ? { label, value, loading: false } : false
+        }, expectedTile, { timeout: 25000 }).catch(error => { throw new Error(`${route}: ${month} KPI did not settle to the requested data: ${error.message}`) })
+        const rendered = await renderedHandle.jsonValue()
+        await renderedHandle.dispose()
+        check(id, `${route}: requested ${month} KPI data is rendered and settled`, !!rendered, { expected: expectedTile, rendered })
         const row = (await tileRows(page))[0]
         const selected = await page.locator('.month-chip2[aria-pressed="true"]').getAttribute('aria-label')
         check(id, `${route}: requested ${month} is the selected ribbon month`, !!selected && selected.startsWith(expectedLabel + ' '), { requested: month, selected, url: page.url() })
-        observed.push({ month, selected, height: row?.h ?? null, lines: row ? judge(row) : null })
+        observed.push({ month, selected, rendered, height: row?.h ?? null, lines: row ? judge(row) : null })
       }
       check(id, `${route}: every offered month has stable tile-row height`, observed.length > 1 && observed.every(o => o.height !== null) && measure.spread(observed.map(o => o.height)) <= 1, observed, route === '/net-worth' ? baseline.netWorthMonthHeights : undefined)
     }
