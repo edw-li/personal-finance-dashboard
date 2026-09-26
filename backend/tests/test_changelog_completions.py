@@ -6,7 +6,7 @@ components and card links — so an Undo restores those too."""
 from datetime import date
 from decimal import Decimal
 
-from app.models import CategoryBudget, RewardCategory, SpendingCategory
+from app.models import Account, CategoryBudget, CreditCard, RewardCategory, SpendingCategory
 from tests.exact_undo import images, logged, shape, undo
 
 NW = "/api/v1/net-worth"
@@ -91,6 +91,56 @@ async def test_deleting_a_category_takes_its_budgets_and_links_and_undo_restores
     assert {row.label for row in rows} == {"Deleted category Food"}
     # Rent's budget and the unlinked Travel row were never touched.
     assert [row["category_id"] for row in await images(db, CategoryBudget)] == [rent_id]
+    assert (await undo(auth_client, batch_id)).status_code == 200
+    for model in tables:
+        assert await images(db, model) == before[model]
+
+
+async def test_deleting_an_account_unlinks_its_components_and_cards_and_undo_relinks_them(
+    auth_client, db
+):
+    balance = Account(
+        name="Sapphire balance", slug="sapphire-balance", group="liability", sort_order=1
+    )
+    db.add(balance)
+    await db.flush()
+    db.add_all(
+        [
+            Account(
+                name="Sapphire authorized user",
+                slug="sapphire-authorized-user",
+                group="liability",
+                sort_order=2,
+                is_component=True,
+                parent_account_id=balance.id,
+            ),
+            Account(name="Checking", slug="checking", group="cash", sort_order=3),
+            CreditCard(
+                name="Chase Sapphire Reserve",
+                slug="chase-sapphire-reserve",
+                annual_fee=Decimal("795.00"),
+                rewards_currency="points",
+                point_value_cents=Decimal("1.5000"),
+                account_id=balance.id,
+            ),
+            CreditCard(name="Citi Double Cash", slug="citi-double-cash", rewards_currency="cash"),
+        ]
+    )
+    await db.commit()
+    balance_id = balance.id
+    tables = (Account, CreditCard)
+    before = {model: await images(db, model) for model in tables}
+    deleted = await auth_client.delete(f"{NW}/accounts/{balance_id}")
+    assert deleted.status_code == 204, deleted.text
+    batch_id = deleted.headers["x-change-batch"]
+    rows = await logged(db, batch_id)
+    assert shape(rows) == [
+        ("update", "accounts"),
+        ("update", "credit_cards"),
+        ("delete", "accounts"),
+    ]
+    assert rows[0].after["parent_account_id"] is None and rows[1].after["account_id"] is None
+    assert {row.label for row in rows} == {"Deleted account Sapphire balance"}
     assert (await undo(auth_client, batch_id)).status_code == 200
     for model in tables:
         assert await images(db, model) == before[model]

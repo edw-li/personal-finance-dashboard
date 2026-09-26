@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot, Person
+from app.models import ACCOUNT_GROUPS, Account, AccountBalance, CreditCard, NetWorthSnapshot, Person
 from app.schemas.net_worth import (
     AccountCreate,
     AccountOut,
@@ -312,6 +312,11 @@ async def delete_account(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Response:
+    """Refused while balance rows exist (deactivate instead). Otherwise the links that point at
+    the account are nulled first — its components' parent_account_id and credit cards'
+    account_id, the end state the FKs' SET NULL left — each imaged through the ORM, then the
+    account LAST, so an Undo (which replays in reverse) brings the account back and relinks
+    them (2026-09-25 polish spec §6.1)."""
     account = await _get_account(db, account_id)
     balance_count = (
         await db.execute(
@@ -325,11 +330,31 @@ async def delete_account(
             status_code=409,
             detail=f"account has {balance_count} balance rows — deactivate it instead",
         )
+    components = (
+        await db.execute(
+            select(Account).where(Account.parent_account_id == account_id).order_by(Account.id)
+        )
+    ).scalars()
+    for component in components:
+        before = row_image(component)
+        component.parent_account_id = None
+        batch.record_update(component, before)
+    cards = (
+        await db.execute(
+            select(CreditCard).where(CreditCard.account_id == account_id).order_by(CreditCard.id)
+        )
+    ).scalars()
+    for card in cards:
+        before = row_image(card)
+        card.account_id = None
+        batch.record_update(card, before)
+    # Out before the account's own DELETE, so the statements run in the order they were imaged.
+    await db.flush()
     batch.record_delete(account)
     batch.label = f"Deleted account {account.name}"
     await db.delete(account)
-    await batch.commit()
-    return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
 
 
 QUARTER_END_MONTHS = (3, 6, 9, 12)
