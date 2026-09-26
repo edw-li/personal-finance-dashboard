@@ -53,8 +53,9 @@ const deletes = (id: number, batchId: string | null = 'b-1') => async () => {
   return { batchId }
 }
 
-/** A list the way a wave-2 panel is one: rows keyed by id, each with Edit and Delete, reloading from `stored`. */
-function List({ keepRows = false }: { keepRows?: boolean }) {
+/** A list the way a wave-2 panel is one: rows keyed by id, each with Edit and Delete, reloading from
+ *  `stored`. `withFocusAfter: false` leaves the caret's destination to the hook. */
+function List({ keepRows = false, withFocusAfter = true }: { keepRows?: boolean; withFocusAfter?: boolean }) {
   const [rows, setRows] = useState<Security[]>(stored)
   const remove = useDeleteWithUndo()
   const reload = async () => {
@@ -78,7 +79,9 @@ function List({ keepRows = false }: { keepRows?: boolean }) {
                     row: event.currentTarget.closest('li'),
                     request,
                     onDeleted: reload,
-                    focusAfter: () => document.querySelector<HTMLElement>(`[data-row="${next?.id}"] button:last-of-type`),
+                    focusAfter: withFocusAfter
+                      ? () => document.querySelector<HTMLElement>(`[data-row="${next?.id}"] button:last-of-type`)
+                      : undefined,
                     onRestored: reload,
                     restoredRow: () => document.querySelector<HTMLElement>(`[data-row="${row.id}"]`),
                   }),
@@ -94,12 +97,56 @@ function List({ keepRows = false }: { keepRows?: boolean }) {
   )
 }
 
-const renderList = (keepRows = false) =>
+const renderList = ({ keepRows = false, withFocusAfter = true } = {}) =>
   render(
     <ToastProvider>
-      <List keepRows={keepRows} />
+      <List keepRows={keepRows} withFocusAfter={withFocusAfter} />
     </ToastProvider>,
   )
+
+/** The pattern the hook's docs warn against — the hook owned by each ROW, so it unmounts with its row
+ *  — which must still find the row an Undo brings back. */
+function RowOwnedList() {
+  const [rows, setRows] = useState<Security[]>(stored)
+  const reload = async () => {
+    await reloadGate()
+    setRows([...stored])
+  }
+  return (
+    <ul>
+      {rows.map((row) => (
+        <OwnRow key={row.id} row={row} reload={reload} />
+      ))}
+    </ul>
+  )
+}
+
+function OwnRow({ row, reload }: { row: Security; reload: () => Promise<void> }) {
+  const remove = useDeleteWithUndo()
+  return (
+    <li data-row={row.id}>
+      {row.ticker}
+      <button type="button">Edit {row.ticker}</button>
+      <button
+        type="button"
+        onClick={(event) => {
+          results.push(
+            remove({
+              name: `security ${row.ticker}`,
+              row: event.currentTarget.closest('li'),
+              request,
+              onDeleted: reload,
+              onRestored: reload,
+              restoredRow: () => document.querySelector<HTMLElement>(`[data-row="${row.id}"]`),
+            }),
+          )
+        }}
+      >
+        Delete {row.ticker}
+      </button>
+    </li>
+  )
+}
 const polite = () => document.querySelector('.toast-region:not(.toast-region-alert)')?.textContent ?? ''
 const alerts = () => document.querySelector('.toast-region-alert')?.textContent ?? ''
 const row = (id: number) => document.querySelector<HTMLElement>(`[data-row="${id}"]`)
@@ -222,7 +269,7 @@ describe('useDeleteWithUndo', () => {
 
   it('does not leave faded a row the reload kept', async () => {
     request.mockImplementationOnce(async () => ({ batchId: 'b-1' }))
-    renderList(true)
+    renderList({ keepRows: true })
     fireEvent.click(screen.getByRole('button', { name: 'Delete VOO' }))
     await waitFor(() => expect(polite()).toContain('Deleted security VOO'))
     expect(row(1)?.hasAttribute('data-leaving')).toBe(false)
@@ -238,5 +285,94 @@ describe('useDeleteWithUndo', () => {
     fireEvent.click(undo)
     await waitFor(() => expect(polite()).toContain('Restored security VOO'))
     expect(undoBatch).toHaveBeenCalledWith('b-1')
+  })
+})
+
+describe('a hook owned by the row it deletes (review #4)', () => {
+  it('still finds, reveals, flashes and focuses the row an Undo brings back', async () => {
+    request.mockImplementationOnce(deletes(1))
+    vi.mocked(undoBatch).mockImplementationOnce(async () => {
+      stored = [...ALL]
+      return BATCH
+    })
+    render(
+      <ToastProvider>
+        <RowOwnedList />
+      </ToastProvider>,
+    )
+    const del = screen.getByRole('button', { name: 'Delete VOO' })
+    del.focus()
+    fireEvent.click(del)
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(polite()).toContain('Restored security VOO'))
+    const back = row(1) as HTMLElement
+    expect(back.hasAttribute('data-flash')).toBe(true)
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts).toContain(back)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete VOO' }))
+  })
+})
+
+describe('the caret never falls to <body> (spec §6.3, review #5)', () => {
+  it('with no focusAfter, goes to the row that stood after the deleted one, where the delete was pressed', async () => {
+    request.mockImplementationOnce(deletes(1))
+    renderList({ withFocusAfter: false })
+    const del = screen.getByRole('button', { name: 'Delete VOO' })
+    del.focus()
+    fireEvent.click(del)
+    await waitFor(() => expect(polite()).toContain('Deleted security VOO'))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete VTI' }))
+  })
+
+  it('…to the row before it when the last row goes', async () => {
+    request.mockImplementationOnce(deletes(3))
+    renderList({ withFocusAfter: false })
+    const del = screen.getByRole('button', { name: 'Delete BND' })
+    del.focus()
+    fireEvent.click(del)
+    await waitFor(() => expect(polite()).toContain('Deleted security BND'))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete VTI' }))
+  })
+
+  it('leaves the caret where the user put it while the delete ran', async () => {
+    const answer = deferred<{ batchId: string | null }>()
+    request.mockReturnValueOnce(answer.promise)
+    renderList({ withFocusAfter: false })
+    const del = screen.getByRole('button', { name: 'Delete VOO' })
+    del.focus()
+    fireEvent.click(del)
+    const elsewhere = screen.getByRole('button', { name: 'Edit BND' })
+    elsewhere.focus()
+    stored = stored.filter((s) => s.id !== 1)
+    answer.resolve({ batchId: 'b-1' })
+    await waitFor(() => expect(polite()).toContain('Deleted security VOO'))
+    expect(document.activeElement).toBe(elsewhere)
+  })
+
+  it('hands the caret back to the list (focusAfter) when the Undo is refused', async () => {
+    request.mockImplementationOnce(deletes(1))
+    vi.mocked(undoBatch).mockRejectedValueOnce(new ApiError('Later changes touched these rows — undo those first', 409))
+    renderList()
+    const del = screen.getByRole('button', { name: 'Delete VOO' })
+    del.focus()
+    fireEvent.click(del)
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    undo.focus()
+    fireEvent.click(undo)
+    await waitFor(() => expect(alerts()).toContain('Later changes touched these rows'))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete VTI' }))
+  })
+
+  it('…and to the row beside the deleted one when there is no focusAfter', async () => {
+    request.mockImplementationOnce(deletes(1))
+    vi.mocked(undoBatch).mockRejectedValueOnce(new ApiError('Later changes touched these rows — undo those first', 409))
+    renderList({ withFocusAfter: false })
+    const del = screen.getByRole('button', { name: 'Delete VOO' })
+    del.focus()
+    fireEvent.click(del)
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    undo.focus()
+    fireEvent.click(undo)
+    await waitFor(() => expect(alerts()).toContain('Later changes touched these rows'))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete VTI' }))
   })
 })
