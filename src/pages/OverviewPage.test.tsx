@@ -2552,6 +2552,58 @@ describe('OverviewPage chart cards (charts C2)', () => {
   })
 })
 
+// 2026-09-25 polish spec §3.2 (OU-16): the half-width charts pair only when adjacent in the order the
+// reader chose; a chart with no half-width neighbour runs the full row.
+describe('OverviewPage deeper spans follow the chosen order', () => {
+  const spanOf = (name: RegExp): number | null => {
+    const card = screen.getByRole('heading', { name }).closest('section.chart-card') as HTMLElement
+    return card.classList.contains('span-6') ? 6 : card.classList.contains('span-12') ? 12 : null
+  }
+  const saveCards = (cards: string[]) =>
+    localStorage.setItem(STORAGE_KEYS.overview_layout, JSON.stringify({ tiles: [...DEFAULT_OVERVIEW_LAYOUT.tiles], cards }))
+
+  it('runs Recent spending across the row when Portfolio performance is hidden', async () => {
+    saveCards(['ytd', 'spending', 'money_flow'])
+    serve()
+    renderPage()
+    await screen.findByRole('heading', { name: /Recent spending/ })
+    expect(spanOf(/Recent spending/)).toBe(12)
+  })
+
+  it('runs both charts across the row when Money flow sits between them', async () => {
+    saveCards(['performance', 'money_flow', 'spending', 'ytd'])
+    serve()
+    renderPage()
+    await screen.findByRole('heading', { name: /Recent spending/ })
+    expect(spanOf(/Portfolio performance/)).toBe(12)
+    expect(spanOf(/Recent spending/)).toBe(12)
+  })
+
+  it('pairs the two charts in either order when they are adjacent', async () => {
+    saveCards(['spending', 'performance', 'ytd', 'money_flow'])
+    serve()
+    renderPage()
+    await screen.findByRole('heading', { name: /Recent spending/ })
+    expect(spanOf(/Portfolio performance/)).toBe(6)
+    expect(spanOf(/Recent spending/)).toBe(6)
+  })
+
+  // Year to date draws nothing once its feeds answer without the rollup; an absent card is no
+  // neighbour, so the two charts either side of it still pair.
+  it('pairs the two charts across a Year to date that draws nothing', async () => {
+    saveCards(['performance', 'ytd', 'spending', 'money_flow'])
+    serve()
+    vi.mocked(fetchYearly).mockRejectedValue(new ApiError('rollup offline', 503))
+    renderPage()
+    await screen.findByRole('alert')
+    await screen.findByRole('heading', { name: /Recent spending/ })
+    expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
+    expect(document.querySelector('.overview-deeper .loading-fallback')).toBeNull()
+    expect(spanOf(/Portfolio performance/)).toBe(6)
+    expect(spanOf(/Recent spending/)).toBe(6)
+  })
+})
+
 // 2026-09-23 spec §C2: the money flow folds by the SPENDING PAGE's category set, in the same
 // colours — so a category is one colour on the Overview and on /spending, whatever this year's
 // own ranking says.

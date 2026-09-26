@@ -62,6 +62,7 @@ import { metricReceipt } from '../utils/metricReceipt'
 import { REVIEW_LABELS } from '../api/monthReview'
 import OverviewChanges from '../components/overview/OverviewChanges'
 import OverviewCustomize from '../components/overview/OverviewCustomize'
+import { deeperSpans } from '../components/overview/customizeReflow'
 import { useAssistantView } from '../components/assistant/viewState'
 import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import { getLocal, setLocal, subscribe } from '../prefs/prefsStore'
@@ -429,6 +430,14 @@ export default function OverviewPage() {
     data !== null &&
     ((data.ts?.months.length ?? 0) > 0 || (data.yearly?.years.length ?? 0) > 0 || (data.dividends?.length ?? 0) > 0)
 
+  // The deeper grid's spans follow the order the reader chose (2026-09-25 polish spec §3.2, OU-16),
+  // over the views that DRAW: Year to date renders nothing once its feeds answer with no history, and
+  // a card that is not there must not keep the two charts apart. Its skeleton, while those feeds are
+  // out, is a card, so it counts.
+  const ytdDraws = showYtd || (ytd === null && (wealth.busy || investments.busy || spending.busy))
+  const shownDeeper = layout.cards.filter((id) => id !== 'ytd' || ytdDraws)
+  const deeperSpan = deeperSpans(shownDeeper)
+
   // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
   // paycheck is entered but whose spending is not comes back with an explicit "0.00". A
   // green "▼ under $5,000.00 12-mo avg" would congratulate the user for a month they have
@@ -663,7 +672,7 @@ export default function OverviewPage() {
                   </div>
                 </dl>
               </section>
-            ) : ytd === null && (wealth.busy || investments.busy || spending.busy) ? (
+            ) : ytdDraws ? (
               // Spec §9: reserve the slot while the feeds behind it are still in flight — the card
               // used to appear out of nothing when `dividends` landed and shoved the deeper stack
               // down 212px on a slow investments feed.
@@ -673,7 +682,7 @@ export default function OverviewPage() {
             ) : null,
     performance: (
               <ChartCard
-                span={6}
+                span={deeperSpan.get('performance') ?? 12}
                 title="Portfolio performance"
                 hint={performanceHint}
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
@@ -703,7 +712,7 @@ export default function OverviewPage() {
     ),
     spending: (
               <ChartCard
-                span={6}
+                span={deeperSpan.get('spending') ?? 12}
                 title="Recent spending"
                 // The dashed line is spendStats.avg12 (the twelve months BEFORE the
                 // latest), which is also the figure the spend tile compares against — the
