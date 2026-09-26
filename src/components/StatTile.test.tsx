@@ -274,11 +274,12 @@ describe('StatTile badge and label unit', () => {
     expect(document.querySelector('.stat-label')?.textContent).toBe('Net worth')
   })
 
-  it('pins the CSS: the unit is nowrap and the pill wears --fill at .7rem in the caller’s casing', () => {
+  it('pins the CSS: the unit is nowrap and the pill wears --fill in the caller’s casing', () => {
     const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\s+/g, ' ')
     expect(css).toContain('.stat-label-text { white-space: nowrap; }')
-    expect(css).toMatch(/\.stat-badge \{[^}]*background: var\(--fill\);[^}]*font-size: 0\.7rem;[^}]*text-transform: none;/)
+    // The box (0.7rem, its padding) is shared with the steady row's reserve — tileRowCss.test.ts.
+    expect(css).toMatch(/\.stat-badge \{[^}]*background: var\(--fill\);[^}]*text-transform: none;/)
   })
 })

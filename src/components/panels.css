@@ -78,11 +78,40 @@
 
 /* ── Stat tiles ────────────────────────────────────────────────────── */
 
+/* One strip, four lines (2026-09-25 polish spec §4.1, contract C4). The row is the grid and every tile
+   a four-row SUBGRID of it — label · badge · value · delta — so a line's labels, badges, values and
+   deltas share tracks: the figures sit on one baseline and the deltas start on one line whatever each
+   tile carries. The row has NO row gap on purpose: a subgrid's tracks absorb half the parent's gutter
+   on each side, so a row gap opened inside every tile (an empty badge line measured 16px in Edge).
+   Lines of tiles are spaced by each tile's bottom margin instead, and the row's own margin gives that
+   back: the space under a row is --kpi-row-after either way (a page that wants more sets the variable). */
 .kpi-row {
+  --kpi-row-after: 1rem;
   display: grid;
-  gap: var(--density-grid-gap);
+  column-gap: var(--density-grid-gap);
+  row-gap: 0;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  margin-bottom: 1rem;
+  margin-bottom: calc(var(--kpi-row-after) - var(--density-grid-gap));
+}
+
+.kpi-row > * {
+  margin-bottom: var(--density-grid-gap);
+}
+
+.kpi-row > .stat-tile,
+.kpi-row > .stat-tile-slot,
+.stat-tile-slot > .stat-tile {
+  grid-row: span 4;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+}
+
+/* A wrapper that labels its tile (CashflowStrip's role="group") takes part in the row's four lines
+   too: a subgrid of the row whose one child is a subgrid of it — the wrappers were stretched while
+   the tiles inside kept their content height, a 22px ragged bottom (PCC-17). */
+.stat-tile-slot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* A LONE tile in the auto-fit grid would stretch the full content column — single-tile
@@ -123,12 +152,18 @@
 }
 
 .stat-tile {
+  display: grid;
+  /* One track exactly the tile's width: an auto column would widen to a nowrap label and wrap the
+     delta past the tile's edge. */
+  grid-template-columns: minmax(0, 1fr);
+  /* A tile outside a row (Card detail's verdict) has four rows of its own, packed at the top. */
+  align-content: start;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.9rem 1.1rem 1rem;
-  /* The query container .stat-value sizes against — see its comment. */
-  container-type: inline-size;
+  /* NOT a size container: a container establishes an independent formatting context, and that turns
+     the subgrid off — four tiles' lines drifted apart in Edge. .stat-value is the container now. */
 }
 
 .stat-label {
@@ -147,19 +182,50 @@
   white-space: nowrap;
 }
 
-/* A small status pill after the label, in the caller's own casing — a state, not an eyebrow. */
-.stat-badge {
-  display: inline-block;
-  margin-left: 0.5rem;
+/* Line 2, the badge's own line: beside the label a badge wrapped under it in a narrow tile and dropped
+   that one value off the row's baseline (OU-03). Empty, it is 0px — a line where no tile has a badge
+   costs nothing. A flex row, so the line is the badge's own height and not a text strut's. */
+.stat-badge-row {
+  display: flex;
+  align-items: center;
+}
+
+.stat-badge-row:not(:empty) {
+  margin-bottom: 0.35rem;
+}
+
+/* The badge's box — shared with a steady row's reserve (below), so a reserved line is exactly a badge
+   tall. */
+.stat-badge,
+.kpi-row-steady .stat-badge-row:empty::before {
   padding: 0.05rem 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+/* A small status pill in the caller's own casing — a state, not an eyebrow. */
+.stat-badge {
   border-radius: 999px;
   background: var(--fill);
   color: var(--muted);
-  font-size: 0.7rem;
-  font-weight: 500;
   letter-spacing: normal;
   text-transform: none;
-  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* Line 3. The size container its figure scales against — the tile cannot be one (see .stat-tile), and
+   this box is the tile's content width, what cqi read when the tile was the container. Values share
+   the line's FIRST baseline, a hero's included; a unit line hangs below its figure (Money lasts) rather
+   than lifting it off the row, which is what `last baseline` did (measured 16px in Edge). */
+.stat-value {
+  container-type: inline-size;
+  align-self: baseline;
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  /* Small on purpose: the figure sets the line, this only sizes the line's strut. */
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -170,13 +236,8 @@
    number would no longer fit, the font shrinks with its own tile. The number itself never
    breaks — nowrap forbids it, so a too-long value overflows visibly rather than lying about
    its digits; tabular numerals keep count-ups steady. */
-.stat-value {
-  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+.stat-value-figure {
   font-size: min(clamp(1.1rem, 0.9rem + 0.5vw, 1.45rem), 10.5cqi);
-  font-weight: 600;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 /* The hero's cqi cap is LOOSER than the normal tile's 10.5cqi on purpose. cqi resolves
@@ -190,7 +251,7 @@
    padding rather than the card edge. That is the deliberate trade — `white-space: nowrap`
    plus visible overflow keeps the digits whole instead of wrapping or lying. The normal
    .stat-value keeps 10.5cqi: it has no headroom to give. */
-.stat-tile-hero .stat-value {
+.stat-tile-hero .stat-value-figure {
   font-size: min(clamp(1.5rem, 1rem + 1.1vw, 2.4rem), 12cqi);
 }
 
@@ -206,9 +267,39 @@
   white-space: normal;
 }
 
+/* Line 4. Empty, it costs nothing: a line whose tiles carry no delta ends at its values. */
 .stat-delta {
   margin-top: 0.35rem;
   font-size: 0.8rem;
+}
+
+.stat-delta:empty {
+  margin-top: 0;
+}
+
+/* A delta's clauses are atomic (spec §4.3): the line breaks between "…since Sep 1" and "· 21 days",
+   never inside "Sep 1" or "21 days". inline-block rather than nowrap, so a clause wider than its whole
+   tile still wraps inside itself instead of running out of the tile. */
+.stat-delta-clause {
+  display: inline-block;
+}
+
+/* A steady row keeps one height as its month changes (the Overview, Net worth, Spending; spec §4.3):
+   its badge line and one delta line stand whether or not the month on show fills them. The reserve is
+   an invisible no-break space in the badge's own box and in the delta's own type, so a reserved line is
+   exactly as tall as the line it stands in for. */
+.kpi-row-steady .stat-badge-row {
+  margin-bottom: 0.35rem;
+}
+
+.kpi-row-steady .stat-badge-row:empty::before,
+.kpi-row-steady .stat-delta:empty::before {
+  content: '\a0';
+  visibility: hidden;
+}
+
+.kpi-row-steady .stat-delta:empty {
+  margin-top: 0.35rem;
 }
 
 .stat-delta-positive { color: var(--positive); }
