@@ -329,6 +329,9 @@ async function monthsGroup(options) {
       // selected month is checked without needlessly reloading the entire application.
       await visit(page, `${route}?month=${months[0]}`)
       for (const month of months) {
+        // Spending's selected month also opens its chart-detail overlay at narrow widths.
+        // Navigate its explicit scope URL so the next ribbon target is not behind that panel.
+        if (route === '/spending' && month !== months[0]) await visit(page, `${route}?month=${month}`)
         const expectedLabel = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${month}-01T00:00:00Z`))
         const chip = page.locator(`.month-chip2[aria-label^="${expectedLabel} "]`)
         for (let window = 0; await chip.count() === 0 && window < 10; window++) {
