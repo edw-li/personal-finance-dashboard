@@ -9,29 +9,41 @@ import { describe, expect, it } from 'vitest'
 // log can reverse, does not ask at all (useDeleteWithUndo). Enforced over the source tree rather than
 // by review, by walking the TypeScript AST (clockFence.test.ts's matcher, so comments and strings never
 // count): `window.confirm` / `globalThis.confirm` / `self.confirm` in any form, and a bare
-// `confirm(…)` call in a file that binds no `confirm` of its own — `const confirm = useConfirm()` is the
-// house hook, not the browser's.
+// `confirm(…)` call — unless the file binds a `confirm` of its own AND the call hands it an options
+// object literal, which is the house hook's one shape (`const confirm = useConfirm();
+// confirm({ anchor, title, … })`). A bound `confirm` handed a string, a template or nothing counts: that
+// is the browser's shape, so call the hook with its options written in place, and name any local helper
+// something other than `confirm`.
 //
-// HOW THE LIST SHRINKS. ALLOWLIST holds the calls that stood when lane L4 landed, counted per file. The
-// wave-2 lane that converts a call lowers its file's count — or deletes the entry — in the SAME commit;
-// the exact-count test fails until it does, and no file may join or grow (ALLOWLIST_AT_LANDING is the
-// ceiling). Lane V, once wave 2 has merged, adds the test that pins the list empty, as
-// clockFence.test.ts did when its list emptied:
+// HOW THE LIST SHRINKS. ALLOWLIST holds the calls that stood when lane L4 landed, counted per file and
+// grouped by the wave-2 lane that converts them, so each lane's removals land in its own block and the
+// four merge cleanly. That lane lowers its file's count — or deletes the entry — in the SAME commit that
+// converts the call; the exact-count test fails until it does, and no file may join or grow
+// (ALLOWLIST_AT_LANDING is the ceiling). An emptied block keeps its heading. Lane V, once wave 2 has
+// merged, adds the test that pins the list empty, as clockFence.test.ts did when its list emptied:
 //   it('the allowlist is empty — wave 2 converted every native confirm', () => expect(ALLOWLIST).toEqual({}))
 
 const SRC = path.resolve(__dirname, '../..')
 
-/** Native confirms still standing, counted per file, with the lane that converts each (spec §6.4). */
+/** Native confirms still standing, counted per file, grouped by the lane that converts them (spec §6.4). */
 const ALLOWLIST: Record<string, number> = {
-  'components/portfolio/SecuritiesPanel.tsx': 1, // L6: security delete → instant + Undo
-  'components/settings/RestoreCard.tsx': 1, // L5: Restore → the popover, its typed date arm inside
-  'components/taxes/BracketsEditor.tsx': 2, // L7: the status tab's discard guard; emptying a table
-  'components/taxes/WithholdingPanel.tsx': 1, // L7: Vest Apply over dirty Inputs
-  'pages/CompPage.tsx': 1, // L6: comp event delete → instant + Undo
-  'pages/EsppPage.tsx': 3, // L6: lot and offering deletes, a period's Reset → instant + Undo
-  'pages/PaycheckPage.tsx': 1, // L6: profile delete → instant + Undo
-  'pages/SettingsPage.tsx': 1, // L5: Apply import
-  'pages/TaxesPage.tsx': 3, // L7: the year-switch and status-Undo discard guards; what-if Apply
+  // L5 Settings
+  'components/settings/RestoreCard.tsx': 1, // Restore → the popover, its typed date arm inside
+  'pages/SettingsPage.tsx': 1, // Apply import
+
+  // L6 Portfolio·ESPP·Comp·Paycheck
+  'components/portfolio/SecuritiesPanel.tsx': 1, // security delete → instant + Undo
+  'pages/CompPage.tsx': 1, // comp event delete → instant + Undo
+  'pages/EsppPage.tsx': 3, // lot and offering deletes, a period's Reset → instant + Undo
+  'pages/PaycheckPage.tsx': 1, // profile delete → instant + Undo
+
+  // L7 Cards·Calendar·Budgets·Projection·Assistant
+  // (none: these surfaces ask with in-app lines or not at all today)
+
+  // L8 Taxes·Monthly update
+  'components/taxes/BracketsEditor.tsx': 2, // the status tab's discard guard; emptying a table
+  'components/taxes/WithholdingPanel.tsx': 1, // Vest Apply over dirty Inputs
+  'pages/TaxesPage.tsx': 3, // the year-switch and status-Undo discard guards; what-if Apply
 }
 /** The list when lane L4 landed (2026-09-25): 14 calls in 9 files. The allowlist may only shrink. */
 const ALLOWLIST_AT_LANDING: Record<string, number> = {
@@ -65,13 +77,15 @@ function declaresConfirm(node: ts.Node): boolean {
   return name !== undefined && ts.isIdentifier(name) && name.text === 'confirm'
 }
 
-/** Every native confirm in `text`, from its AST: a read of `confirm` off a global (called or not), and a
- *  bare `confirm(…)` call where the file declares no `confirm` of its own. */
+/** Every native confirm in `text`, from its AST: a read of `confirm` off a global (called or not); a
+ *  bare `confirm(…)` handed anything but an options object literal; and a bare `confirm({ … })` where the
+ *  file declares no `confirm` of its own (then it is the global's). */
 function nativeConfirms(fileName: string, text: string): number {
   const kind = fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, false, kind)
   let reads = 0
-  let bareCalls = 0
+  let browserShaped = 0
+  let hookShaped = 0
   let bindsConfirm = false
   const visit = (node: ts.Node): void => {
     if (ts.isPropertyAccessExpression(node) && node.name.text === 'confirm' && isGlobal(node.expression)) {
@@ -84,13 +98,15 @@ function nativeConfirms(fileName: string, text: string): number {
     ) {
       reads += 1
     } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'confirm') {
-      bareCalls += 1
+      const first = node.arguments[0]
+      if (first !== undefined && ts.isObjectLiteralExpression(first)) hookShaped += 1
+      else browserShaped += 1
     }
     if (declaresConfirm(node)) bindsConfirm = true
     ts.forEachChild(node, visit)
   }
   visit(source)
-  return reads + (bindsConfirm ? 0 : bareCalls)
+  return reads + browserShaped + (bindsConfirm ? 0 : hookShaped)
 }
 
 function sources(dir: string): string[] {
@@ -147,6 +163,12 @@ describe('the native-confirm fence (2026-09-25 polish spec D2, §6.3)', () => {
       "window['confirm']('x')",
       'const ask = window.confirm', // a read is a use
       "confirm('Delete?')", // the bare global
+      "confirm({ title: 'x' })", // unbound, it is the global, whatever it is handed
+      // The binding hole, shut: a bound `confirm` handed anything but an options object is the
+      // browser's shape — a string, a template, nothing at all (name a local helper something else).
+      "const confirm = useConfirm(); confirm('Delete?')",
+      'function f({ confirm }: { confirm: (m: string) => boolean }) { return confirm(`Delete ${x}?`) }',
+      "import { confirm } from './x'; confirm()",
     ])
       expect(count(hit), hit).toBe(1)
     for (const miss of [
@@ -154,8 +176,8 @@ describe('the native-confirm fence (2026-09-25 polish spec D2, §6.3)', () => {
       "/* confirm('x') */ const a = 1",
       'const words = "window.confirm(x)"',
       "const confirm = useConfirm(); await confirm({ title: 'x' })",
-      'function f({ confirm }: { confirm: () => void }) { confirm() }',
-      "import { confirm } from './x'; confirm()",
+      'function f({ confirm }: { confirm: (o: object) => void }) { confirm({ anchor }) }',
+      "import { confirm } from './x'; confirm({ ...options, title: 'x' })",
       'dialog.confirm()',
       'const t = { confirm: 1 }',
     ])
