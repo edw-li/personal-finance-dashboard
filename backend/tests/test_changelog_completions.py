@@ -3,7 +3,11 @@ spec §6.1): every one now answers X-Change-Batch, and the two deletes image wha
 row they remove — a category's budget history and reward-category links, an account's
 components and card links — so an Undo restores those too."""
 
-from tests.exact_undo import logged
+from datetime import date
+from decimal import Decimal
+
+from app.models import CategoryBudget, RewardCategory, SpendingCategory
+from tests.exact_undo import images, logged, shape, undo
 
 NW = "/api/v1/net-worth"
 SP = "/api/v1/spending"
@@ -39,3 +43,54 @@ async def test_account_and_category_writes_answer_their_batch(auth_client, db):
         await auth_client.put(f"{category_path}/budget", json=budget),
     ):
         assert resp.status_code == 200 and "x-change-batch" not in resp.headers
+
+
+async def test_deleting_a_category_takes_its_budgets_and_links_and_undo_restores_them(
+    auth_client, db
+):
+    food = SpendingCategory(name="Food", slug="food", sort_order=1)
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=2)
+    db.add_all([food, rent])
+    await db.flush()
+    db.add_all(
+        [
+            CategoryBudget(
+                category_id=food.id, effective_month=date(2026, 7, 1), amount=Decimal("600.00")
+            ),
+            # The dated "budget ends here" marker is history too.
+            CategoryBudget(category_id=food.id, effective_month=date(2026, 9, 1), amount=None),
+            CategoryBudget(
+                category_id=rent.id, effective_month=date(2026, 7, 1), amount=Decimal("2000.00")
+            ),
+            RewardCategory(
+                name="Dining", slug="dining", sort_order=0, spending_category_id=food.id
+            ),
+            RewardCategory(
+                name="Groceries", slug="groceries", sort_order=1, spending_category_id=food.id
+            ),
+            RewardCategory(name="Travel", slug="travel", sort_order=2),
+        ]
+    )
+    await db.commit()
+    food_id, rent_id = food.id, rent.id
+    tables = (SpendingCategory, CategoryBudget, RewardCategory)
+    before = {model: await images(db, model) for model in tables}
+    deleted = await auth_client.delete(f"{SP}/categories/{food_id}")
+    assert deleted.status_code == 204, deleted.text
+    batch_id = deleted.headers["x-change-batch"]
+    rows = await logged(db, batch_id)
+    assert shape(rows) == [
+        ("update", "reward_categories"),
+        ("update", "reward_categories"),
+        ("delete", "category_budgets"),
+        ("delete", "category_budgets"),
+        ("delete", "spending_categories"),
+    ]
+    assert [row.after["spending_category_id"] for row in rows[:2]] == [None, None]
+    assert [row.month for row in rows] == [None, None, date(2026, 7, 1), date(2026, 9, 1), None]
+    assert {row.label for row in rows} == {"Deleted category Food"}
+    # Rent's budget and the unlinked Travel row were never touched.
+    assert [row["category_id"] for row in await images(db, CategoryBudget)] == [rent_id]
+    assert (await undo(auth_client, batch_id)).status_code == 200
+    for model in tables:
+        assert await images(db, model) == before[model]
