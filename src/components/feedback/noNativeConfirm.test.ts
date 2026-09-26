@@ -32,7 +32,6 @@ const ALLOWLIST: Record<string, number> = {
   'pages/SettingsPage.tsx': 1, // Apply import
 
   // L6 Portfolio·ESPP·Comp·Paycheck
-  'components/portfolio/SecuritiesPanel.tsx': 1, // security delete → instant + Undo
   'pages/CompPage.tsx': 1, // comp event delete → instant + Undo
   'pages/EsppPage.tsx': 3, // lot and offering deletes, a period's Reset → instant + Undo
   'pages/PaycheckPage.tsx': 1, // profile delete → instant + Undo

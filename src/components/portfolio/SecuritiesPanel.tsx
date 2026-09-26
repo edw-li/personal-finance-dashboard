@@ -1,5 +1,12 @@
 import { useState } from 'react'
 import { ApiError } from '../../api/client'
+import BusyButton from '../feedback/BusyButton'
+import { SaveButton } from '../feedback/SaveButton'
+import { SaveStatus } from '../feedback/SaveStatus'
+import { flashElement, revealEditor, useEscapeCancel } from '../feedback/reveal'
+import { useDeleteWithUndo } from '../feedback/useDeleteWithUndo'
+import { useLatest } from '../reorder/useLatest'
+import { useRecordFeedback } from './useRecordFeedback'
 import { createSecurity, deleteSecurity, updateSecurity } from '../../api/portfolio'
 import { putManualPrice } from '../../api/prices'
 import AmountInput from '../AmountInput'
@@ -37,7 +44,7 @@ export default function SecuritiesPanel({
   onChanged,
 }: {
   securities: SecurityOut[]
-  onChanged: () => void
+  onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -46,6 +53,25 @@ export default function SecuritiesPanel({
   const [price, setPrice] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [priceError, setPriceError] = useState<string | null>(null)
+  const [pricing, setPricing] = useState(false)
+  const feedback = useRecordFeedback(form, securities, 'data-security-id')
+  const latest = useLatest({ onChanged, editingId, pricingId })
+  const deleteWithUndo = useDeleteWithUndo()
+  const cancelEdit = () => {
+    if (busy) return
+    feedback.focusRow(editingId)
+    setEditingId(null)
+    setForm(EMPTY)
+    feedback.begin(EMPTY)
+    setError(null)
+  }
+  const closePrice = () => {
+    feedback.row(pricingId)?.querySelector<HTMLButtonElement>('[data-price]')?.focus()
+    setPricingId(null)
+    setPriceError(null)
+  }
+  useEscapeCancel(feedback.formRef, cancelEdit, editingId !== null && !busy)
 
   // The union and the two booleans are excluded: they have dedicated handlers below
   // (same split as TransactionsPanel's `type`).
@@ -56,7 +82,7 @@ export default function SecuritiesPanel({
 
   const startEdit = (security: SecurityOut) => {
     setEditingId(security.id)
-    setForm({
+    const next: FormState = {
       ticker: security.ticker,
       name: security.name,
       industry: security.industry ?? '',
@@ -64,10 +90,15 @@ export default function SecuritiesPanel({
       annual_dividend: security.annual_dividend ?? '',
       is_manual_priced: security.is_manual_priced,
       is_active: security.is_active,
-    })
+    }
+    setForm(next)
+    feedback.begin(next)
+    setError(null)
+    feedback.reveal()
   }
 
   const submit = () => {
+    if (busy) return
     if (!form.ticker.trim() || !form.name.trim()) {
       setError('Ticker and name are required')
       return
@@ -104,56 +135,61 @@ export default function SecuritiesPanel({
             holding_type: form.holding_type,
             is_manual_priced: form.is_manual_priced,
           })
-    request
-      .then(() => {
-        setForm(EMPTY)
-        setEditingId(null)
-        onChanged()
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Save failed')
-      })
-      .finally(() => setBusy(false))
+    void feedback.state.run(() => request.then((saved) => {
+      if (editingId !== null) feedback.focusRow(editingId)
+      else feedback.formRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+      setForm(EMPTY)
+      feedback.saved(EMPTY, saved?.id ?? editingId, editingId !== null)
+      setEditingId(null)
+      return latest.current.onChanged()
+    })).finally(() => setBusy(false))
   }
 
   const remove = (security: SecurityOut) => {
-    if (!window.confirm(`Delete ${security.ticker}?`)) return
-    deleteSecurity(security.id)
-      .then(() => {
-        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
-        // (Task 14 review I3). Reset on SUCCESS only: a 409 leaves the row in place.
-        if (security.id === editingId) {
+    if (busy) return
+    setBusy(true)
+    void deleteWithUndo({
+      name: `security ${security.ticker}`,
+      row: feedback.row(security.id),
+      request: () => deleteSecurity(security.id),
+      onDeleted: () => {
+        if (latest.current.editingId === security.id) {
           setEditingId(null)
           setForm(EMPTY)
+          feedback.begin(EMPTY)
         }
-        onChanged()
-      })
-      .catch((err: unknown) => {
-        // A referenced security answers 409 "…— deactivate it instead": show it verbatim.
-        setError(err instanceof ApiError ? err.message : 'Delete failed')
-      })
+        if (latest.current.pricingId === security.id) setPricingId(null)
+        return latest.current.onChanged()
+      },
+      onRestored: () => latest.current.onChanged(),
+      restoredRow: () => feedback.row(security.id),
+      focusAfter: feedback.focusAfterDelete(security.id),
+    }).finally(() => setBusy(false))
   }
 
   const savePrice = (security: SecurityOut) => {
+    if (busy) return
     if (!price.trim()) {
-      setError('Price is required')
+      setPriceError('Price is required')
       return
     }
     setBusy(true)
-    setError(null)
+    setPriceError(null)
+    setPricing(true)
     // The wire belt: this mini-form is typed and clicked, often without a blur.
     // { expressions: false } for the same reason as annual_dividend above — price is a 4dp
     // column and the 2dp evaluator would coarsen it.
     putManualPrice(security.ticker, { price: canonicalAmount(price, { expressions: false }) })
       .then(() => {
-        setPricingId(null)
+        closePrice()
         setPrice('')
-        onChanged()
+        flashElement(feedback.row(security.id))
+        return latest.current.onChanged()
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Price update failed')
+        setPriceError(err instanceof ApiError ? err.message : 'Price update failed')
       })
-      .finally(() => setBusy(false))
+      .finally(() => { setBusy(false); setPricing(false) })
   }
 
   return (
@@ -170,8 +206,9 @@ export default function SecuritiesPanel({
         dividend and ex-div date are rewritten by every price refresh for auto-priced
         securities — edit the dividend only on manual-priced ones.
       </p>
-      <FeedBanner error={error} />
       <form
+        ref={feedback.formRef}
+        onChangeCapture={() => { setError(null); feedback.state.clearError() }}
         className="entry-form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -251,19 +288,13 @@ export default function SecuritiesPanel({
           </label>
         )}
         <div className="form-actions">
-          <button type="submit" disabled={busy}>
+          <SaveButton className="button" type="submit" state={feedback.state} inert={busy && feedback.state.status !== 'saving'}>
             {editingId !== null ? 'Save changes' : 'Add security'}
-          </button>
+          </SaveButton>
+          <SaveStatus state={feedback.state} />
+          <FeedBanner error={error} />
           {editingId !== null && (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY)
-              }}
-            >
-              Cancel
-            </button>
+            <BusyButton className="button" type="button" inert={busy} onClick={cancelEdit}>Cancel</BusyButton>
           )}
         </div>
       </form>
@@ -280,7 +311,7 @@ export default function SecuritiesPanel({
           </thead>
           <tbody>
             {securities.map((s) => (
-              <tr key={s.id}>
+              <tr key={s.id} data-security-id={s.id} className={editingId === s.id ? 'is-editing' : undefined} aria-current={editingId === s.id ? true : undefined}>
                 <td>{s.ticker}</td>
                 <td>{s.name}</td>
                 <td>{s.industry ?? '—'}</td>
@@ -290,21 +321,25 @@ export default function SecuritiesPanel({
                 <td>{s.is_manual_priced ? '✓' : '—'}</td>
                 <td>{s.is_active ? '✓' : '—'}</td>
                 <td className="row-actions">
-                  <button type="button" onClick={() => startEdit(s)}>Edit</button>
+                  <BusyButton className="button" data-edit type="button" inert={busy} onClick={() => startEdit(s)}>Edit</BusyButton>
                   {s.is_manual_priced && (
-                    <button
-                      type="button"
+                    <BusyButton className="button" data-price type="button" inert={busy}
                       onClick={() => {
                         setPricingId(s.id)
                         setPrice('')
-                      }}
-                    >
+                        setPriceError(null)
+                        queueMicrotask(() => revealEditor(feedback.row(s.id)?.querySelector('form') ?? null))
+                      }}>
                       Set price
-                    </button>
+                    </BusyButton>
                   )}
-                  <button type="button" onClick={() => remove(s)}>Delete</button>
+                  <BusyButton className="button" data-delete type="button" inert={busy} onClick={() => remove(s)}>Delete</BusyButton>
                   {pricingId === s.id && (
                     <form
+                      onChangeCapture={() => setPriceError(null)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape' && !event.defaultPrevented && !busy) { event.preventDefault(); closePrice() }
+                      }}
                       onSubmit={(e) => {
                         e.preventDefault()
                         savePrice(s)
@@ -323,8 +358,9 @@ export default function SecuritiesPanel({
                           onValueChange={setPrice}
                         />
                       </label>
-                      <button type="submit" disabled={busy}>Save price</button>
-                      <button type="button" onClick={() => setPricingId(null)}>Cancel</button>
+                      <BusyButton className="button" type="submit" busy={pricing} inert={busy && !pricing}>Save price</BusyButton>
+                      <BusyButton className="button" type="button" inert={busy} onClick={closePrice}>Cancel</BusyButton>
+                      <FeedBanner error={priceError} />
                     </form>
                   )}
                 </td>

@@ -6,7 +6,7 @@ import SecuritiesPanel from './SecuritiesPanel'
 vi.mock('../../api/portfolio', () => ({
   createSecurity: vi.fn().mockResolvedValue({}),
   updateSecurity: vi.fn().mockResolvedValue({}),
-  deleteSecurity: vi.fn().mockResolvedValue(undefined),
+  deleteSecurity: vi.fn().mockResolvedValue({ batchId: 'security-batch' }),
 }))
 vi.mock('../../api/prices', () => ({
   putManualPrice: vi.fn().mockResolvedValue({}),
@@ -17,6 +17,12 @@ import { putManualPrice } from '../../api/prices'
 afterEach(cleanup)
 // Call counts are per-test; clearAllMocks keeps the factory's mockResolvedValue.
 beforeEach(() => vi.clearAllMocks())
+
+it('focuses the manual price when its editor opens', async () => {
+  render(<SecuritiesPanel securities={[manualPriced]} onChanged={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Set price' }))
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Price')))
+})
 
 // Auto-priced: refresh owns annual_dividend/ex_div_date, so the panel hides the field.
 const autoPriced: SecurityOut = {
@@ -44,7 +50,8 @@ describe('SecuritiesPanel', () => {
     // …and hidden on auto-priced ones (Task 14 review I2): refresh would overwrite it.
     fireEvent.click(editButtons[0])
     expect(screen.queryByLabelText(/annual dividend/i)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // Exercise the serializer directly; the unchanged form's Save is correctly quiet.
+    fireEvent.submit(screen.getByRole('button', { name: /save changes/i }).closest('form')!)
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     // Hidden must not mean blanked: the PATCH carries the stored value back unchanged,
     // otherwise saving any other field silently nulls the dividend. Exact shape — an
@@ -112,8 +119,7 @@ describe('SecuritiesPanel', () => {
     expect((screen.getByLabelText(/annual dividend/i) as HTMLInputElement).value).toBe('1.2345')
   })
 
-  it('confirm-deleting the row being edited resets the form to create mode', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('instant-deleting the row being edited resets the form to create mode', async () => {
     const onChanged = vi.fn()
     render(<SecuritiesPanel securities={[autoPriced]} onChanged={onChanged} />)
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))

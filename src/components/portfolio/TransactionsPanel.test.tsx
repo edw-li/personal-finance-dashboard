@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { undoBatch } from '../../api/lifecycle'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { ComponentProps } from 'react'
@@ -17,7 +19,7 @@ import ToastProvider from '../ToastProvider'
 vi.mock('../../api/portfolio', () => ({
   createTransaction: vi.fn().mockResolvedValue({}),
   updateTransaction: vi.fn().mockResolvedValue({}),
-  deleteTransaction: vi.fn().mockResolvedValue(undefined),
+  deleteTransaction: vi.fn().mockResolvedValue({ batchId: 'transaction-batch' }),
   // The replay-order PUT (lane R1). Every reorder test answers it or leaves it pending.
   reorderTransactions: vi.fn(),
 }))
@@ -28,10 +30,23 @@ import {
   updateTransaction,
 } from '../../api/portfolio'
 
+vi.mock('../../api/lifecycle', () => ({ undoBatch: vi.fn().mockResolvedValue({}) }))
+
 afterEach(cleanup)
 // Call counts are per-test: the "not called" assertion below would otherwise see the
 // create from an earlier test. clearAllMocks keeps the factory's mockResolvedValue.
 beforeEach(() => vi.clearAllMocks())
+
+it('reveals an edited transaction and returns Escape to its Edit button', async () => {
+  render(<TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={() => {}} />)
+  const edit = screen.getByRole('button', { name: 'Edit' })
+  fireEvent.click(edit)
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Account')))
+  expect(edit.closest('tr')?.getAttribute('aria-current')).toBe('true')
+  fireEvent.keyDown(screen.getByLabelText('Account'), { key: 'Escape' })
+  expect(document.activeElement).toBe(edit)
+  expect(edit.closest('tr')?.classList.contains('is-editing')).toBe(false)
+})
 
 const NEW_ACCOUNT_NOTE =
   "New account 'Schwabb' will be created and assigned to Edward — re-tag it in Settings → Accounts"
@@ -247,41 +262,29 @@ describe('TransactionsPanel', () => {
     expect(createTransaction).not.toHaveBeenCalled()
   })
 
-  it('deletes instantly and Undo re-creates the captured row through the POST', async () => {
-    const onChanged = vi.fn()
-    render(
-      <ToastProvider>
-        <TransactionsPanel
-          securities={securities}
-          transactions={[importTxn]}
-          onChanged={onChanged}
-        />
-      </ToastProvider>,
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'Delete this buy' }))
-    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-    expect(screen.getByText('Deleted the NVDA buy')).toBeTruthy()
-
+  it('deletes before its toast and restores the exact row after a real reload', async () => {
+    let restored = false
+    vi.mocked(undoBatch).mockImplementationOnce(async () => { restored = true; return {} as Awaited<ReturnType<typeof undoBatch>> })
+    function Host() {
+      const [rows, setRows] = useState([importTxn])
+      return <ToastProvider><TransactionsPanel securities={securities} transactions={rows}
+        onChanged={async () => { await Promise.resolve(); setRows(restored ? [importTxn] : []) }} /></ToastProvider>
+    }
+    render(<Host />)
+    const remove = screen.getByRole('button', { name: 'Delete this buy' })
+    remove.focus()
+    fireEvent.click(remove)
+    await screen.findByText('Deleted the NVDA buy')
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
+    expect(document.activeElement).not.toBe(document.body)
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-    // The captured row, re-POSTed field for field — a NEW id is acceptable by design
-    // (spec §4 item 8); the split-row '0' dummies would round-trip verbatim the same way.
-    await waitFor(() =>
-      expect(vi.mocked(createTransaction)).toHaveBeenCalledWith({
-        security_id: 1,
-        account: 'Schwab',
-        type: 'buy',
-        txn_date: null,
-        shares: '10.000000',
-        price: '100.0000',
-        fees: null,
-        split_factor: null,
-        notes: null,
-      }),
-    )
-    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
-    // The undo toast is consumed by its own action — waitFor, not a bare assert, because
-    // the consumed toast now spends ToastProvider's exit window on screen before it goes.
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull())
+    await screen.findByText('Restored the NVDA buy')
+    expect(undoBatch).toHaveBeenCalledWith('transaction-batch')
+    expect(createTransaction).not.toHaveBeenCalled()
+    const row = screen.getByRole('button', { name: 'Edit' }).closest('tr')!
+    expect(row.getAttribute('data-transaction-id')).toBe('7')
+    expect(row.hasAttribute('data-flash')).toBe(true)
+    expect(row.contains(document.activeElement)).toBe(true)
   })
 
   it('keeps the ledger in a .holdings-scroll scroller so the sticky row actions can pin (2026-09-13 polish §7)', () => {
@@ -452,7 +455,7 @@ describe('TransactionsPanel entry session', () => {
     change(screen.getByLabelText(/shares/i), '3')
     change(screen.getByLabelText(/price/i), '151')
     fireEvent.click(await enabledButton(/add another/i))
-    await waitFor(() => expect(screen.getByText('Save failed')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('network')).toBeTruthy())
     // Nothing reached the ledger, so nothing is cleared and nothing is re-narrated: the cue
     // still describes the form truthfully (the kept context is the FIRST add's and is still
     // standing), and the numbers just typed survive for the retry. A cue that vanished on
@@ -484,12 +487,12 @@ describe('TransactionsPanel entry session', () => {
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
     // Still the typed row, not the ledger row's 'Schwab' seed.
     expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('Robinhood')
-    expect((screen.getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Edit' }).getAttribute('aria-disabled') === 'true').toBe(true)
     expect(
-      (screen.getByRole('button', { name: 'Duplicate this buy' }) as HTMLButtonElement).disabled,
+      screen.getByRole('button', { name: 'Duplicate this buy' }).getAttribute('aria-disabled') === 'true',
     ).toBe(true)
     expect(
-      (screen.getByRole('button', { name: 'Delete this buy' }) as HTMLButtonElement).disabled,
+      screen.getByRole('button', { name: 'Delete this buy' }).getAttribute('aria-disabled') === 'true',
     ).toBe(true)
   })
 
@@ -683,9 +686,9 @@ describe('TransactionsPanel reorder — the grip column (spec §5)', () => {
       ] as HTMLButtonElement[]
     grip(VOO_BUY).focus()
     fireEvent.keyDown(grip(VOO_BUY), { key: ' ' })
-    expect(rowButtons().every((button) => button.disabled)).toBe(true)
+    expect(rowButtons().every((button) => button.getAttribute('aria-disabled') === 'true')).toBe(true)
     fireEvent.keyDown(grip(VOO_BUY), { key: 'Escape' })
-    expect(rowButtons().every((button) => !button.disabled)).toBe(true)
+    expect(rowButtons().every((button) => button.getAttribute('aria-disabled') !== 'true')).toBe(true)
     expect(reorderTransactions).not.toHaveBeenCalled()
   })
 
@@ -1096,26 +1099,15 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
   })
 
-  // CardsPanel's and CategoriesPanel's rule: the delete toast's Undo is a request of the list like
-  // any other, so no drop races the row coming back.
-  it("counts the delete toast's Undo — the grips wait while the row is re-created", async () => {
-    // Set here: reorderHooks' restoreAllMocks takes back the module factory's answer.
-    vi.mocked(deleteTransaction).mockResolvedValue({ batchId: null })
-    let answer: (value: TransactionOut) => void = () => {}
-    vi.mocked(createTransaction).mockReturnValueOnce(
-      new Promise<TransactionOut>((resolve) => {
-        answer = resolve
-      }),
-    )
+  it('uses the logged delete batch and reloads the current ledger on Undo', async () => {
+    vi.mocked(deleteTransaction).mockResolvedValueOnce({ batchId: 'transaction-batch' })
     const { onChanged } = renderLedger()
     fireEvent.click(screen.getByRole('button', { name: 'Delete this sell' }))
     await screen.findByText('Deleted the NVDA sell')
-    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-    // The row is on its way back: no drop may start until it has landed.
-    expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBe('true')
-    await act(async () => answer(nvdaSell))
-    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    await screen.findByText('Restored the NVDA sell')
+    expect(undoBatch).toHaveBeenCalledWith('transaction-batch')
+    expect(createTransaction).not.toHaveBeenCalled()
     expect(onChanged).toHaveBeenCalledTimes(2)
   })
 
