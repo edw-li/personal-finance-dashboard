@@ -136,6 +136,24 @@ describe('useSaveState', () => {
     expect(result.current.error).toBeNull()
   })
 
+  it('lets a failed or aborted save of a form that has gone end quietly', async () => {
+    for (const reason of [new ApiError('nope', 422), new DOMException('Aborted', 'AbortError')]) {
+      const { result, unmount } = hook(true)
+      const save = deferred<void>()
+      let answer!: Promise<void | undefined>
+      act(() => {
+        answer = result.current.run(() => save.promise)
+      })
+      unmount()
+      await act(async () => {
+        save.reject(reason)
+        await answer
+      })
+      await expect(answer).resolves.toBeUndefined()
+      expect(vi.getTimerCount()).toBe(0)
+    }
+  })
+
   it('arms no timer for a form that has gone', async () => {
     const { result, unmount } = hook(false)
     const save = deferred<void>()

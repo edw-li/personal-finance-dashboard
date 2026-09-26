@@ -59,6 +59,8 @@ export function useSaveState({ dirty }: { dirty: boolean }): SaveState {
       }
       return result
     } catch (err) {
+      // A form that has gone takes no news, good or bad.
+      if (!own.alive) return undefined
       if (err instanceof DOMException && err.name === 'AbortError') {
         setPhase('idle')
       } else {
