@@ -2481,17 +2481,20 @@ git commit -m "docs(plan): L3a as built — gates, counts, deviations"
 
 ## As built (2026-09-25)
 
-All twelve tasks landed as written, one commit each, on `feat/polish-undo-a` (cut from `657e3d62`). No schema change,
-no migration, no service file touched.
+All twelve tasks landed as written, one commit each, on `feat/polish-undo-a` (cut from `657e3d62`), then the five
+review fixes below, one commit each. No schema change, no migration. One service touched, at the review's request:
+`services/portfolio_accounts.py` (fix 3), with its importer caller.
 
 ### Gates
 
+After the review fixes (the pre-review run was 2,774 passed, 4 skipped in 87.9 s):
+
 | Gate | Result |
 |---|---|
-| `pytest -n 4` (full backend suite, `FINANCE_TEST_DB=finance_test_l3a`) | **2,774 passed, 4 skipped** in 87.9 s — the 4 warnings are the pre-existing `SyntaxWarning` in `tests/test_restore_points.py:531` |
+| `pytest -n 4` (full backend suite, `FINANCE_TEST_DB=finance_test_l3a`) | **2,777 passed, 4 skipped** in 108.5 s — the 4 warnings are the pre-existing `SyntaxWarning` in `tests/test_restore_points.py:531` |
 | `ruff check app tests` | All checks passed |
-| `ruff format --check` on the 11 touched files | 11 files already formatted |
-| Lane tests | 27 new: `test_changelog_portfolio.py` 13, `test_changelog_calendar.py` 11, `test_changelog_completions.py` 3; the pin test stays 2 tests with two more modules and two EXEMPT entries |
+| `ruff format --check` on the 14 touched files | 14 files already formatted |
+| Lane tests | 30 new: `test_changelog_portfolio.py` 13, `test_changelog_calendar.py` 14, `test_changelog_completions.py` 3; the pin test stays 2 tests with two more modules and two EXEMPT entries; `test_portfolio_accounts.py`'s resolve tests now pin the minted flag |
 
 Every new test was seen failing first for the planned reason (`KeyError: 'x-change-batch'`, a short `(op, table)`
 shape, the missing `_override_label`, the pin naming `create_feed_token`). The overlap test showed the hazard live
@@ -2519,7 +2522,7 @@ before Task 3: the older edit's Undo answered 200 and moved the row back. The ca
 | `calendar.create_custom_event` | logged | Added calendar event {title} | 201 |
 | `calendar.update_custom_event` | logged | Edited calendar event {title} | 200, when something changed |
 | `calendar.delete_custom_event` | logged | Deleted calendar event {title} | 204 |
-| `calendar.put_override` | logged (insert or update; refreshed before imaging) | Hid / Unhid / Marked … done / Reopened / Set your figure for / Cleared your figure for / Edited the note on / Edited {event} | 200, when something changed |
+| `calendar.put_override` | logged (insert or update; refreshed before imaging; named after the flush, only when a row was recorded) | Hid / Unhid / Marked … done / Reopened / Set your figure for / Cleared your figure for / Edited the note on / Edited {event} | 200, when something changed |
 | `calendar.delete_override` | logged | Cleared your edits on {event} | 204 |
 | `calendar.create_feed_token` | logged, image without `token_hash` | Created calendar feed link {label} | 201 |
 | `calendar.feed_ics` | EXEMPT (pinned with reason) | — | none |
@@ -2539,9 +2542,10 @@ a key no event carries reads `calendar event {key}`.
 2. **Feed-link image without the hash** (decision 4) is a deliberate departure from whole-row images: the create's
    Undo still deletes the row exactly; an Undo of that Undo refuses with `REPLAY_REFUSAL` instead of reviving the link.
    Tested.
-3. **Naming an overridden event composes the calendar for the key's day** (decision 3) — one `_compose_for` per
-   override write (the tax engine runs only when the day is today or later). Tested for a tax deadline, a custom event,
-   the overdue monthly reminder (window runs on to today) and two keys no event carries.
+3. **Naming an overridden event composes the calendar for the key's day** (decision 3). After review fixes 1-2: at
+   most one `_compose_for(..., priced=False)` per override write that recorded a row — no withholding tracker, inside a
+   SAVEPOINT, and any failure names the event by its key. Tested for a tax deadline, a custom event, the overdue monthly
+   reminder (window runs on to today), keys no event carries, extreme years, a failing loader, and a no-op PUT.
 4. **Cost of an exact security delete**, measured with a throwaway probe (not committed): 800 price rows delete in
    0.27 s; the Undo takes 1.12 s, because `undo_batch` replays one INSERT per row. Fine for a rare action; a bulk replay
    would be a `services/changelog.py` change, out of this lane's scope.
@@ -2556,3 +2560,19 @@ a key no event carries reads `calendar event {key}`.
    lines 125-135; L3b's card calls sit in a separate hunk).
 8. **Not this lane's:** the Activity card's ⓘ copy listing the new kinds (spec §6.1, last bullet) is frontend
    (`src/components/settings/ActivityCard.tsx`, lane L5).
+
+### Review fixes (2026-09-25, verdict "ready with fixes")
+
+Each was test-first: the new or changed test was seen red for the reviewed reason, then green.
+
+| # | Fix | Commit | Proof |
+|---|---|---|---|
+| 1 | **Naming never fails the write.** `_event_name` composes inside `async with db.begin_nested():` and catches any exception (warning logged, event named by its key). Keys KEY_RE admits with extreme years (`tax:2026-q3:9999-12-31`, `custom:1:0001-01-01`) raised `ValueError: year 10000 is out of range` as a 500; they answer 200 again, as at `657e3d62`. | `19d2198c` | `test_keys_at_the_ends_of_the_calendar_still_take_their_override`; `test_an_event_that_cannot_be_named_still_takes_its_override` (the stand-in compose fails IN THE DATABASE — without the savepoint the write dies with "current transaction is aborted", checked by removing it, then restored) |
+| 2 | **Naming is cheaper.** `_load_sources` / `_compose_for` take `priced=False`, which skips the withholding tracker (it prices the tax deadlines, never names one); `_event_name` uses it. `put_override` names after the flush and only when the batch recorded a row. GET, the ICS download and the feed still price. | `0ffca491` | `test_naming_skips_the_tax_pricing_and_a_put_that_changes_nothing_names_nothing` (tracker stubbed to fail: the tax label is unchanged; a no-op PUT makes no compose call) |
+| 3 | **The service says whether it minted the label.** `resolve_portfolio_account` returns `(row, minted)`; `_resolve_account` records the insert from the flag instead of repeating the lookup; the importer (`app/importer/apply.py`) takes the row and ignores the flag. | `b34557e2` | `test_portfolio_accounts.py`'s three resolve tests unpack the pair; the first pins `(True, False)` for the minting call and the repeat |
+| 4 | **Reorder before-images from `renumber`'s old numbers** (`{**row_image(row), "sort_index": old}`), no up-front image of the whole ledger. | `4c00d868` | a characterization check (green before and after): every logged image is a whole row, differing in `sort_index` alone |
+| 5 | **Two accepted behaviours documented:** `reorder_transactions` (undoing a reorder after a later append can land the appended row mid-ledger; rare once the ledger is contiguous) and `update_dividend` (undoing an edit of an auto dividend overwrites what the unlogged ingest wrote since, until the next refresh). | `bd6a5fd3` | docstrings only |
+
+Left to the coordinator's follow-up lane, as agreed: the OVERLAP_REFUSAL "undo those first" semantics in
+`changelog.superseded`, parent-row FOR UPDATE locks, merging `tests/exact_undo.py` with L3b's
+`tests/changelog_asserts.py`, and label verb consistency.
