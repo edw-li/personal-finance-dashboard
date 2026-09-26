@@ -9,9 +9,18 @@ const CSS = readFileSync(path.join(__dirname, 'allocation.css'), 'utf8')
   .replace(/\s+/g, ' ')
 
 describe('the Allocation aside beside the donut (allocation.css)', () => {
-  it('caps the aside at the plot height while it sits beside the plot, the list box taking the squeeze', () => {
+  // Exactly the plot's height while it sits beside the plot, so the card keeps one height across the
+  // five breakdowns; the list box takes the squeeze — but never below a few rows (review): when the
+  // aside's own lines grow (more caveats, the Missing quotes list open) the aside grows instead, and
+  // nothing spills past the card.
+  it('holds the aside at the plot height, the list flexing above a floor, the aside never below its content', () => {
     expect(CSS).toContain(
-      '@container (min-width: 900px) { .chart-card-slot .allocation-aside { display: flex; flex-direction: column; } .chart-card-slot .allocation-aside:not(:has(> .allocation-missing-quotes[open])) { max-height: var(--chart-h); } .chart-card-slot .allocation-aside > .allocation-table-scroll { flex: 1 1 auto; min-height: 0; } }',
+      '@container (min-width: 900px) { .chart-card-slot .allocation-aside { display: flex; flex-direction: column; height: var(--chart-h); min-height: min-content; } .chart-card-slot .allocation-aside > .allocation-table-scroll { flex: 1 1 0; min-height: 10rem; } }',
     )
+  })
+
+  // The floor makes Missing quotes' own release redundant: an open list grows the aside by itself.
+  it('needs no special release for the Missing quotes list', () => {
+    expect(CSS).not.toContain('allocation-missing-quotes[open]')
   })
 })
