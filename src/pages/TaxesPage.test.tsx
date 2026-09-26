@@ -17,6 +17,21 @@ import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import { setServerToday } from '../utils/productToday'
 import TaxesPage from './TaxesPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
+import { ConfirmProvider } from '../components/feedback/confirm'
+
+// Page tests choose answers to discard questions; the year-delete popover stays real so
+// its menu and focus behavior are exercised here as well as in TaxYearMenu's own tests.
+vi.mock('../components/feedback/confirm', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../components/feedback/confirm')>()
+  return {
+    ...original,
+    useConfirm: () => {
+      const ask = original.useConfirm()
+      return (options: import('../components/feedback/confirm').ConfirmOptions) =>
+        options.title.startsWith('Delete tax year') ? ask(options) : Promise.resolve(window.confirm(options.title))
+    },
+  }
+})
 
 // JURISDICTIONS (render order) stays real; every request is stubbed — including the
 // withholding card's own, which the page mounts (unmocked, unlike the what-if one) whenever
@@ -394,7 +409,7 @@ const saveInputs = () => screen.getByRole('button', { name: /save inputs/i }) as
 const deleteYearButton = () => { openYearManagement(); return screen.getByRole('button', { name: /^Delete (year|\d{4})…$/ }) as HTMLButtonElement }
 // The one question the delete door asks — worded for a row of tables nobody can get back.
 const DELETE_2024_CONFIRM =
-  'Delete tax year 2024 and all of its inputs and brackets? This cannot be undone.'
+  'All of its inputs and brackets will be deleted. This cannot be undone.'
 // The trend chart is found through its own card, never by chart index: the marginal
 // ladder mounts a marker too, and the 2026-08-31 reorder moved the card — position is
 // not identity. The heading swaps to "Tax breakdown — YYYY" while a year is drilled, so
@@ -443,7 +458,7 @@ const navType = () => screen.getByTestId('nav-type').textContent
 const renderPage = (entry = '/taxes') =>
   render(
     <MemoryRouter initialEntries={[entry]}>
-      <TaxesPage />
+      <ConfirmProvider><TaxesPage /></ConfirmProvider>
       <LocationProbe />
     </MemoryRouter>,
   )
@@ -535,7 +550,7 @@ describe('TaxesPage — unsaved edits survive (2026-09-23 spec §W9)', () => {
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     expect(confirmSpy).toHaveBeenLastCalledWith('Discard unsaved changes for 2024?')
     // Discarded on purpose: coming back to 2024 must not resurrect it.
-    expect(sessionStorage.getItem(DRAFT_2024)).toBeNull()
+    await waitFor(() => expect(sessionStorage.getItem(DRAFT_2024)).toBeNull())
     expect(sessionStorage.getItem('finance-tax-brackets-draft:2024:married_joint')).toBeNull()
   })
 
@@ -571,7 +586,7 @@ describe('TaxesPage — unsaved edits survive (2026-09-23 spec §W9)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
     await waitFor(() => expect(salary().value).toBe('$210,000.00'))
     expect(screen.queryByText(/were discarded: the saved values changed/)).toBeNull()
-    expect(sessionStorage.getItem(DRAFT_2024)).toBeNull()
+    await waitFor(() => expect(sessionStorage.getItem(DRAFT_2024)).toBeNull())
   })
 })
 
@@ -828,6 +843,7 @@ describe('TaxesPage', () => {
     // A BRACKETS save moves the totals; that refresh failing is what puts a Retry on
     // screen without touching the inputs form.
     fireEvent.click(screen.getByRole('tab', { name: 'Tax tables' }))
+    fireEvent.change(screen.getByLabelText('Federal bracket 1 rate (%)'), { target: { value: '11' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
     expect(await screen.findByText('totals unavailable')).toBeTruthy()
 
@@ -859,7 +875,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
 
     fireEvent.change(salary(), { target: { value: '220000' } })
-    await waitFor(() => expect(saveInputs().disabled).toBe(false))
+    await waitFor(() => expect(saveInputs().getAttribute('aria-disabled') === 'true').toBe(false))
     fireEvent.click(saveInputs())
     await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(3))
 
@@ -919,6 +935,7 @@ describe('TaxesPage', () => {
     renderPage('/taxes?section=tables')
     await screen.findByLabelText('Federal bracket 1 rate (%)')
 
+    fireEvent.change(screen.getByLabelText('Federal bracket 1 rate (%)'), { target: { value: '11' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023, 'single'))
@@ -1220,7 +1237,7 @@ describe('TaxesPage', () => {
     // parallel-load scheduling under the full suite, so the assertion must retry — saving
     // against the still-mounted 2024 editor would echo year 2024, which onInputsSaved
     // drops as stale, and the trend refetch this test is about would never fire.
-    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
+    await waitFor(() => expect(deleteYearButton().getAttribute('aria-disabled') === 'true').toBe(false))
 
     // A save does move it: this year's column just changed.
     fireEvent.change(salary(), { target: { value: '210000' } })
@@ -1322,7 +1339,7 @@ describe('TaxesPage', () => {
 
     // The exact label, pinned once: every other test here finds it by pattern. It lives inside
     // the year menu's popover now, so the helper opens that first.
-    expect(deleteYearButton().disabled).toBe(true)
+    expect(deleteYearButton().getAttribute('aria-disabled') === 'true').toBe(true)
     expect(screen.getByRole('button', { name: 'Delete year…' })).toBeTruthy()
     // A shut door asks nothing and sends nothing.
     fireEvent.click(deleteYearButton())
@@ -1343,13 +1360,13 @@ describe('TaxesPage', () => {
     // as well as the typed ones, so "discard unsaved changes?" has nothing left to ask.
     expect(screen.getByText(DELETE_2024_CONFIRM)).toBeTruthy()
     expect(confirmSpy).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Keep 2024' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     // Declined: no request, the question is gone, and the typed work is still there.
     expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
     expect(screen.queryByText(DELETE_2024_CONFIRM)).toBeNull()
     expect(salary().value).toBe('$999.00')
     // And no busy leaked out of a question answered "no" — the door is open for a second thought.
-    expect(deleteYearButton().disabled).toBe(false)
+    expect(deleteYearButton().getAttribute('aria-disabled') === 'true').toBe(false)
   })
 
   it('deletes the selected year, then reloads the list and clears the detail panel', async () => {
@@ -1358,7 +1375,7 @@ describe('TaxesPage', () => {
       .mockResolvedValueOnce([year2023])
     renderPage('/taxes?section=summary')
     await readyInputs()
-    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
+    await waitFor(() => expect(deleteYearButton().getAttribute('aria-disabled') === 'true').toBe(false))
 
     fireEvent.click(deleteYearButton())
     fireEvent.click(confirmDeleteButton())
@@ -1373,7 +1390,7 @@ describe('TaxesPage', () => {
     expect(await screen.findByText(/select a tax year/i)).toBeTruthy()
     expect(screen.queryByLabelText('Annual Salary')).toBeNull()
     expect(screen.queryByText('$123,456.78')).toBeNull()
-    expect(deleteYearButton().disabled).toBe(true)
+    expect(deleteYearButton().getAttribute('aria-disabled') === 'true').toBe(true)
     // Nothing was refetched for the year that is gone.
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(1)
@@ -1436,7 +1453,7 @@ describe('TaxesPage', () => {
     expect(screen.getByRole('button', { name: '2023' })).toBeTruthy()
     expect(salary().value).toBe('$200,000.00')
     // The door is open again for a second try.
-    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
+    await waitFor(() => expect(deleteYearButton().getAttribute('aria-disabled') === 'true').toBe(false))
   })
 
   it('leaves the whatif family in the URL for the card to read, and re-keys it on a year switch', async () => {
@@ -1656,7 +1673,7 @@ describe('TaxesPage', () => {
     fireEvent.click(within(dialog).getByRole('radio', { name: /^Married filing separately/ }))
     const confirm = () =>
       within(dialog).getByRole('button', { name: 'Change to Married filing separately' }) as HTMLButtonElement
-    await waitFor(() => expect(confirm().disabled).toBe(false))
+    await waitFor(() => expect(confirm().getAttribute('aria-disabled') === 'true').toBe(false))
     fireEvent.click(confirm())
     await waitFor(() => expect(vi.mocked(patchTaxYear)).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
@@ -1798,7 +1815,7 @@ describe('?year= selected tax year', () => {
 
   it('drops the param with the year a delete removed', async () => {
     renderPage('/taxes?year=2024')
-    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
+    await waitFor(() => expect(deleteYearButton().getAttribute('aria-disabled') === 'true').toBe(false))
     fireEvent.click(deleteYearButton())
     fireEvent.click(confirmDeleteButton())
     await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
@@ -1924,7 +1941,7 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
   async function chooseStatus(label: string) {
     openStatus()
     fireEvent.click(within(statusDialog()).getByRole('radio', { name: new RegExp(`^${label}`) }))
-    await waitFor(() => expect(changeTo(label).disabled).toBe(false))
+    await waitFor(() => expect(changeTo(label).getAttribute('aria-disabled') === 'true').toBe(false))
     fireEvent.click(changeTo(label))
   }
 
@@ -1956,7 +1973,7 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
     openStatus()
     expect(vi.mocked(fetchStatusOptions)).toHaveBeenCalledWith(2024)
     fireEvent.click(within(statusDialog()).getByRole('radio', { name: /^Married filing separately/ }))
-    await waitFor(() => expect(changeTo('Married filing separately').disabled).toBe(false))
+    await waitFor(() => expect(changeTo('Married filing separately').getAttribute('aria-disabled') === 'true').toBe(false))
     expect(
       Array.from(statusDialog().querySelectorAll('.filing-status-consequences li')).map(
         (li) => li.textContent,
@@ -2039,7 +2056,7 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
     // The Undo reloads 2024 under its old status, which replaces both editors: the same question
     // every reload door asks — and, accepted, the typing is gone on purpose (review finding 2).
     expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
-    expect(sessionStorage.getItem('finance-tax-inputs-draft:2024')).toBeNull()
+    await waitFor(() => expect(sessionStorage.getItem('finance-tax-inputs-draft:2024')).toBeNull())
     await waitFor(() => expect(vi.mocked(undoBatch)).toHaveBeenCalledWith('batch-status'))
   })
 
@@ -2096,7 +2113,7 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
     openStatus()
     expect(within(statusDialog()).getByRole('radio', { name: /^Single/ })).toHaveProperty('checked', true)
     expect(
-      (within(statusDialog()).getByRole('button', { name: 'Change to…' }) as HTMLButtonElement).disabled,
+      within(statusDialog()).getByRole('button', { name: 'Change to…' }).getAttribute('aria-disabled') === 'true',
     ).toBe(true)
     fireEvent.click(within(statusDialog()).getByRole('button', { name: 'Keep Single' }))
     expect(screen.queryByRole('dialog', { name: /^Filing status for / })).toBeNull()
@@ -2134,7 +2151,8 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
     ).toBeTruthy()
     // Nothing was reloaded, the text still reads the row the server has, and no Undo is offered.
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
-    expect(statusText()).toBe('Filing status: Single · Change…')
+    expect(document.querySelector('.filing-status-now')?.textContent).toBe('Filing status: Single')
+    expect(screen.getByRole('dialog', { name: 'Filing status for 2024' })).toBeTruthy()
     expect(toast.success).not.toHaveBeenCalled()
   })
 
@@ -2247,6 +2265,8 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
     )
     await screen.findByText('No brackets for Federal.')
 
+    fireEvent.click(screen.getByRole('button', { name: 'Add Federal bracket' }))
+    fireEvent.change(screen.getByLabelText('Federal bracket 1 rate (%)'), { target: { value: '10' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
     await waitFor(() =>
       expect(screen.getByLabelText('Federal bracket 1 rate (%)')).toBeTruthy(),
@@ -2255,7 +2275,7 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
     // from another status must not replace it — adopting it would remount this editor on the
     // page's key and throw away every other jurisdiction's half-edited rows with it.
     expect(screen.getByText('No brackets for State.')).toBeTruthy()
-    expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
   })
 
   it('replaces the waterfall with a way out when the status has no tables', async () => {
@@ -2478,7 +2498,7 @@ describe('TaxesPage — scope row and year menu (2026-09-13 polish spec §11–1
     fireEvent.click(within(dialog).getByRole('radio', { name: /^Married filing jointly/ }))
     const confirm = () =>
       within(dialog).getByRole('button', { name: 'Change to Married filing jointly' }) as HTMLButtonElement
-    await waitFor(() => expect(confirm().disabled).toBe(false))
+    await waitFor(() => expect(confirm().getAttribute('aria-disabled') === 'true').toBe(false))
     fireEvent.click(confirm())
     await waitFor(() => expect(vi.mocked(patchTaxYear)).toHaveBeenCalledWith(2023, { filing_status: 'married_joint' }))
   })
@@ -2516,30 +2536,26 @@ describe('TaxesPage — scope row and year menu (2026-09-13 polish spec §11–1
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New tax year' })).toBeNull())
   })
 
-  it('shuts the armed delete while a create is in flight, and drops the arm when the year changes', async () => {
+  it('a delete accepted while create is in flight or after a year switch cannot run', async () => {
     const gate = deferred<TaxBracketsCloneOut>()
     vi.mocked(cloneBrackets).mockReturnValueOnce(gate.promise)
     renderPage('/taxes?section=summary')
     await readyInputs()
-
-    // Armed against 2024, then Create is pressed without folding the question away.
     fireEvent.click(deleteYearButton())
-    expect(confirmDeleteButton().disabled).toBe(false)
     fireEvent.click(createYearButton())
-    // Busy: firing the delete from here would race the create (2026-09-13 review round).
-    await waitFor(() => expect(confirmDeleteButton().disabled).toBe(true))
-    await act(async () => {
-      gate.resolve(cloneFor(2025))
-    })
-
-    // And a year switched under an armed question drops the arm rather than re-aiming it — the
-    // sentence names a year, and the button under it must never delete a different one.
-    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
+    await waitFor(() => expect(cloneBrackets).toHaveBeenCalled())
+    fireEvent.click(confirmDeleteButton())
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(deleteTaxYear).not.toHaveBeenCalled()
+    await act(async () => { gate.resolve(cloneFor(2025)) })
+    await waitFor(() => expect(deleteYearButton().getAttribute('aria-disabled')).not.toBe('true'))
     fireEvent.click(deleteYearButton())
-    expect(screen.getByText(/and all of its inputs and brackets/)).toBeTruthy()
+    const accepted = confirmDeleteButton()
     fireEvent.click(within(document.querySelector('.page-frame-scope') as HTMLElement).getByRole('button', { name: '2023' }))
-    await waitFor(() => expect(screen.queryByText(/and all of its inputs and brackets/)).toBeNull())
-    expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
+    await waitFor(() => expect(fetchTaxInputs).toHaveBeenLastCalledWith(2023))
+    fireEvent.click(accepted)
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(deleteTaxYear).not.toHaveBeenCalled()
   })
 
   it('switches views from a panel’s door and writes ?section= like a tab does', async () => {

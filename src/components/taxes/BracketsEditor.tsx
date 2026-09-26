@@ -26,6 +26,10 @@ import { canonicalAmount, parseAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import { FeedBanner } from '../shell/Feed'
+import BusyButton from '../feedback/BusyButton'
+import { useConfirm } from '../feedback/confirm'
+import { useLatest } from '../reorder/useLatest'
+import BracketForm from './BracketForm'
 import {
   bracketsDraftKey,
   clearTaxDraft,
@@ -301,7 +305,11 @@ export default function BracketsEditor({
   // The tab machinery's own flight and banner — a failed tab load is not a jurisdiction's
   // error, and putting it in `errors` would file it under a table nobody asked about.
   const [tabBusy, setTabBusy] = useState(false)
+  const [tabAction, setTabAction] = useState<FilingStatus | 'clone' | null>(null)
   const [tabError, setTabError] = useState<string | null>(null)
+  const confirm = useConfirm()
+  const sectionRef = useRef<HTMLElement>(null)
+  const latest = useLatest({ activeStatus, saving, tabBusy })
   // Tabs can be clicked faster than a fetch comes back; only the newest may land.
   const tabSeqRef = useRef(0)
   // What the last clone said about the tables it just wrote — advisory, and only about THIS
@@ -384,21 +392,23 @@ export default function BracketsEditor({
   // buttons are disabled, and this is the keyboard's half of that): its echo re-syncs the
   // table it wrote and re-seats `payload`, which would land on — and mislabel — whichever
   // status' tables the tab switch had meanwhile put on screen.
-  const openStatus = (status: FilingStatus) => {
+  const openStatus = async (status: FilingStatus, anchor: HTMLElement) => {
     if (status === activeStatus || tabBusy || saving !== null) return
     if (dirty) {
-      if (
-        !window.confirm(
-          `Discard unsaved ${FILING_STATUS_LABELS[activeStatus]} bracket changes for ${brackets.year}?`,
-        )
-      ) {
-        return
-      }
+      if (!await confirm({
+        anchor,
+        title: `Discard unsaved ${FILING_STATUS_LABELS[activeStatus]} bracket changes for ${brackets.year}?`,
+        body: 'The tables on this tab will be replaced by the stored values.',
+        confirmLabel: 'Discard changes',
+        tone: 'default',
+      })) return
+      if (latest.current.activeStatus !== activeStatus || latest.current.tabBusy || latest.current.saving !== null) return
       // Discarded on purpose: the tab being left keeps no draft to resurrect later (§W9).
       clearTaxDraft(bracketsDraftKey(brackets.year, activeStatus))
     }
     const seq = ++tabSeqRef.current
     setTabBusy(true)
+    setTabAction(status)
     setTabError(null)
     // Both belong to the tab being left: a jurisdiction's error describes a table that is
     // about to be replaced, and the review badges describe a clone into another status.
@@ -480,8 +490,10 @@ export default function BracketsEditor({
   // always single). 409 when the target already has rows, which `isEmpty` already prevents —
   // it lands in the banner verbatim if the server disagrees.
   const clone = () => {
+    if (tabBusy || saving !== null) return
     const seq = ++tabSeqRef.current
     setTabBusy(true)
+    setTabAction('clone')
     setTabError(null)
     cloneBrackets(brackets.year, brackets.year, activeStatus)
       .then((next) => {
@@ -602,12 +614,14 @@ export default function BracketsEditor({
    * either way, but a Save that reads "Saving…" while the user pressed Remove names the
    * wrong act.
    */
-  const submit = (
+  const submit = async (
     name: string,
     person: TaxPersonOut | undefined,
     rows: RowState[],
+    anchor: HTMLElement,
     removing = false,
-  ) => {
+  ): Promise<boolean> => {
+    if (saving !== null || tabBusy) return false
     const key = tableKey(name, person?.id)
     // An empty DRAFT is not a deletion: the server was never told about this table, so there
     // is nothing to ask about and nothing to write — Save does here exactly what `Discard
@@ -615,7 +629,7 @@ export default function BracketsEditor({
     // itself, where the seeded draft opens empty.
     if (person !== undefined && rows.length === 0 && !hasStoredTable(name, person.id)) {
       discardPersonTable(key)
-      return
+      return false
     }
     const status = FILING_STATUS_LABELS[activeStatus]
     const question =
@@ -623,7 +637,10 @@ export default function BracketsEditor({
         ? `Delete all ${label(name)} brackets for ${brackets.year} (${status})?`
         : `Delete ${person.name}'s ${label(name)} table for ${brackets.year} (${status})? ` +
           'They fall back to the default.'
-    if (rows.length === 0 && !window.confirm(question)) return
+    if (rows.length === 0) {
+      if (!await confirm({ anchor, title: question, body: 'This table cannot be restored with Undo.', confirmLabel: 'Delete table' })) return false
+      if (latest.current.activeStatus !== activeStatus || latest.current.tabBusy || latest.current.saving !== null) return false
+    }
     setSaving({ key, removing })
     setErrors((current) => ({ ...current, [key]: '' }))
     // ONLY this jurisdiction, only this STATUS, and only this table: the PUT is a full
@@ -631,7 +648,7 @@ export default function BracketsEditor({
     // or leaving the status off, which the server would read as 'single' — would rewrite
     // tables the user never opened. `person_id` is OMITTED for a default save, so that wire
     // is byte-identical to the one that shipped before person tables existed.
-    putTaxBrackets(brackets.year, {
+    return putTaxBrackets(brackets.year, {
       filing_status: activeStatus,
       ...(person === undefined ? {} : { person_id: person.id }),
       jurisdictions: {
@@ -675,17 +692,22 @@ export default function BracketsEditor({
           )
         }
         onSaved(echo)
+        if (person !== undefined && rows.length === 0) {
+          requestAnimationFrame(() => sectionRef.current?.querySelector<HTMLElement>(`[data-bracket-key="${key}"] button`)?.focus())
+        }
+        return true
       })
       .catch((err: unknown) => {
         setErrors((current) => ({
           ...current,
           [key]: err instanceof ApiError ? err.message : 'Save failed',
         }))
+        return false
       })
       .finally(() => setSaving(null))
   }
 
-  const save = (name: string, person?: TaxPersonOut) => {
+  const save = async (name: string, anchor: HTMLElement, person?: TaxPersonOut): Promise<boolean> => {
     // Canonicalize BEFORE validating: a save reached without a blur (Ctrl+Enter, a jsdom
     // click) would otherwise hand "$100,000" to isPlainDecimal and be refused for a shape
     // the entry layer accepts. Garbage comes back verbatim, so it still trips the same
@@ -704,9 +726,9 @@ export default function BracketsEditor({
     const message = validate(name, rows)
     if (message !== null) {
       setErrors((current) => ({ ...current, [key]: message }))
-      return
+      return false
     }
-    submit(name, person, rows)
+    return submit(name, person, rows, anchor)
   }
 
   /**
@@ -720,7 +742,7 @@ export default function BracketsEditor({
     const stored = hasStoredTable(name, person.id)
     if (rows === undefined) {
       return (
-        <div key={person.id} className="bracket-person">
+        <div key={person.id} className="bracket-person" data-bracket-key={key}>
           {/* The visible text is short because the same words sit under both per-worker
               tables, so the jurisdiction is APPENDED to it for a reader rather than
               replacing it in an aria-label: a spoken name that does not contain the words
@@ -738,72 +760,34 @@ export default function BracketsEditor({
       )
     }
     return (
-      <form
-        key={person.id}
+      <BracketForm
+        key={`${activeStatus}:${person.id}`}
         className="bracket-person"
-        data-entry-scope=""
-        onSubmit={(e) => {
-          e.preventDefault()
-          save(name, person)
-        }}
+        tableKey={key}
+        title={title}
+        dirty={JSON.stringify(rows) !== JSON.stringify(tablesOf(payload)[key])}
+        busy={saving !== null || tabBusy}
+        removing={saving?.key === key && saving.removing}
+        canAdd={rows.length < MAX_BRACKETS}
+        error={errors[key]}
+        onAdd={() => addRow(key)}
+        onSave={anchor => save(name, anchor, person)}
+        onRemove={stored ? anchor => submit(name, person, [], anchor, true) : undefined}
+        onDiscard={stored ? undefined : () => discardPersonTable(key)}
       >
         <h4 className="bracket-person-head">{title}</h4>
-        <FeedBanner error={errors[key]} />
         <BracketRows
           title={title}
           rows={rows}
           onCell={(index, field, value) => setRow(key, index, field, value)}
           onRemoveRow={(index) => removeRow(key, index)}
         />
-        <div className="bracket-actions">
-          <button
-            type="button"
-            className="button"
-            aria-label={`Add ${title} bracket`}
-            disabled={rows.length >= MAX_BRACKETS}
-            onClick={() => addRow(key)}
-          >
-            Add bracket
-          </button>
-          <button
-            type="submit"
-            data-entry-primary=""
-            className="button button-primary"
-            aria-label={`Save ${title} brackets`}
-            disabled={saving !== null}
-          >
-            {/* Whose flight this is: the Remove button beside it starts the same request,
-                and only the button that was pressed says what is happening. */}
-            {saving?.key === key && !saving.removing ? 'Saving…' : 'Save'}
-          </button>
-          {stored ? (
-            <button
-              type="button"
-              className="button"
-              disabled={saving !== null}
-              onClick={() => submit(name, person, [], /* removing */ true)}
-            >
-              {saving?.key === key && saving.removing ? 'Removing…' : 'Remove — use the default'}
-              <span className="visually-hidden"> — {title}</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="button"
-              disabled={saving !== null}
-              onClick={() => discardPersonTable(key)}
-            >
-              Discard draft
-              <span className="visually-hidden"> — {title}</span>
-            </button>
-          )}
-        </div>
-      </form>
+      </BracketForm>
     )
   }
 
   return (
-    <section className="card">
+    <section ref={sectionRef} className="card">
       <h2 className="eyebrow">
         Bracket tables — {brackets.year}
         <InfoHint text="The rate tables the engine walks, one per jurisdiction; thresholds are inclusive floors and must ascend from 0. Social Security and Disability may also carry a table per person." />
@@ -827,17 +811,18 @@ export default function BracketsEditor({
           aria-label="Tables for status"
         >
           {tabs.map((status) => (
-            <button
+            <BusyButton
               key={status}
               type="button"
-              className={status === activeStatus ? 'active' : ''}
+              className={status === activeStatus ? 'button active' : 'button'}
               aria-pressed={status === activeStatus}
-              disabled={tabBusy || saving !== null}
-              onClick={() => openStatus(status)}
+              busy={tabBusy && tabAction === status}
+              inert={tabBusy || saving !== null}
+              onClick={event => { void openStatus(status, event.currentTarget) }}
             >
               {FILING_STATUS_LABELS[status]}
               {status === yearStatus ? ' (this year’s status)' : ''}
-            </button>
+            </BusyButton>
           ))}
         </div>
         <InfoHint text="Which status' tables this card's Saves rewrite. The year's own filing status — the tables the engine walks — is changed with Change… in the scope row at the top of the page." />
@@ -870,9 +855,9 @@ export default function BracketsEditor({
             including any per-person tables, while the thresholds that move with filing status
             are then edited below.
           </p>
-          <button type="button" className="button button-primary" disabled={tabBusy} onClick={clone}>
-            {tabBusy ? 'Cloning…' : `Clone from ${brackets.year} single tables`}
-          </button>
+          <BusyButton type="button" className="button button-primary" busy={tabBusy && tabAction === 'clone'} inert={tabBusy || saving !== null} onClick={clone}>
+            Clone from {brackets.year} single tables
+          </BusyButton>
         </div>
       )}
       <div className="bracket-columns">
@@ -892,47 +877,30 @@ export default function BracketsEditor({
           // (2026-09-13 polish spec §12).
           return (
             <div key={name} className="bracket-group">
-              <form
+              <BracketForm
+                key={`${activeStatus}:${name}`}
                 className={strip ? 'bracket-block has-person-strip' : 'bracket-block'}
-                data-entry-scope=""
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  save(name)
-                }}
+                tableKey={name}
+                title={label(name)}
+                dirty={JSON.stringify(rows) !== JSON.stringify(tablesOf(payload)[name] ?? [])}
+                busy={saving !== null || tabBusy}
+                canAdd={rows.length < MAX_BRACKETS}
+                error={message}
+                onAdd={() => addRow(name)}
+                onSave={anchor => save(name, anchor)}
               >
                 <h3 className="eyebrow">
                   {label(name)} brackets
                   {perWorker ? ' — default for everyone' : ''}
                   {badgeFor(name)}
                 </h3>
-                <FeedBanner error={message} />
                 <BracketRows
                   title={label(name)}
                   rows={rows}
                   onCell={(index, field, value) => setRow(name, index, field, value)}
                   onRemoveRow={(index) => removeRow(name, index)}
                 />
-                <div className="bracket-actions">
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Add ${label(name)} bracket`}
-                    disabled={rows.length >= MAX_BRACKETS}
-                    onClick={() => addRow(name)}
-                  >
-                    Add bracket
-                  </button>
-                  <button
-                    type="submit"
-                    data-entry-primary=""
-                    className="button button-primary"
-                    aria-label={`Save ${label(name)} brackets`}
-                    disabled={saving !== null}
-                  >
-                    {saving?.key === name ? 'Saving…' : 'Save'}
-                  </button>
-                </div>
-              </form>
+              </BracketForm>
               {strip && (
                 <div className="bracket-person-strip">
                   {/* The per-worker helper sentence, once, above the FIRST strip (2026-09-13

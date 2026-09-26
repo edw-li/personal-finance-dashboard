@@ -36,6 +36,7 @@ import WhatIfPanel from '../components/taxes/WhatIfPanel'
 import type { OverrideDefinition } from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
 import { useToast } from '../components/ToastProvider'
+import { useConfirm } from '../components/feedback/confirm'
 import { currentYear } from '../utils/months'
 import { useProductToday } from '../utils/productToday'
 import type {
@@ -275,6 +276,14 @@ export default function TaxesPage() {
   useProductToday()
   const cardYear = currentYear()
   const toast = useToast()
+  const confirm = useConfirm()
+  const pageRef = useRef<HTMLDivElement>(null)
+  const actionAnchor = (anchor?: HTMLElement | null): HTMLElement => {
+    if (anchor !== undefined && anchor !== null) return anchor
+    const focused = document.activeElement
+    if (focused instanceof HTMLElement && focused !== document.body) return focused
+    return pageRef.current?.querySelector<HTMLElement>('.tax-scope-bar button[aria-pressed="true"]') ?? pageRef.current ?? document.body
+  }
   // A toast's Undo runs long after the render that offered it; the unsaved-work question it
   // asks has to be about the editors as they are THEN.
   const dirtyRef = useRef(dirty)
@@ -450,18 +459,29 @@ export default function TaxesPage() {
   // The house confirm (TransactionsPanel's delete): a reload replaces both editors'
   // payloads, so unsaved work is gone the moment one starts. Accepted, it is gone on purpose —
   // so the year's drafts go too, rather than resurrecting on the next visit (§W9).
-  const confirmDiscard = () => {
-    if (!dirty) return true
-    if (!window.confirm(`Discard unsaved changes for ${selectedYear}?`)) return false
-    if (selectedYear !== null) clearYearDrafts(selectedYear)
+  const confirmDiscard = async (anchor?: HTMLElement | null) => {
+    const year = currentYearRef.current
+    const seq = seqRef.current
+    if (!dirtyRef.current) return true
+    if (!await confirm({
+      anchor: actionAnchor(anchor),
+      title: `Discard unsaved changes for ${year}?`,
+      body: 'The stored inputs and tax tables will replace the edits in this view.',
+      confirmLabel: 'Discard changes',
+      tone: 'default',
+    })) return false
+    if (year !== currentYearRef.current || seq !== seqRef.current) return false
+    if (year !== null) clearYearDrafts(year)
     return true
   }
 
-  const selectYear = (year: number) => {
+  const selectYear = async (year: number) => {
     // Re-clicking the selected chip must not refetch (MonthlyUpdatePage's same-month
     // lesson: the identity would change and the whole page would blink).
     if (year === selection?.year) return
-    if (!confirmDiscard()) return
+    const anchor = Array.from(pageRef.current?.querySelectorAll<HTMLButtonElement>('[aria-label="Tax year"] button') ?? [])
+      .find(button => button.textContent === String(year))
+    if (dirtyRef.current && !await confirmDiscard(anchor)) return
     loadYear(year)
   }
 
@@ -471,13 +491,12 @@ export default function TaxesPage() {
   // A reload replaces both editors, so typed work is asked about first, like every door — but
   // only when that year is the one on screen (nothing else reloads), and an accepted answer
   // forgets its drafts as `confirmDiscard` does (§W9). Single-flight with the dialog's confirm.
-  const undoFilingStatus = (year: number, restored: FilingStatus, batchId: string) => {
+  const undoFilingStatus = async (year: number, restored: FilingStatus, batchId: string) => {
     if (currentYearRef.current === year && dirtyRef.current) {
-      if (!window.confirm(`Discard unsaved changes for ${year}?`)) return
-      clearYearDrafts(year)
+      if (!await confirmDiscard()) return false
     }
     setStatusSaving(true)
-    undoBatch(batchId)
+    return undoBatch(batchId)
       .then(() => {
         toast.success(`Undone — ${year} is filed ${FILING_STATUS_LABELS[restored]} again.`)
         setTrendRefresh((n) => n + 1)
@@ -489,7 +508,10 @@ export default function TaxesPage() {
       .catch((err: unknown) => {
         toast.error(err instanceof ApiError ? err.message : 'Undo failed')
       })
-      .finally(() => setStatusSaving(false))
+      .finally(() => {
+        setStatusSaving(false)
+        pageRef.current?.querySelector<HTMLElement>('.tax-scope-bar button[aria-pressed="true"]')?.focus()
+      })
   }
 
   // The FIFTH reload door (chips, Retry, create, delete, status). Everything the engine
@@ -500,20 +522,20 @@ export default function TaxesPage() {
   // re-runs the load effect for the year already on screen. Reached only through the
   // Change… dialog's confirm (2026-09-23 spec §W8), and change-logged: the Undo rides the
   // standard toast.
-  const changeFilingStatus = (next: FilingStatus) => {
-    if (selectedYear === null || next === filingStatus || statusSaving) return
-    if (!confirmDiscard()) return
+  const changeFilingStatus = async (next: FilingStatus, anchor: HTMLElement) => {
+    if (selectedYear === null || next === filingStatus || statusSaving) return false
+    if (dirtyRef.current && !await confirmDiscard(anchor)) return false
     const year = selectedYear
     const previous = filingStatus
     setStatusSaving(true)
     setError(null)
     setYearError(null)
-    patchTaxYear(year, { filing_status: next })
+    return patchTaxYear(year, { filing_status: next })
       .then(({ year: row, batchId }) => {
         // The echo is authoritative, and replacing the row HERE means the selector follows
         // even if no list reload ever happens.
         setYears((current) => current.map((y) => (y.year === row.year ? row : y)))
-        loadYear(year)
+        if (currentYearRef.current === year) loadYear(year)
         // The flip moves the engine's answer for this year (possibly to a refusal), which
         // moves the year's column in the all-years trend — a status change is a save as far
         // as CompositionPanel's feed is concerned (2026-08-31 review round).
@@ -532,6 +554,7 @@ export default function TaxesPage() {
                 },
               },
         )
+        return true
       })
       .catch((err: unknown) => {
         // A 422 (an unknown status) or a 404 (the year went away) lands here verbatim. The
@@ -539,6 +562,7 @@ export default function TaxesPage() {
         setYearError(
           err instanceof ApiError ? err.message : `Failed to set the filing status for ${year}`,
         )
+        return false
       })
       .finally(() => setStatusSaving(false))
   }
@@ -673,16 +697,16 @@ export default function TaxesPage() {
    * Everything after the request resolves is bookkeeping around a year that EXISTS, so none of it
    * may ever be reported as a create failure.
    */
-  const createYear = (): Promise<boolean> => {
+  const createYear = async (anchor: HTMLElement): Promise<boolean> => {
     const year = Number(newYear.trim())
     if (!Number.isInteger(year) || year < YEAR_MIN || year > YEAR_MAX) {
       setCreateError(`Enter a year between ${YEAR_MIN} and ${YEAR_MAX}`)
-      return Promise.resolve(false)
+      return false
     }
     // Third of the reload doors (chips, Retry, create, delete, status): creating a year jumps
     // to it and remounts the editors, so it needs the same discard gate — and it must sit
     // before the request so a declined confirm can't orphan a created year.
-    if (!confirmDiscard()) return Promise.resolve(false)
+    if (dirtyRef.current && !await confirmDiscard(anchor)) return false
     // Seed from the newest year that actually HAS brackets. With none — a fresh database,
     // or a year list imported inputs-first — an empty inputs PUT is what creates the
     // tax_years row (both PUTs auto-create it; that IS the "new year" affordance).
@@ -801,8 +825,8 @@ export default function TaxesPage() {
       })
   }
 
-  const retry = () => {
-    if (!confirmDiscard()) return
+  const retry = async () => {
+    if (dirtyRef.current && !await confirmDiscard()) return
     setError(null)
     setYearError(null)
     if (selectedYear === null) {
@@ -860,6 +884,7 @@ export default function TaxesPage() {
             year={selectedYear}
             status={filingStatus}
             disabled={statusSaving || busy}
+            saving={statusSaving}
             onChange={changeFilingStatus}
           />
         )}
@@ -867,7 +892,7 @@ export default function TaxesPage() {
     )
 
   return (
-    <div className="page taxes-page">
+    <div ref={pageRef} className="page taxes-page">
       <PageFrame
         title="Taxes"
         // The page's primary action lives in the title row (PageFrame's own note), never in the

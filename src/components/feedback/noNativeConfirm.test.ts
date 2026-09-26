@@ -41,9 +41,8 @@ const ALLOWLIST: Record<string, number> = {
   // (none: these surfaces ask with in-app lines or not at all today)
 
   // L8 Taxes·Monthly update
-  'components/taxes/BracketsEditor.tsx': 2, // the status tab's discard guard; emptying a table
   'components/taxes/WithholdingPanel.tsx': 1, // Vest Apply over dirty Inputs
-  'pages/TaxesPage.tsx': 3, // the year-switch and status-Undo discard guards; what-if Apply
+  'pages/TaxesPage.tsx': 1, // what-if Apply
 }
 /** The list when lane L4 landed (2026-09-25): 14 calls in 9 files. The allowlist may only shrink. */
 const ALLOWLIST_AT_LANDING: Record<string, number> = {

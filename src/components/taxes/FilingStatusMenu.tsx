@@ -4,6 +4,7 @@ import { fetchStatusOptions, FILING_STATUS_LABELS, FILING_STATUSES } from '../..
 import type { FilingStatus, TaxStatusOptions } from '../../types/api'
 import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
+import BusyButton from '../feedback/BusyButton'
 import { usePopoverDismiss } from '../usePopoverDismiss'
 import './taxes.css'
 
@@ -65,13 +66,15 @@ export default function FilingStatusMenu({
   year,
   status,
   disabled,
+  saving = false,
   onChange,
 }: {
   year: number
   status: FilingStatus
   /** The page is loading the year or already PATCHing: the dialog can open, not confirm. */
   disabled: boolean
-  onChange: (next: FilingStatus) => void
+  saving?: boolean
+  onChange: (next: FilingStatus, anchor: HTMLElement) => void | Promise<boolean>
 }) {
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<FilingStatus>(status)
@@ -185,20 +188,26 @@ export default function FilingStatusMenu({
             )}
           </div>
           <div className="filing-status-actions">
-            <button
+            <BusyButton
               type="button"
               className="button button-primary"
               // Not while the rules are still being read — the point of the dialog is that the
               // change is made with its consequences on screen — and not while the page is busy.
-              disabled={!chosen || loading || disabled}
-              onClick={() => {
-                onChange(selected)
-                close()
-                triggerRef.current?.focus()
+              busy={saving}
+              inert={!chosen || loading || disabled}
+              onClick={(event) => {
+                const finish = (accepted: boolean | void) => {
+                  if (accepted === false) return
+                  close()
+                  triggerRef.current?.focus()
+                }
+                const result = onChange(selected, event.currentTarget)
+                if (result === undefined) finish(undefined)
+                else void result.then(finish)
               }}
             >
               {chosen ? `Change to ${FILING_STATUS_LABELS[selected]}` : 'Change to…'}
-            </button>
+            </BusyButton>
             <button
               type="button"
               className="button"
@@ -215,4 +224,3 @@ export default function FilingStatusMenu({
     </div>
   )
 }
-
