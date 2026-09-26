@@ -27,6 +27,17 @@ beforeEach(() => vi.clearAllMocks())
 afterEach(cleanup)
 
 describe('allocation targets', () => {
+  it('shows progress only on the allocation action that was pressed', () => {
+    vi.mocked(saveAllocationTargets).mockReturnValueOnce(new Promise(() => {}))
+    render(<AllocationTargetEditor data={data} owner={7} onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Set targets' }))
+    fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    expect(screen.getByRole('button', { name: 'Save draft' }).getAttribute('aria-busy')).toBe('true')
+    const activate = screen.getByRole('button', { name: 'Activate targets' })
+    expect(activate.getAttribute('aria-busy')).toBeNull()
+    expect(activate.getAttribute('aria-disabled')).toBe('true')
+  })
   it('seeds only classified categories, offers no Unclassified target, and points at the classify path', async () => {
     vi.mocked(saveAllocationTargets).mockResolvedValue({ data: {} as never, headers: new Headers() })
     const onChanged = vi.fn()
@@ -46,7 +57,7 @@ describe('allocation targets', () => {
     expect(onClassify).toHaveBeenCalledOnce()
     // Activation still needs exactly 100% — and stays available, drift stays honest.
     fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '60' } })
-    expect((screen.getByRole('button', { name: 'Activate targets' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Activate targets' }).getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledOnce())
     expect(saveAllocationTargets).toHaveBeenCalledWith('asset_class', 7, 'draft', [

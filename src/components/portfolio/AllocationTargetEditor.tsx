@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import BusyButton from '../feedback/BusyButton'
 import { allocationLabel, ASSET_CLASSES, displayLabel, GEOGRAPHIES, saveAllocationTargets } from '../../api/allocation'
 import type { AllocationData, AllocationTarget } from '../../api/allocation'
 import type { OwnerScope } from '../../api/netWorth'
@@ -23,11 +24,12 @@ export default function AllocationTargetEditor({ data, owner, onChanged, onClass
   unclassifiedCount?: number
 }) {
   const [editing, setEditing] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
   const saved = data.draft_target_set ?? data.target_set
   return <section className="card allocation-targets" aria-label="Allocation targets">
     <div className="card-title-row">
       <h2 className="eyebrow">Your allocation targets</h2>
-      <button className="button" onClick={() => setEditing((v) => !v)}>
+      <button ref={trigger} className="button" onClick={() => setEditing((v) => !v)}>
         {editing ? 'Close editor' : saved ? 'Edit targets' : 'Set targets'}
       </button>
     </div>
@@ -35,7 +37,7 @@ export default function AllocationTargetEditor({ data, owner, onChanged, onClass
       {data.as_of ? ` · quotes from ${formatDate(data.as_of)}` : ''}. Positive drift means above target.</p>
     {data.draft_target_set && <p className="hint">An unfinished draft is saved. Current drift still uses your active targets.</p>}
     {editing && <TargetForm key={`${data.by}:${data.scope_key}:${saved?.updated_at ?? ''}`}
-      data={data} owner={owner} onSaved={() => { onChanged(); setEditing(false) }} onClassify={onClassify} unclassifiedCount={unclassifiedCount} />}
+      data={data} owner={owner} onSaved={() => { trigger.current?.focus(); onChanged(); setEditing(false) }} onClassify={onClassify} unclassifiedCount={unclassifiedCount} />}
     {data.target_set ? <div className="holdings-scroll"><table className="port-table">
       <thead><tr><th scope="col">Category</th><th scope="col" className="num">Current</th><th scope="col" className="num">Target</th>
         <th scope="col" className="num">Tolerance (pp)</th><th scope="col" className="num">Drift (pp)</th><th scope="col" className="num">Dollar drift</th><th scope="col">Status</th></tr></thead>
@@ -73,7 +75,8 @@ function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
     ? Number(data.coverage.unknown_market_value) / Number(data.total_market_value)
     : null
   const [category, setCategory] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [saving, setSaving] = useState<'draft' | 'active' | null>(null)
+  const busy = saving !== null
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
   const totalUnits = rows.reduce((sum, row) => sum + (percentageUnits(row.target_pct) ?? 0), 0)
@@ -85,7 +88,8 @@ function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
   }
   async function save(state: 'draft' | 'active') {
     if (!valid || (state === 'active' && totalUnits !== 1_000_000)) return
-    setBusy(true); setError(null)
+    if (busy) return
+    setSaving(state); setError(null)
     try {
       const result = await saveAllocationTargets(data.by, owner, state, rows)
       const batchId = result.headers.get('X-Change-Batch')
@@ -95,9 +99,9 @@ function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
         } },
       } : undefined)
       onSaved()
-    } catch (err) { setError(errorDetail(err)) } finally { setBusy(false) }
+    } catch (err) { setError(errorDetail(err)) } finally { setSaving(null) }
   }
-  return <div className="allocation-target-form">
+  return <div className="allocation-target-form" onChangeCapture={() => setError(null)}>
     <p className="hint">Save an unfinished draft at any total. Activate at exactly 100%. Tolerance is in percentage points: a 40% target with 5 pp tolerance allows 35–45%.</p>
     {unknownShare !== null && <p className="hint allocation-classify-hint">
       <span>Unclassified holdings are {formatPct(unknownShare, { signed: false })} of the priced book — classify them first.</span>
@@ -112,7 +116,7 @@ function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
         <td><input className="field-input" inputMode="decimal" aria-label={`${allocationLabel(row.key, data.by)} tolerance percentage points`}
           value={row.tolerance_pp} onChange={(event) => patch(row.key, 'tolerance_pp', event.target.value)} /></td>
         <td><button className="button" aria-label={`Remove ${allocationLabel(row.key, data.by)} target`} disabled={busy}
-          onClick={() => setRows((current) => current.filter((r) => r.key !== row.key))}>Remove</button></td>
+          onClick={() => { setError(null); setRows((current) => current.filter((r) => r.key !== row.key)) }}>Remove</button></td>
       </tr>)}</tbody>
     </table></div>
     <div className="allocation-add-target">
@@ -122,15 +126,15 @@ function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
           .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
       </select> : <input className="field-input" value={category} maxLength={100} onChange={(e) => setCategory(e.target.value)} />}</label>
       <button className="button" disabled={!category.trim() || rows.some((r) => r.key === category.trim()) || rows.length >= 100 || busy}
-        onClick={() => { setRows((current) => [...current, { key: category.trim(), target_pct: '0', tolerance_pp: '0' }]); setCategory('') }}>Add</button>
+        onClick={() => { setError(null); setRows((current) => [...current, { key: category.trim(), target_pct: '0', tolerance_pp: '0' }]); setCategory('') }}>Add</button>
     </div>
     <p aria-live="polite">Total: <strong>{(totalUnits / 10_000).toLocaleString(undefined, { maximumFractionDigits: 4 })}%</strong>
       {totalUnits !== 1_000_000 ? ' · Needs 100% to activate' : ' · Ready to activate'}</p>
     {!valid && <p role="alert" className="error-banner">Use numbers from 0 to 100 with up to four decimal places.</p>}
     {error && <p role="alert" className="error-banner">{error}</p>}
     <div className="form-actions">
-      <button disabled={busy || !valid} onClick={() => void save('draft')}>Save draft</button>
-      <button disabled={busy || !valid || totalUnits !== 1_000_000} onClick={() => void save('active')}>{busy ? 'Saving…' : 'Activate targets'}</button>
+      <BusyButton className="button" busy={saving === 'draft'} inert={busy && saving !== 'draft'} disabled={!valid} onClick={() => void save('draft')}>Save draft</BusyButton>
+      <BusyButton className="button" busy={saving === 'active'} inert={busy && saving !== 'active'} disabled={!valid || totalUnits !== 1_000_000} onClick={() => void save('active')}>Activate targets</BusyButton>
     </div>
   </div>
 }
