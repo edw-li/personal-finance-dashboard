@@ -13,7 +13,8 @@ explicit list (pinned by test_changelog_pin) is the testable choice for a single
 
 Undo (undo_batch) replays a batch's inverses in reverse order in one transaction and is
 itself a batch (source='undo') plus an `undo` run whose report links `undid`, which is how
-"already undone" and the listing's `undone_by` are answered.
+"already undone" and the listing's `undone_by` are answered — and how `superseded` tells a
+later change that still stands from one an Undo cancelled.
 """
 
 import logging
@@ -208,19 +209,65 @@ async def refuse_when_depended_on(db: AsyncSession, table: Table, image: dict[st
                 raise UndoRefused(409, DEPENDENT_REFUSAL)
 
 
+async def _undo_links(db: AsyncSession) -> dict[UUID, UUID]:
+    """Every Undo that went through, as the batch it reversed -> its own batch, read from the
+    `undo` runs' reports. In run order, the first claim of a batch kept, so every reader walks
+    the same chains."""
+    runs = (
+        await db.execute(
+            select(LifecycleRun.report, LifecycleRun.batch_id)
+            .where(LifecycleRun.kind == "undo", LifecycleRun.ok.is_(True))
+            .order_by(LifecycleRun.id)
+        )
+    ).all()
+    links: dict[UUID, UUID] = {}
+    for report, undo_id in runs:
+        undid = (report or {}).get("undid")
+        if not isinstance(undid, str) or undo_id is None:
+            continue
+        try:
+            links.setdefault(UUID(undid), undo_id)
+        except ValueError:
+            continue  # not a batch id: nothing it could have undone
+    return links
+
+
+def _stands(batch_id: UUID, links: dict[UUID, UUID]) -> bool:
+    """Whether the batch's effect is in the data: an even number of Undos above it in its chain
+    — none, or an Undo that was itself undone (a redo), and so on."""
+    undos = 0
+    while batch_id in links:
+        batch_id = links[batch_id]
+        undos += 1
+    return undos % 2 == 0
+
+
 async def superseded(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, str]:
     """batch -> the 409 sentence a LATER log entry earns it, for each batch that has one.
 
-    Two page-wide queries, never one per row, so `GET /activity`'s `undoable` flag and
+    Page-wide queries, never one per row, so `GET /activity`'s `undoable` flag and
     undo_batch's own refusals are decided by this one predicate and cannot drift apart:
 
-    * OVERLAP_REFUSAL — a later row-level entry names one of this batch's rows, so the
-      batch's `before` images are no longer what those rows hold.
+    * OVERLAP_REFUSAL — a later change that still stands touched one of this batch's rows,
+      so the batch's `before` images are no longer what those rows hold. A later change is a
+      batch with a row-level entry on one of this batch's (table, pk) after this batch's own
+      last entry. Undos form chains — X; the Undo U1 that reversed X; the Undo U2 that
+      reversed U1, a redo; … — each batch undone at most once, and a batch STANDS when an
+      even number of Undos sit above it in its chain. A later change L counts only when
+        1. L stands (its effect is in the data), and
+        2. L is not the Undo of a batch that is itself later than this one.
+      So a later change and its standing Undo cancel out — the change no longer stands, the
+      Undo undid a later batch — which is what makes the sentence's "undo those first" true.
+      After a redo, the change stands and counts again while the Undo and the redo cancel;
+      after an Undo of the redo, the whole chain cancels. An Undo of a batch OLDER than this
+      one is an ordinary later change: it rewrote the rows after this batch did, and redoing
+      this batch over it would re-apply whatever this batch's images carry from before.
     * POST_SUMMARY_REFUSAL — an import or a restore was logged after it. Both TRUNCATE …
       RESTART IDENTITY and then setval the sequences, so the ids inside this batch's images
       may now address entirely different rows; the images cannot be trusted even where no
       primary key visibly overlaps. Summary rows carry table_name '*' and an empty pk, which
-      is why the overlap join alone can never see them.
+      is why the overlap join alone can never see them — and they are never undone, so no
+      Undo cancels one.
 
     Overlap wins when both apply — it is the more specific diagnosis.
     """
@@ -241,31 +288,41 @@ async def superseded(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, str]
     )
     mine = aliased(ChangeLog)
     later = aliased(ChangeLog)
-    overlapped = (
-        (
-            await db.execute(
-                select(mine.batch_id)
-                .distinct()
-                .select_from(mine)
-                .join(ends, ends.c.batch_id == mine.batch_id)
-                .join(
-                    later,
-                    and_(
-                        later.id > ends.c.last_id,
-                        later.op != "batch",
-                        later.table_name == mine.table_name,
-                        # jsonb '=' normalises key order and whitespace, so this is the SQL
-                        # twin of comparing sorted-key JSON in Python.
-                        later.pk == mine.pk,
-                    ),
-                )
-                .where(mine.op != "batch")
+    pairs = (
+        await db.execute(
+            select(mine.batch_id, later.batch_id)
+            .distinct()
+            .select_from(mine)
+            .join(ends, ends.c.batch_id == mine.batch_id)
+            .join(
+                later,
+                and_(
+                    later.id > ends.c.last_id,
+                    later.op != "batch",
+                    later.table_name == mine.table_name,
+                    # jsonb '=' normalises key order and whitespace, so this is the SQL
+                    # twin of comparing sorted-key JSON in Python.
+                    later.pk == mine.pk,
+                ),
             )
+            .where(mine.op != "batch")
         )
-        .scalars()
-        .all()
-    )
-    out: dict[UUID, str] = dict.fromkeys(overlapped, OVERLAP_REFUSAL)
+    ).all()
+    later_changes: dict[UUID, set[UUID]] = {}
+    for batch_id, later_id in pairs:
+        later_changes.setdefault(batch_id, set()).add(later_id)
+    links = await _undo_links(db) if later_changes else {}
+    undid = {undo_id: target for target, undo_id in links.items()}
+    stands = {
+        later_id: _stands(later_id, links)
+        for later_ids in later_changes.values()
+        for later_id in later_ids
+    }
+    out: dict[UUID, str] = {
+        batch_id: OVERLAP_REFUSAL
+        for batch_id, later_ids in later_changes.items()
+        if any(stands[later_id] and undid.get(later_id) not in later_ids for later_id in later_ids)
+    }
     for batch_id, post_summary in (
         await db.execute(select(ends.c.batch_id, ends.c.post_summary))
     ).all():
@@ -278,20 +335,8 @@ async def undone_by(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, UUID]
     """batch -> the undo batch that reversed it, read from the `undo` runs' reports."""
     if not batch_ids:
         return {}
-    wanted = {str(batch_id): batch_id for batch_id in batch_ids}
-    rows = (
-        await db.execute(
-            select(LifecycleRun.report, LifecycleRun.batch_id).where(
-                LifecycleRun.kind == "undo", LifecycleRun.ok.is_(True)
-            )
-        )
-    ).all()
-    out: dict[UUID, UUID] = {}
-    for report, undo_batch in rows:
-        undid = (report or {}).get("undid")
-        if isinstance(undid, str) and undid in wanted and undo_batch is not None:
-            out[wanted[undid]] = undo_batch
-    return out
+    links = await _undo_links(db)
+    return {batch_id: links[batch_id] for batch_id in batch_ids if batch_id in links}
 
 
 async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> UUID:

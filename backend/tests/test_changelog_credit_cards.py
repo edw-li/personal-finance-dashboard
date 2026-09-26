@@ -462,14 +462,17 @@ async def test_a_card_reorder_is_one_batch_named_for_what_moved(auth_client, db)
     assert same.status_code == 200 and "x-change-batch" not in same.headers
 
 
-async def test_undoing_an_older_card_edit_after_a_reorder_moved_it_refuses(auth_client, db):
+async def test_undoing_an_older_card_edit_refuses_until_the_reorder_is_undone(auth_client, db):
     """Why the reorder is logged at all (spec §6.1): the edit's Undo writes the card's whole
     old row back, sort_order included, so after an unlogged reorder it would silently move
-    the card. Logged, the reorder is a later change to the same row: undo that first."""
+    the card. Logged, the reorder is a later change to the same row: undo that first — and
+    then the edit's Undo goes through (a change and its standing Undo cancel out,
+    changelog.superseded), putting back exactly the rows it found."""
     seeded = [card("A"), card("B", 1), card("C", 2)]
     db.add_all(seeded)
     await db.commit()
     a, b, c = (row.id for row in seeded)
+    before = await images(db, CreditCard)
     edited = await auth_client.patch(f"{CARDS}/{b}", json=card_body("B"))
     assert edited.status_code == 200, edited.text
     reordered = await auth_client.put(CARD_ORDER, json={"ids": [b, a, c]})
@@ -481,6 +484,9 @@ async def test_undoing_an_older_card_edit_after_a_reorder_moved_it_refuses(auth_
     resp = await undo(auth_client, reordered)
     assert resp.status_code == 200, resp.text
     assert await sort_orders(db, CreditCard) == [(a, 0), (b, 1), (c, 2)]
+    retried = await undo(auth_client, edited)
+    assert retried.status_code == 200, retried.text
+    assert await images(db, CreditCard) == before
 
 
 async def test_a_reward_category_reorder_is_one_batch_named_for_what_moved(auth_client, db):
@@ -499,13 +505,14 @@ async def test_a_reward_category_reorder_is_one_batch_named_for_what_moved(auth_
     assert same.status_code == 200 and "x-change-batch" not in same.headers
 
 
-async def test_undoing_an_older_reward_category_edit_after_a_reorder_moved_it_refuses(
+async def test_undoing_an_older_reward_category_edit_refuses_until_the_reorder_is_undone(
     auth_client, db
 ):
     seeded = [category("Dining"), category("Groceries", 1), category("Travel", 2)]
     db.add_all(seeded)
     await db.commit()
     d, g, t = (row.id for row in seeded)
+    before = await images(db, RewardCategory)
     edited = await auth_client.patch(f"{CATEGORIES}/{g}", json={"annual_spend": "6000"})
     assert edited.status_code == 200, edited.text
     reordered = await auth_client.put(CATEGORY_ORDER, json={"ids": [g, d, t]})
@@ -516,6 +523,9 @@ async def test_undoing_an_older_reward_category_edit_after_a_reorder_moved_it_re
     resp = await undo(auth_client, reordered)
     assert resp.status_code == 200, resp.text
     assert await sort_orders(db, RewardCategory) == [(d, 0), (g, 1), (t, 2)]
+    retried = await undo(auth_client, edited)
+    assert retried.status_code == 200, retried.text
+    assert await images(db, RewardCategory) == before
 
 
 def test_an_undo_takes_the_card_lists_locks_after_the_workbook_lists():
