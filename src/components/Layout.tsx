@@ -1,5 +1,5 @@
 import { Search } from 'lucide-react'
-import { Suspense, useEffect, useRef } from 'react'
+import { lazy, Suspense, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigationType } from 'react-router-dom'
 import { markLanded } from '../prefs/LandingRedirect'
 import AssistantDrawer from './assistant/AssistantDrawer'
@@ -12,6 +12,10 @@ import { prefetchRoute, warmAllRoutes } from './routeChunks'
 import ShellErrorBoundary from './shell/ShellErrorBoundary'
 import SidebarFooter, { getLastSystemStatus } from './shell/SidebarFooter'
 import { usePageTitle } from './usePageTitle'
+import GuideSessionProvider from '../guide/GuideSessionProvider'
+import { useGuideSession } from '../guide/guideSession'
+
+const GuideCompanion = lazy(() => import('../guide/GuideCompanion'))
 
 // Module scope, read once: the host OS does not change mid-session, and the sidebar's
 // kbd hint must name the modifier the reader actually presses. navigator.platform is
@@ -20,7 +24,23 @@ import { usePageTitle } from './usePageTitle'
 const isMac = navigator.platform.startsWith('Mac')
 
 export default function Layout() {
+  const { key } = useLocation()
+  // Keep the session, navigation and both instruction panels inside the shell's boundary.
+  // resetKey clears a failed boundary without remounting healthy state on every navigation.
+  return (
+    <ShellErrorBoundary buildHash={__BUILD_HASH__} resetKey={key} getDiagnostics={() => {
+      const status = getLastSystemStatus()
+      if (status === null) return ''
+      return `env=${status.environment} alembic=${status.database.alembic_head ?? 'none (create_all)'}`
+    }}>
+      <GuideSessionProvider><LayoutContent /></GuideSessionProvider>
+    </ShellErrorBoundary>
+  )
+}
+
+function LayoutContent() {
   const { pathname, key: locationKey } = useLocation()
+  const guide = useGuideSession()
   const navigationType = useNavigationType()
   usePageTitle()
   const mainRef = useRef<HTMLElement>(null)
@@ -150,27 +170,6 @@ export default function Layout() {
   }, [])
 
   return (
-    // Everything below is inside ONE boundary (2026-09-03 shell spec §12): the palette, the
-    // drawer and the sidebar live outside RouteBoundary's reach, so until now a throw in any
-    // of them unmounted the entire app and left a white page a reload could not always fix.
-    // The diagnostics closure reads what the footer already fetched rather than fetching: a
-    // boundary that needs the network to explain itself is a boundary that stays silent.
-    //
-    // resetKey, not key={pathname}: location.key changes on every navigation, and a PROP lets
-    // the boundary clear itself while the palette and the drawer inside it keep their state
-    // (a key would remount them, and the drawer's transcript is per-sitting, not per-page).
-    <ShellErrorBoundary
-      buildHash={__BUILD_HASH__}
-      resetKey={locationKey}
-      getDiagnostics={() => {
-        const status = getLastSystemStatus()
-        if (status === null) return ''
-        // `none (create_all)`, not `null`: a schema built by create_all genuinely has no
-        // alembic head, and "null" in a pasted report reads like the report is broken.
-        const head = status.database.alembic_head ?? 'none (create_all)'
-        return `env=${status.environment} alembic=${head}`
-      }}
-    >
       <div className="layout">
         {/* The app's first tabbable: a keyboard user clears the 14-link sidebar in one Tab. */}
         <a className="skip-link" href="#main">
@@ -245,6 +244,11 @@ export default function Layout() {
             </RouteBoundary>
           </Suspense>
         </main>
+        {pathname !== '/guide' && guide?.taskId && (
+          <Suspense fallback={<aside className="route-fallback" role="status">Loading instructions…</aside>}>
+            <GuideCompanion />
+          </Suspense>
+        )}
         <CommandPalette />
         {/* Beside the palette, and last for the same reason: both are app-wide overlays that
             outlive every route, so neither may sit inside <main> where a navigation would
@@ -256,6 +260,5 @@ export default function Layout() {
             keypress and the drawer taking focus. The bill is ~6.3 kB gz on the entry chunk. */}
         <AssistantDrawer />
       </div>
-    </ShellErrorBoundary>
   )
 }

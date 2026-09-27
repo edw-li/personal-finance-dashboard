@@ -47,9 +47,9 @@ describe('GuideCard (master–detail)', () => {
     expect(within(detail()).getByRole('heading', { level: 4, name: 'Add an example' })).toBeTruthy()
     const steps = Array.from(detail().querySelectorAll('ol.guide-steps > li')).map((li) => li.textContent)
     expect(steps).toEqual(['Open Accounts.', 'Press Add example.'])
-    expect(detail().querySelectorAll('b.guide-label')).toHaveLength(2)
+    expect(detail().querySelectorAll('.guide-steps b.guide-label')).toHaveLength(2)
     expect(within(detail()).getByText('Blank means not entered — it is never a zero.')).toBeTruthy()
-    expect(within(detail()).getByRole('link', { name: 'Go →' }).getAttribute('href')).toBe('/net-worth?section=accounts')
+    expect(within(detail()).getByRole('link', { name: 'Open Net worth →' }).getAttribute('href')).toBe('/net-worth?section=accounts&guideTask=example-add')
   })
 
   it('renders the card-level Watch out in the detail column', () => {
@@ -125,7 +125,7 @@ describe('GuideCard (master–detail)', () => {
   // to the neighbouring task; focus moves with the selection, onto the rail row now selected.
   it('a numbered rail’s detail says Step N of M and walks forward and back, focus moving with it', () => {
     renderCard(numberedCard, '/guide?section=routines')
-    const foot = () => detail().querySelector('.guide-detail-foot') as HTMLElement
+    const foot = () => detail().querySelector('.guide-detail-nav') as HTMLElement
     expect(within(foot()).getByText('Step 1 of 2')).toBeTruthy()
     expect(within(foot()).queryByRole('button', { name: /^Previous/ })).toBeNull()
     fireEvent.click(within(foot()).getByRole('button', { name: 'Next: Look afterwards' }))
@@ -140,16 +140,18 @@ describe('GuideCard (master–detail)', () => {
     expect(document.activeElement).toBe(document.getElementById('checklist-open'))
   })
 
-  it('an un-numbered rail’s detail offers Next only, and nothing on the last task', () => {
+  it('an un-numbered rail offers Previous and Next, including a way back from the last task', () => {
     renderCard()
-    const foot = () => detail().querySelector('.guide-detail-foot')
+    const foot = () => detail().querySelector('.guide-detail-nav')
     expect(foot()?.textContent).not.toMatch(/Step/)
     expect(within(foot() as HTMLElement).queryByRole('button', { name: /^Previous/ })).toBeNull()
     fireEvent.click(within(foot() as HTMLElement).getByRole('button', { name: 'Next: Export the example' }))
     expect(document.getElementById('example-export')?.getAttribute('aria-selected')).toBe('true')
     fireEvent.click(within(foot() as HTMLElement).getByRole('button', { name: 'Next: Show the table' }))
     expect(document.getElementById('example-table')?.getAttribute('aria-selected')).toBe('true')
-    expect(foot()).toBeNull()
+    expect(within(foot() as HTMLElement).queryByRole('button', { name: /^Next/ })).toBeNull()
+    fireEvent.click(within(foot() as HTMLElement).getByRole('button', { name: 'Previous: Export the example' }))
+    expect(document.getElementById('example-export')?.getAttribute('aria-selected')).toBe('true')
   })
 
   it('a numbered card shows 1-based numbers on its rows', () => {

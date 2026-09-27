@@ -1,10 +1,12 @@
 import { useLocation } from 'react-router-dom'
 import PageFrame from '../components/shell/PageFrame'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
-import { chapterOf } from '../guide/anchors'
+import { chapterOf, hashTarget } from '../guide/anchors'
 import CardSelector, { selectedCardId } from '../guide/CardSelector'
 import { GUIDE } from '../guide/content'
 import GuideCard from '../guide/GuideCard'
+import GuideSearch from '../guide/GuideSearch'
+import SetupProgressProvider from '../guide/SetupProgressProvider'
 import type { GuideChapter, GuideChapterId } from '../guide/types'
 import '../components/panels.css'
 import './GuidePage.css'
@@ -34,9 +36,15 @@ function SelectorChapter({ chapter }: { chapter: GuideChapter }) {
 }
 
 export default function GuidePage() {
+  return <SetupProgressProvider><GuideContent /></SetupProgressProvider>
+}
+
+function GuideContent() {
+  const location = useLocation()
   const views = useLocalSections<GuideChapterId>(CHAPTERS, 'start', {
+    preserveHashPosition: location.state?.guideTaskSelection === hashTarget(location.hash),
     resolveLegacy: ({ hash }) => {
-      const target = hash.slice(1)
+      const target = hashTarget(hash)
       if (!target) return null
       const chapter = chapterOf(target)
       return chapter ? { section: chapter, targetId: target } : null
@@ -46,6 +54,7 @@ export default function GuidePage() {
     <div className="page guide-page">
       <PageFrame
         title="Guide"
+        subheader={<GuideSearch />}
         sections={<LocalSectionNav state={views} label="Guide chapters" />}
         resource={{ status: 'ready' }}
       >

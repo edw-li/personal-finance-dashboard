@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useLocation } from 'react-router-dom'
-import { hashTarget } from './anchors'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { chapterOf, hashTarget } from './anchors'
+import { rememberSetupTask } from './setupProgress'
 import type { GuideCard } from './types'
 
 export interface TaskSelection {
@@ -17,18 +18,29 @@ export function taskFromHash(card: GuideCard, hash: string): string | null {
 
 // Which task the detail column shows (2026-09-15 polish spec §2.4). The hash wins on arrival and
 // whenever it changes while the card is mounted (a palette hit, a pointer link); otherwise the
-// first task. Clicking a row changes state only — a hash write would re-run the arrival
-// scroll-and-focus on every click. Derived during render, the LocalSections idiom: compare the
+// first task. A row pick replaces the hash and tells LocalSections to keep the viewport still.
+// Reload and Back still perform normal deep-link arrival. Compare the
 // hash last honoured with the current one instead of a setState-in-effect. Every task sits in
 // the rail (the user retired the "More tasks" fold, 2026-09-15), so there is no fold state.
 export function useTaskSelection(card: GuideCard): TaskSelection {
-  const { hash } = useLocation()
+  const location = useLocation()
+  const { hash } = location
+  const navigate = useNavigate()
   const [state, setState] = useState(() => ({ selectedId: taskFromHash(card, hash) ?? card.tasks[0]?.id ?? '', hash }))
   if (state.hash !== hash) {
     setState({ selectedId: taskFromHash(card, hash) ?? state.selectedId, hash })
   }
   return {
     selectedId: state.selectedId,
-    select: (id) => setState((s) => ({ ...s, selectedId: id })),
+    select: (id) => {
+      setState((s) => ({ ...s, selectedId: id }))
+      rememberSetupTask(id)
+      const params = new URLSearchParams(location.search)
+      const chapter = chapterOf(id)
+      if (chapter) params.set('section', chapter)
+      navigate({ pathname: location.pathname, search: params.toString(), hash: `#${id}` }, {
+        replace: true, preventScrollReset: true, state: { ...location.state, guideTaskSelection: id },
+      })
+    },
   }
 }

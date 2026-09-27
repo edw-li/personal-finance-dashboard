@@ -120,7 +120,8 @@ export const INCOME_CARDS: GuideCard[] = [
         where: 'Paycheck → Profiles → Profile history',
         steps: [
           'Press **Edit** on a row, change it, and press **Save profile**.',
-          '**Delete** asks once; the page falls back to the profile in force.',
+          '**Delete** removes the profile immediately; the page falls back to the profile in force.',
+          'Use the toast’s **Undo** to restore it, or find the change in Settings → Data → Activity.',
         ],
         to: '/paycheck?section=profiles',
       },
@@ -157,7 +158,7 @@ export const INCOME_CARDS: GuideCard[] = [
       'A profile belongs to one person — there is no All or Joint on this page.',
       'Blank percent and money boxes save as a real zero; only the withholding split reads blank as not entered.',
       'Percents that together exceed 100 % warn but save — one box over 100 is refused.',
-      'Deleting a profile asks once and cannot be undone.',
+      'Deleting a profile offers Undo in its toast and in Settings → Data → Activity.',
     ],
   },
   {
@@ -251,7 +252,7 @@ export const INCOME_CARDS: GuideCard[] = [
       'Comp is not per person — there is no owner chip, and grants and focal history are one household set.',
       'A grant whose shares or price no longer match its focal row raises a drift note — the schedule follows the grant.',
       'With no employer ticker in Settings → Planning → Plan assumptions, every future vest is unvalued.',
-      'Deleting a focal row asks once and cannot be undone; deleting a grant can be undone from its toast.',
+      'Deleting a focal row or grant offers Undo in its toast and in Settings → Data → Activity.',
     ],
   },
   {
@@ -377,7 +378,7 @@ export const INCOME_CARDS: GuideCard[] = [
     watch: [
       'A capped purchase refunds the leftover cash and carries nothing into the next period.',
       'With no employer ticker in Settings → Planning → Plan assumptions, nothing on this page has a market value.',
-      'Deleting an offering or a lot asks once and cannot be undone.',
+      'Deleting an offering or lot removes it immediately; use Undo in the toast or Settings → Data → Activity to restore it.',
     ],
   },
   {

@@ -1,5 +1,6 @@
 import { GUIDE } from './content'
 import type { GuideChapter } from './types'
+import { buildGuideIndex } from './search'
 
 // The palette's view of the guide (2026-09-14 guide spec §6): one destination per task so
 // "add a card" typed into Ctrl/⌘+K lands on the task, not the page. Shaped like a
@@ -15,23 +16,8 @@ export interface GuidePaletteEntry {
 }
 
 export function guideEntries(guide: readonly GuideChapter[] = GUIDE): GuidePaletteEntry[] {
-  const entries: GuidePaletteEntry[] = []
-  for (const chapter of guide) {
-    for (const card of chapter.cards) {
-      // A numbered card is a checklist read in order (the setup steps, the tax season); its rows
-      // would duplicate the page tasks they point at, so the palette lists those instead.
-      if (card.numbered) continue
-      for (const task of [...card.tasks, ...(card.more ?? [])]) {
-        if (task.id.endsWith('-pointer')) continue
-        entries.push({
-          id: `guide:${task.id}`,
-          label: task.title,
-          sub: `Guide · ${card.title}`,
-          keywords: [...(task.keywords ?? []), ...(card.keywords ?? []), 'how to', 'guide'],
-          to: `/guide?section=${chapter.id}#${task.id}`,
-        })
-      }
-    }
-  }
-  return entries
+  return buildGuideIndex(guide).filter((entry) => !entry.id.endsWith('-pointer')).map((entry) => ({
+    id: `guide:${entry.id}`, label: entry.title, sub: `Guide · ${entry.card}`,
+    keywords: [...entry.keywords, 'how to', 'guide', entry.text], to: entry.to,
+  }))
 }

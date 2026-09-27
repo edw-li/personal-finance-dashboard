@@ -6,6 +6,7 @@ The audit's other candidates wait for theirs. Values are stored as JSONB exactly
 validated here; the router turns PrefValueError into a 422 that names the key.
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -91,6 +92,26 @@ def _recents(value: Any) -> Any:
     return value
 
 
+def _guide_progress(value: Any) -> Any:
+    def task_id(item):
+        return isinstance(item, str) and re.fullmatch(r"setup-[a-z][a-z0-9-]{0,79}", item)
+
+    if not isinstance(value, dict) or set(value) != {"tasks", "lastTask"}:
+        raise PrefValueError("must contain tasks and lastTask")
+    if value["lastTask"] is not None and not task_id(value["lastTask"]):
+        raise PrefValueError("lastTask must be a setup task id or null")
+    tasks = value["tasks"]
+    if (
+        not isinstance(tasks, dict)
+        or len(tasks) > 50
+        or any(
+            not task_id(key) or status not in ("done", "skipped") for key, status in tasks.items()
+        )
+    ):
+        raise PrefValueError("tasks must map at most 50 setup ids to done or skipped")
+    return value
+
+
 @dataclass(frozen=True)
 class PrefSpec:
     key: str
@@ -106,6 +127,7 @@ PREF_REGISTRY: dict[str, PrefSpec] = {
         PrefSpec("scope", {"owner": "all", "range": "1y"}, _scope),
         PrefSpec("palette_recents", [], _recents),
         PrefSpec("landing_page", "/", _one_of(NAV_PATHS)),
+        PrefSpec("guide_progress", {"tasks": {}, "lastTask": None}, _guide_progress),
         PrefSpec(
             "overview_layout",
             {"tiles": list(OVERVIEW_TILES), "cards": list(OVERVIEW_CARDS)},

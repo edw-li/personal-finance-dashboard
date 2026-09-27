@@ -1,5 +1,6 @@
 import type { GuideCard } from '../types'
 import { SettingsMapTable } from './settingsMap'
+import { SETTINGS_MAP_ROWS } from './settingsMapRows'
 
 // Chapter: Pages — Projection, Calendar, Settings (two cards) (2026-09-14 guide spec §5.1).
 // Written by lane G4 from research §5.3 P10–P12; every bold label and every `where` segment
@@ -447,7 +448,7 @@ export const PLANNING_CARDS: GuideCard[] = [
         ],
         to: '/settings?section=integrations#price-refresh',
         watch: [
-          'Keep Mondays covered — the Monday run is what records the weekly performance point.',
+          'Weekly performance uses Monday points; later refreshes backfill missed Mondays when historical prices are available.',
           'A schedule that would fire more often than hourly is refused.',
         ],
         keywords: ['cron', 'schedule', 'price refresh', 'scheduler'],
@@ -552,8 +553,9 @@ export const PLANNING_CARDS: GuideCard[] = [
       },
     ],
     body: <SettingsMapTable />,
+    searchText: SETTINGS_MAP_ROWS.map((row) => `${row.task} ${row.place}`).join(' '),
     watch: [
-      'An apply that failed may still have written — restore the snapshot you took first.',
+      'Import validation errors block the whole apply. If the connection drops, check Activity before retrying: the server may have finished.',
       'The cron takes day names (mon-fri); numbers there mean something else.',
       'A key saved on the Assistant card overrides the one in the server’s .env.',
     ],

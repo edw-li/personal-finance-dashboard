@@ -17,9 +17,9 @@ describe('guideEntries', () => {
     expect(add.keywords).toEqual(expect.arrayContaining(['how to', 'guide']))
   })
 
-  it('skips the tasks of a numbered card — checklist steps are a sequence, not how-tos', () => {
+  it('includes numbered checklist tasks so setup can be searched directly', () => {
     const entries = guideEntries(FIXTURE_GUIDE)
-    expect(entries.some((e) => e.id === 'guide:checklist-open')).toBe(false)
+    expect(entries.some((e) => e.id === 'guide:checklist-open')).toBe(true)
     expect(entries.some((e) => e.id === 'guide:example-add')).toBe(true)
   })
 
@@ -44,7 +44,7 @@ describe('guideEntries', () => {
       },
     ]
     const entries = guideEntries(guide)
-    expect(entries.map((e) => e.id)).toEqual(['guide:x-do'])
-    expect(entries[0].keywords).toEqual(['task word', 'card word', 'how to', 'guide'])
+    expect(entries.map((e) => e.id)).toEqual(['guide:page-x', 'guide:x-do'])
+    expect(entries[1].keywords).toEqual(expect.arrayContaining(['task word', 'card word', 'how to', 'guide', 'W S.']))
   })
 })

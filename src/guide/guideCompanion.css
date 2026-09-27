@@ -1,0 +1,36 @@
+.guide-companion {
+  position: sticky;
+  top: 0;
+  flex: 0 0 370px;
+  width: 370px;
+  height: 100dvh;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  z-index: 5;
+}
+.guide-companion-head { display: flex; justify-content: space-between; align-items: start; gap: 0.75rem; padding: 1.15rem; border-bottom: 1px solid var(--border); }
+.guide-companion-head p { margin: 0.3rem 0 0; font-weight: 600; }
+.guide-companion-head .button { flex-shrink: 0; }
+.guide-companion-body { overflow: auto; overscroll-behavior: contain; padding: 1.15rem; }
+.guide-companion .guide-detail-footer { grid-template-columns: 1fr; }
+.guide-companion .guide-detail-nav { justify-content: space-between; }
+.guide-companion .guide-go { width: 100%; justify-content: center; }
+.guide-return { display: block; margin-top: 1.25rem; font-size: 0.85rem; }
+.guide-companion a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.layout:has(> .guide-companion:not(.guide-companion-paused)) .assistant-launcher { right: calc(370px + 1.25rem); }
+.guide-companion-paused { position: fixed; top: auto; right: calc(var(--dock-width, 0px) + 1rem); bottom: 1rem; height: auto; max-height: 35dvh; width: 320px; border: 1px solid var(--border); border-radius: 10px; }
+@media (max-width: 1250px) {
+  .layout:has(> .guide-companion:not(.guide-companion-paused)) { padding-bottom: 37dvh; }
+  .guide-companion { position: fixed; top: auto; bottom: 0; right: 0; width: calc(100% - 210px); height: 37dvh; border-top: 1px solid var(--border); }
+  .guide-companion-head { padding: 0.65rem 1rem; align-items: center; }
+  .guide-companion-head .eyebrow { display: none; }
+  .guide-companion-head p { margin: 0; }
+  .layout:has(> .guide-companion:not(.guide-companion-paused)) .assistant-launcher { bottom: calc(37dvh + 1rem); right: calc(var(--dock-width, 0px) + 1.25rem); }
+  .guide-companion-paused { width: 290px; height: auto; }
+}
+@media (max-width: 700px) {
+  .guide-companion { width: 100%; }
+}

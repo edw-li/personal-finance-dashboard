@@ -2,8 +2,8 @@ import type { ReactNode } from 'react'
 
 // The guide is data, not prose in components (2026-09-14 guide spec §4): the page renders it,
 // the command palette indexes it, and the fences in guideContent.test.ts hold every link and
-// bold label to the real UI. Keep strings plain — the only markup `steps` may carry is
-// **Label** for an on-screen label (renderSteps.tsx).
+// label to the real UI. Steps support **Label** for an on-screen label and `literal`
+// for an input example (renderSteps.tsx).
 export type GuideChapterId = 'start' | 'routines' | 'pages' | 'reference'
 
 export interface GuideTask {
@@ -22,6 +22,8 @@ export interface GuideTask {
   watch?: string[]
   /** Palette aliases beyond the words in `title`. */
   keywords?: string[]
+  /** Literal input with an explanation, rendered as a selectable code example. */
+  example?: { label: string; value: string; note?: string }
 }
 
 export interface GuideCard {
@@ -39,8 +41,11 @@ export interface GuideCard {
   more?: GuideTask[]
   /** Card-level traps. ≤ 5. */
   watch?: string[]
-  /** Prose for Start here / Reference cards; may contain <Link>s. Not fenced. */
+  /** Prose for Start here / Reference cards; may contain <Link>s checked by the link fence. */
   body?: ReactNode
+  /** Search text for custom components whose children cannot be read statically. */
+  searchText?: string
+  definitions?: { id: string; title: string; text: string }[]
   /** Extra palette aliases applied to every task in this card ('credit card', 'rewards'). */
   keywords?: string[]
   /** Rail rows show their 1-based number — a checklist read in order (2026-09-15 polish spec §2.2). */

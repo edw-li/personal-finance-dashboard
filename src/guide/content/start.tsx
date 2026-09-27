@@ -10,13 +10,13 @@ export const START_CARDS: GuideCard[] = [
     id: 'start-what',
     title: 'What this dashboard does',
     purpose:
-      'A self-hosted dashboard for one household’s money: you enter balances, spending and take-home once a month, prices refresh on a schedule, everything else is computed.',
+      'A self-hosted dashboard for one household’s money: enter monthly balances, spending and take-home, keep your other records current, and explore the resulting picture.',
     tasks: [],
     body: (
       <>
         <p className="guide-body">
-          Nothing leaves your server except price lookups and, if you turn it on, the questions you ask
-          the assistant. Two people can be tracked; most pages have a <b className="guide-label">Whose</b>{' '}
+          Price refreshes request market data. If you use the assistant, your question and relevant
+          financial records are sent to its provider. Most pages have a <b className="guide-label">Whose</b>{' '}
           chip in the sticky row under the title.
         </p>
         <p className="guide-body">
@@ -25,6 +25,7 @@ export const START_CARDS: GuideCard[] = [
           limits once a year on <Link to="/taxes">Taxes</Link> and{' '}
           <Link to="/settings?section=planning">Settings → Planning</Link>.
         </p>
+        <p className="guide-body">New to entering data? Start with <Link to="/guide?section=reference#ref-data-sources">where each number comes from</Link> and <Link to="/guide?section=reference#ref-get-ready">what to have ready</Link>.</p>
       </>
     ),
   },
@@ -42,7 +43,7 @@ export const START_CARDS: GuideCard[] = [
           <h4>The sidebar</h4>
           <p>
             <b className="guide-label">Overview</b> and <b className="guide-label">Monthly update</b> sit on
-            top: the briefing, and the one place data is entered.{' '}
+            top: the briefing, and the place to enter monthly totals. Other records have their own editors.{' '}
             <b className="guide-label">Tracking</b> — Net worth, Portfolio, Spending, Credit cards: what you
             have and what you spend. <b className="guide-label">Income</b> — Paycheck, Comp, ESPP: what you
             earn and how it arrives. <b className="guide-label">Planning</b> — Taxes, Projection, Calendar:
@@ -201,7 +202,7 @@ export const START_CARDS: GuideCard[] = [
           'Then **Refresh now** for the first prices.',
         ],
         to: '/settings?section=integrations#price-refresh',
-        watch: ['Keep Mondays covered — the Monday run records the weekly performance point.'],
+        watch: ['Weekly performance uses Monday points; later refreshes also backfill missed Mondays when prices are available.'],
       },
       {
         id: 'setup-portfolio',

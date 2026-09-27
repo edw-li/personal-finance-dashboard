@@ -82,6 +82,12 @@ const allTasks: { task: GuideTask; card: GuideCard }[] = allCards.flatMap(({ car
 const allLinks: { to: string; owner: string }[] = [
   ...allCards.filter(({ card }) => card.to).map(({ card }) => ({ to: card.to!, owner: card.id })),
   ...allTasks.filter(({ task }) => task.to).map(({ task }) => ({ to: task.to!, owner: task.id })),
+  ...allCards.flatMap(({ card }) => {
+    const view = render(createElement(MemoryRouter, null, card.body))
+    const links = Array.from(view.container.querySelectorAll('a[href]')).map((link) => ({ to: link.getAttribute('href')!, owner: card.id }))
+    view.unmount()
+    return links
+  }),
 ]
 const guideIds = new Set(allIds())
 
@@ -180,7 +186,7 @@ describe('guide content — completeness, shape and uniqueness (spec §8.3)', ()
   })
 
   it('card and task ids are unique, kebab-case, and every id resolves to its chapter', () => {
-    const ids = [...allCards.map(({ card }) => card.id), ...allTasks.map(({ task }) => task.id)]
+    const ids = [...allCards.map(({ card }) => card.id), ...allTasks.map(({ task }) => task.id), ...allCards.flatMap(({ card }) => (card.definitions ?? []).map((definition) => definition.id))]
     const dupes = ids.filter((id, i) => ids.indexOf(id) !== i)
     expect(dupes).toEqual([])
     expect(ids.filter((id) => !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id))).toEqual([])
@@ -220,7 +226,7 @@ describe('guide content — the time model (2026-09-23 spec §T11)', () => {
   const bodyText = (id: string): string => {
     const card = allCards.find(({ card }) => card.id === id)?.card
     expect(card, id).toBeDefined()
-    return render(createElement(MemoryRouter, null, card?.body)).container.textContent ?? ''
+    return (render(createElement(MemoryRouter, null, card?.body)).container.textContent ?? '') + (card?.definitions ?? []).map((definition) => `${definition.title} ${definition.text}`).join(' ')
   }
 
   it('the glossary defines the balance date, provisional balances, a month’s story, due and overdue, and partly entered spending', () => {

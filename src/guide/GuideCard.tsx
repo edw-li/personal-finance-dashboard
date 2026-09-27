@@ -4,6 +4,7 @@ import TaskDetail from './TaskDetail'
 import TaskRail from './TaskRail'
 import type { GuideCard as GuideCardData, GuideTask } from './types'
 import { useTaskSelection } from './useTaskSelection'
+import { SetupSummary } from './SetupChecklist'
 
 // The card grammar after the 2026-09-15 polish: Purpose · views · body, then a rail of tasks on
 // the left and the selected task's detail on the right (spec §2.1). Still a .card so the shell's
@@ -52,6 +53,12 @@ export default function GuideCard({ card }: { card: GuideCardData }) {
       <p className="guide-purpose">{card.purpose}</p>
       {card.views && card.views.length > 0 && <p className="drill-hint">Views: {card.views.join(' · ')}</p>}
       {card.body}
+      {card.definitions && <dl className="guide-body guide-glossary guide-glossary-grid">
+        {card.definitions.map((definition) => <div className="guide-definition" key={definition.id} id={definition.id} tabIndex={-1}>
+          <dt>{definition.title}</dt><dd>{definition.text}</dd>
+        </div>)}
+      </dl>}
+      {card.id === 'start-setup' && <SetupSummary tasks={all} onSelect={selection.select} />}
       {hasTasks && selected ? (
         <div className="guide-md">
           <div className="guide-rail-col">
@@ -64,9 +71,9 @@ export default function GuideCard({ card }: { card: GuideCardData }) {
             <TaskDetail
               task={selected}
               id={detailId}
+              watch={watch}
               step={{ index, count: all.length, numbered: card.numbered === true, previous: all[index - 1] ?? null, next: all[index + 1] ?? null, onGo: go }}
             />
-            {watchBlock}
           </div>
         </div>
       ) : (

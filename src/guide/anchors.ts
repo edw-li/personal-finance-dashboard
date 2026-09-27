@@ -18,7 +18,7 @@ export function buildAnchorIndex(guide: readonly GuideChapter[]): AnchorIndex {
         chapter.set(c.id, ch.id)
         card.set(c.id, c.id)
       }
-      for (const task of [...c.tasks, ...(c.more ?? [])]) {
+      for (const task of [...c.tasks, ...(c.more ?? []), ...(c.definitions ?? [])]) {
         if (!chapter.has(task.id)) {
           chapter.set(task.id, ch.id)
           card.set(task.id, c.id)

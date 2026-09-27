@@ -1,20 +1,16 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { NAV_ITEMS } from '../components/navItems'
 import { prefersReducedMotion } from '../components/useReducedMotion'
 import { EASE_OUT, MOTION_MS } from '../theme/motion'
+import { chapterOf } from './anchors'
+import { guidedDestination } from './guideSession'
 import { renderSteps } from './renderSteps'
+import { SetupTaskProgress } from './SetupChecklist'
+import { rememberSetupTask } from './setupProgress'
 import type { GuideTask } from './types'
 
-// The right column of a master–detail card (2026-09-15 polish spec §2.3): the selected task's
-// title, path, steps, traps and Go link — the markup the old task list rendered, one task at a
-// time. A tabpanel labelled by the rail row that selected it. On a task change it crossfades
-// (the LocalSectionPanel idiom: WAAPI so a re-render restarts it; skipped on first mount, under
-// reduced motion, and where animate() is missing — jsdom).
-/** Where the selected task sits in its rail, and the way to its neighbours (2026-09-25 polish spec
- *  §3.8). A numbered rail — a checklist read in order — says "Step N of M" and offers both ways; an
- *  un-numbered one only Next. */
 export interface TaskStep {
-  /** 0-based position in the rail. */
   index: number
   count: number
   numbered: boolean
@@ -23,68 +19,67 @@ export interface TaskStep {
   onGo: (task: GuideTask) => void
 }
 
-export default function TaskDetail({ task, id, step }: { task: GuideTask; id: string; step?: TaskStep }) {
-  // Only a numbered rail walks backwards; any rail walks forward while there is a next task.
-  const previous = step?.numbered ? step.previous : null
-  const next = step?.next ?? null
+/** Shared by the Guide and companion: one source for the instructions and navigation. */
+export default function TaskDetail({ task, id, step, watch = [], companion = false }: {
+  task: GuideTask; id: string; step?: TaskStep; watch?: string[]; companion?: boolean
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const firstRef = useRef(true)
+  const [copied, setCopied] = useState<{ id: string; message: string } | null>(null)
   useLayoutEffect(() => {
     const first = firstRef.current
     firstRef.current = false
     if (first) return
     const el = ref.current
     if (el === null || prefersReducedMotion() || typeof el.animate !== 'function') return
-    el.animate(
-      [{ opacity: 0, translate: '0 6px' }, { opacity: 1, translate: 'none' }],
-      { duration: MOTION_MS.xfade, easing: EASE_OUT, fill: 'backwards' },
-    )
+    el.animate([{ opacity: 0, translate: '0 6px' }, { opacity: 1, translate: 'none' }],
+      { duration: MOTION_MS.xfade, easing: EASE_OUT, fill: 'backwards' })
   }, [task.id])
+  const copyLink = async () => {
+    const chapter = chapterOf(task.id)
+    const link = new URL(`/guide${chapter ? `?section=${chapter}` : ''}#${task.id}`, window.location.origin).href
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied({ id: task.id, message: 'Task link copied' })
+    } catch {
+      setCopied({ id: task.id, message: `Copy this task link: ${link}` })
+    }
+  }
+  const cautions = [...(task.watch ?? []), ...watch]
+  const destination = NAV_ITEMS.find((item) => item.to === task.to?.split(/[?#]/)[0])?.label ?? task.where.split(' → ')[0]
   return (
-    <div ref={ref} className="guide-detail" role="tabpanel" id={id} aria-labelledby={task.id}>
-      <h4 className="guide-task-title">{task.title}</h4>
-      <p className="guide-where">
-        <span className="guide-where-label">Where:</span> {task.where}
-      </p>
+    <div ref={ref} className="guide-detail" role={companion ? 'region' : 'tabpanel'} id={id}
+      aria-labelledby={companion ? `${id}-title` : task.id} tabIndex={0}>
+      <div className="guide-detail-heading">
+        <h4 className="guide-task-title" id={`${id}-title`}>{task.title}</h4>
+        <button type="button" className="guide-copy" onClick={() => void copyLink()} aria-label={`Copy link to ${task.title}`}>Copy link</button>
+      </div>
+      {copied?.id === task.id && <p className="guide-status-note" role="status">{copied.message}</p>}
+      <p className="guide-where"><span className="guide-where-label">Where:</span> {task.where}</p>
       <ol className="guide-steps">
-        {task.steps.map((step, index) => (
-          <li key={index}>{renderSteps(step)}</li>
-        ))}
+        {task.steps.map((line, index) => <li key={index}>{renderSteps(line)}</li>)}
       </ol>
-      {task.watch && task.watch.length > 0 && (
-        <ul className="guide-task-watch">
-          {task.watch.map((line) => (
-            <li key={line}>{renderSteps(line)}</li>
-          ))}
-        </ul>
-      )}
-      {task.to && (
-        <Link className="guide-go" to={task.to}>
-          Go →
+      {task.example && <figure className="guide-example"><figcaption>{task.example.label}</figcaption><pre><code>{task.example.value}</code></pre>{task.example.note && <p>{task.example.note}</p>}</figure>}
+      {task.to && <div className="guide-action-row">
+        <Link className="button button-primary guide-go" to={guidedDestination(task.to, task.id)} onClick={() => rememberSetupTask(task.id)}>
+          Open {destination} →
         </Link>
-      )}
-      {/* The foot (spec §3.8, SGS-20): the setup checklist had no Next and no sign of progress, so the
-          reader bounced between rail and detail. The buttons select the neighbouring rail row; the
-          card moves focus there with the selection. Named by the task they lead to. */}
-      {step !== undefined && (step.numbered || next !== null) && (
-        <div className="guide-detail-foot">
-          {step.numbered && (
-            <span className="guide-step-count">
-              Step {step.index + 1} of {step.count}
-            </span>
-          )}
-          {previous !== null && (
-            <button type="button" className="button" aria-label={`Previous: ${previous.title}`} onClick={() => step.onGo(previous)}>
-              ← Previous
-            </button>
-          )}
-          {next !== null && (
-            <button type="button" className="button" aria-label={`Next: ${next.title}`} onClick={() => step.onGo(next)}>
-              Next →
-            </button>
-          )}
-        </div>
-      )}
+        {!companion && <span>Keep these instructions beside the page.</span>}
+      </div>}
+      <SetupTaskProgress taskId={task.id} />
+      {(cautions.length > 0 || step) && <div className="guide-detail-footer">
+        {cautions.length > 0 ? <div className="guide-caution">
+          <h3 className="guide-h3">Watch out</h3>
+          <ul className="guide-watch">{cautions.map((line) => <li key={line}>{renderSteps(line)}</li>)}</ul>
+        </div> : <span />}
+        {step && <div className="guide-detail-nav">
+          <span className="guide-step-count">{step.numbered ? 'Step' : 'Task'} {step.index + 1} of {step.count}</span>
+          <div className="guide-nav-buttons">
+            {step.previous && <button type="button" className="button" aria-label={`Previous: ${step.previous.title}`} onClick={() => step.onGo(step.previous!)}>← Previous</button>}
+            {step.next && <button type="button" className="button" aria-label={`Next: ${step.next.title}`} onClick={() => step.onGo(step.next!)}>Next →</button>}
+          </div>
+        </div>}
+      </div>}
     </div>
   )
 }

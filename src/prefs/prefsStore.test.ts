@@ -56,6 +56,7 @@ describe('prefsStore — local mirror', () => {
       palette_recents: 'commandPalette.recent',
       landing_page: 'finance.landingPage',
       overview_layout: 'finance.overviewLayout',
+      guide_progress: 'finance.guideProgress',
     })
   })
 
@@ -234,17 +235,21 @@ describe('prefsStore — session end', () => {
     await syncFromServer()
     expect(isSynced()).toBe(true)
     setLocal('theme', 'light') // dirty, with its PATCH still inside the debounce
+    setLocal('guide_progress', { tasks: { 'setup-accounts': 'done' }, lastTask: 'setup-accounts' })
     vi.mocked(patchPrefs).mockClear()
     endSession()
     expect(isSynced()).toBe(false)
     expect(seen).toEqual([true, false]) // Appearance must stop claiming "Synced to your account."
     expect(localStorage.getItem(DIRTY_STORAGE_KEY)).toBeNull()
+    expect(getLocal('guide_progress')).toBeUndefined()
     await vi.advanceTimersByTimeAsync(PATCH_DEBOUNCE_MS)
     expect(patchPrefs).not.toHaveBeenCalled() // the pending PATCH went with the session
     // The next sign-in in this tab: nothing is dirty, so the account's own value wins.
-    vi.mocked(fetchPrefs).mockResolvedValue({ prefs: { theme: entry('system') } })
+    const nextProgress = { tasks: { 'setup-import': 'skipped' }, lastTask: 'setup-import' }
+    vi.mocked(fetchPrefs).mockResolvedValue({ prefs: { theme: entry('system'), guide_progress: entry(nextProgress) } })
     await syncFromServer()
     expect(localStorage.getItem('finance.theme')).toBe('system')
+    expect(getLocal('guide_progress')).toEqual(nextProgress)
     expect(patchPrefs).not.toHaveBeenCalled()
   })
 })

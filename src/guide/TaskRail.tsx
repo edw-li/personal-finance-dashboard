@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'react'
 import type { CSSProperties, KeyboardEvent } from 'react'
 import { STAGGER_CAP } from '../theme/motion'
 import type { GuideCard, GuideTask } from './types'
+import { SETUP_LABELS, setupTaskState, useSetupProgress } from './setupProgress'
 
 // The left column of a master–detail card (2026-09-15 polish spec §2.2): a vertical tablist whose
 // rows KEEP the task ids — palette hits, pointer links and the probe target `#<taskId>` land on
@@ -26,6 +27,7 @@ export default function TaskRail({
   // The FIRST placement is where the bar lives, not a move: data-placed goes on from the second.
   const placedRef = useRef(false)
   const all: GuideTask[] = [...card.tasks, ...(card.more ?? [])]
+  const setup = useSetupProgress()
 
   useLayoutEffect(() => {
     const place = () => {
@@ -85,6 +87,10 @@ export default function TaskRail({
       <span className="guide-rail-text">
         <span className="guide-rail-title">{task.title}</span>
         <small className="guide-rail-where">{task.where}</small>
+        {card.id === 'start-setup' && setup && <small className={`guide-rail-status guide-rail-status-${setupTaskState(task.id, setup.progress, setup.status)}`}>
+          {setupTaskState(task.id, setup.progress, setup.status) === 'pending' ? '○ ' : '✓ '}
+          {setupTaskState(task.id, setup.progress, setup.status) === 'pending' && !setup.status ? 'Not checked yet' : SETUP_LABELS[setupTaskState(task.id, setup.progress, setup.status)]}
+        </small>}
       </span>
     </button>
   )

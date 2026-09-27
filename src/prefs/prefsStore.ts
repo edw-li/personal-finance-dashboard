@@ -4,6 +4,8 @@ import { setSnapshot } from '../api/snapshotCache'
 import type { PrefsOut } from '../types/api'
 import { isOverviewLayout } from './overviewLayout'
 import type { OverviewLayout } from './overviewLayout'
+import { isGuideProgress } from './guideProgress'
+import type { GuideProgress } from './guideProgress'
 
 // Preferences that follow the account (2026-09-03 data-lifecycle spec §10), reconciled with
 // the browser's copy by ONE rule: first paint from localStorage exactly as before; after
@@ -16,7 +18,7 @@ import type { OverviewLayout } from './overviewLayout'
 // their old spellings so nothing is lost on deploy; `endSession` drops the sync state (never
 // the values) when the account goes away.
 
-export type PrefKey = 'theme' | 'density' | 'scope' | 'palette_recents' | 'landing_page' | 'overview_layout'
+export type PrefKey = 'theme' | 'density' | 'scope' | 'palette_recents' | 'landing_page' | 'overview_layout' | 'guide_progress'
 export type ThemeChoice = 'system' | 'dark' | 'light'
 export type Density = 'comfortable' | 'compact'
 export type RangePreset = 'all' | '1y' | 'ytd'
@@ -26,6 +28,7 @@ export interface ScopeMemory {
   range?: RangePreset
 }
 export interface PrefValues {
+  guide_progress: GuideProgress
   overview_layout: OverviewLayout
   theme: ThemeChoice
   density: Density
@@ -35,6 +38,7 @@ export interface PrefValues {
 }
 
 export const STORAGE_KEYS: Record<PrefKey, string> = {
+  guide_progress: 'finance.guideProgress',
   overview_layout: 'finance.overviewLayout',
   theme: 'finance.theme',
   density: 'finance.density',
@@ -87,6 +91,11 @@ const enumCodec = <V extends string>(guard: (v: unknown) => v is V): Codec<V> =>
 })
 
 const codecs: { [K in PrefKey]: Codec<PrefValues[K]> } = {
+  guide_progress: {
+    read: raw => { const value = parseJson(raw); return isGuideProgress(value) ? value : undefined },
+    write: value => JSON.stringify(value), toServer: value => value,
+    fromServer: value => isGuideProgress(value) ? value : undefined,
+  },
   overview_layout: {
     read: raw => { const value = parseJson(raw); return isOverviewLayout(value) ? value : undefined },
     write: value => JSON.stringify(value), toServer: value => value,
@@ -303,6 +312,9 @@ export async function syncFromServer(): Promise<void> {
  *  GET. The VALUES stay — they are this browser's paint, and the next sign-in reconciles
  *  them. Key subscriptions stay too: they belong to mounted components, not to the session. */
 export function endSession(): void {
+  // Setup belongs to the signed-in person, not the next person using this browser.
+  try { localStorage.removeItem(STORAGE_KEYS.guide_progress) } catch { /* Storage may be blocked. */ }
+  listeners.get('guide_progress')?.forEach((listener) => listener({ tasks: {}, lastTask: null } as never))
   synced = false
   changed.clear()
   dirty.clear()

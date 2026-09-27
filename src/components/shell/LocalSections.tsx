@@ -22,6 +22,8 @@ export interface LocalSectionState<T extends string> {
  * can be resolved from old holding, what-if, editor, and Settings-anchor links. */
 export function useLocalSections<T extends string>(sections: readonly LocalSection<T>[], defaultSection: T, options: {
   resolveLegacy?: (location: LegacySectionLocation) => T | { section: T; targetId?: string } | null | undefined
+  /** A task rail records its selection without re-running deep-link arrival. Reload and POP still land. */
+  preserveHashPosition?: boolean
 } = {}): LocalSectionState<T> {
   const location = useLocation()
   const navigate = useNavigate()
@@ -62,6 +64,7 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
   useEffect(() => () => landedHold.current?.(), [])
   const address = `${location.pathname}${location.search}${location.hash}`
   const priorAddress = useRef(address)
+  const preserveHashPosition = options.preserveHashPosition === true
 
   useEffect(() => {
     const keyChanged = priorLocation.current !== location.key
@@ -76,6 +79,12 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
     // ?param right after a deep link lands leaves the reader on the link, so the landing stays
     // held (code review 8). A new section, a PUSH or a POP is one, and lets go.
     const sameSectionReplace = keyChanged && !sectionChanged && navigationType === 'REPLACE'
+    if (sameSectionReplace && preserveHashPosition) {
+      landedHold.current?.()
+      landedHold.current = null
+      landedTarget.current = null
+      return
+    }
     if ((keyChanged || sectionChanged) && !sameSectionReplace) {
       landedHold.current?.()
       landedHold.current = null
@@ -129,7 +138,7 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
       }
     })
     return () => { cancelAnimationFrame(frame); observer?.disconnect(); if (timeout) clearTimeout(timeout) }
-  }, [location.key, address, section, targetId, navigationType])
+  }, [location.key, address, section, targetId, navigationType, preserveHashPosition])
 
   return { section, sections, setSection, panelId: (value) => `${id}-section-${value}`, tabId: (value) => `${id}-tab-${value}` }
 }

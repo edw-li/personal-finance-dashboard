@@ -24,6 +24,7 @@ def test_registry_lists_exactly_the_keys_with_consumers():
         "palette_recents",
         "landing_page",
         "overview_layout",
+        "guide_progress",
     }
     assert PREF_REGISTRY["theme"].default == "dark"
     assert PREF_REGISTRY["density"].default == "comfortable"
@@ -89,3 +90,27 @@ def test_validate_pref_refuses_the_wrong_shape_and_unknown_keys():
         validate_pref("scope", {"owner": 0, "range": "1y"})
     with pytest.raises(KeyError):
         validate_pref("currency_style", "compact")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {},
+        {"tasks": {}, "lastTask": "../other"},
+        {"tasks": {"setup-import": True}, "lastTask": None},
+        {"tasks": {"other-task": "done"}, "lastTask": None},
+        {"tasks": [], "lastTask": None},
+        {"tasks": {}, "lastTask": None, "extra": True},
+    ],
+)
+def test_guide_progress_rejects_invalid_shapes(value):
+    with pytest.raises(PrefValueError):
+        validate_pref("guide_progress", value)
+
+
+def test_guide_progress_accepts_manual_progress_and_resume():
+    value = {
+        "tasks": {"setup-import": "skipped", "setup-appearance": "done"},
+        "lastTask": "setup-household",
+    }
+    assert validate_pref("guide_progress", value) == value

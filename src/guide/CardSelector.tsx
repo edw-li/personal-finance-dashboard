@@ -1,5 +1,7 @@
+import { useLayoutEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocalSectionVisible } from '../components/shell/localSectionContext'
 import { cardOf, hashTarget } from './anchors'
 import type { GuideChapter } from './types'
 
@@ -18,6 +20,19 @@ export function selectedCardId(chapter: GuideChapter, hash: string): string {
 export default function CardSelector({ chapter, selectedId }: { chapter: GuideChapter; selectedId: string }) {
   const location = useLocation()
   const navigate = useNavigate()
+  const ref = useRef<HTMLElement>(null)
+  const visible = useLocalSectionVisible()
+  useLayoutEffect(() => {
+    const selector = ref.current
+    const panel = selector?.parentElement
+    if (!selector || !panel || !visible) return
+    // Chips can wrap onto several rows. Both task details and deep links must clear them.
+    const measure = () => panel.style.setProperty('--guide-selector-height', `${selector.offsetHeight}px`)
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(selector)
+    return () => { observer?.disconnect(); panel.style.removeProperty('--guide-selector-height') }
+  }, [visible])
   const go = (id: string) =>
     navigate({ pathname: location.pathname, search: location.search, hash: `#${id}` }, { replace: true, preventScrollReset: true })
   // MANUAL activation (the ARIA tablist pattern for panels a URL owns): arrows and Home/End move
@@ -34,7 +49,7 @@ export default function CardSelector({ chapter, selectedId }: { chapter: GuideCh
   }
   const label = `${chapter.label} in this guide`
   return (
-    <nav className="guide-selector span-12" aria-label={label}>
+    <nav ref={ref} className="guide-selector span-12" aria-label={label}>
       <div role="tablist" aria-label={label}>
         {chapter.cards.map((card, index) => (
           <button

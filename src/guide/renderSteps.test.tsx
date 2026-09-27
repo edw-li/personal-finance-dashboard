@@ -12,10 +12,11 @@ describe('renderSteps', () => {
     expect(container.textContent).toBe('Open Manage, then press Add card.')
   })
 
-  it('recognises no other markup — asterisks, backticks and brackets render literally', () => {
+  it('formats backtick examples as code and leaves other markup literal', () => {
     const { container } = render(<p>{renderSteps('Type *5* for `5 %` and see [the chart](x).')}</p>)
     expect(container.querySelector('b')).toBeNull()
-    expect(container.textContent).toBe('Type *5* for `5 %` and see [the chart](x).')
+    expect(container.textContent).toBe('Type *5* for 5 % and see [the chart](x).')
+    expect(container.querySelector('code')?.textContent).toBe('5 %')
   })
 
   it('escapes angle brackets as text, never markup', () => {

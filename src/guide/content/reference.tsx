@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom'
 import type { GuideCard } from '../types'
 import { SettingsMapTable } from './settingsMap'
+import { SETTINGS_MAP_ROWS } from './settingsMapRows'
+import { DATA_REFERENCE_CARDS } from './dataSources'
 
 // Chapter: Reference — ref-typing · ref-keyboard · ref-undo · ref-sandboxes · ref-links ·
 // ref-assistant · ref-glossary · ref-settings-map (2026-09-14 guide spec §5.1). Written by
@@ -8,6 +10,7 @@ import { SettingsMapTable } from './settingsMap'
 // (AmountInput, paste.ts, CommandPalette, LocalSections, ToastProvider, the sandbox modules,
 // the assistant drawer) rather than from the specs that asked for it.
 export const REFERENCE_CARDS: GuideCard[] = [
+  ...DATA_REFERENCE_CARDS,
   {
     id: 'ref-typing',
     title: 'Typing numbers and moving between cells',
@@ -23,19 +26,22 @@ export const REFERENCE_CARDS: GuideCard[] = [
           'Accepted: a dollar sign, commas or spaces as grouping, a leading plus or minus, and accounting parentheses.',
           'Refused: exponents, a second decimal point, a sign inside parentheses.',
           'The box turns invalid until you fix it.',
-          'Blank means not entered. It never means zero.',
+          'Blank depends on the form: monthly entries stay missing; most Paycheck money and percent fields save zero.',
+          'A blank budget ends it; a blank tax input unsets it; a blank Projection override uses the derived value.',
         ],
         keywords: ['dollar sign', 'commas', 'negative', 'format'],
+        example: { label: 'The same negative balance', value: '-1234.56\n($1,234.56)', note: 'Both mean a liability of 1,234.56. Enter an explicit 0 when you mean zero.' },
       },
       {
         id: 'typing-arithmetic',
         title: 'Add up inside a box',
         where: 'Any money box',
         steps: [
-          'Start with an equals sign: =1200+34.56 commits as 1234.56 when you press Enter or leave the box.',
+          'Start with an equals sign, then press Enter or leave the box to commit the result.',
           'Money boxes only — shares, prices, percents and counts take plain numbers.',
         ],
         keywords: ['formula', 'sum', 'equals'],
+        example: { label: 'Add amounts in a money field', value: '=1200+34.56', note: 'Commits as 1234.56. Shares, prices, percentages and counts accept plain numbers instead.' },
       },
       {
         id: 'typing-move',
@@ -61,6 +67,7 @@ export const REFERENCE_CARDS: GuideCard[] = [
         ],
         to: '/update',
         keywords: ['paste', 'clipboard', 'spreadsheet'],
+        example: { label: 'Two spreadsheet columns: exact name, then amount', value: 'Groceries\t450\nTransport\t80', note: 'Use your own category names. Copy both columns from the sheet; unmatched names are reported.' },
       },
     ],
     watch: ['A ledger row keeps the browser’s own Enter — the cell-to-cell advance belongs to the wizard and the tax forms.'],
@@ -338,95 +345,133 @@ export const REFERENCE_CARDS: GuideCard[] = [
     purpose: 'The terms that appear on tiles, receipts and badges, in one place.',
     keywords: ['glossary', 'definitions', 'terms', 'what does mean'],
     tasks: [],
-    body: (
-      <dl className="guide-body guide-glossary guide-glossary-grid">
-        <dt>Living spending</dt>
-        <dd>
-          Spend in categories of kind Living — the lifestyle figure the budgets, the savings rate and the
-          projection use.
-        </dd>
-        <dt>Tax paid from take-home · Transfers · Cash outflow</dt>
-        <dd>
-          Payments in Tax and in Transfer categories, always shown apart from living spend. Cash outflow
-          is living plus tax, transfers excluded.
-        </dd>
-        <dt>Cash saved · Savings rate — cash</dt>
-        <dd>
-          Take-home minus living spend and tax paid, as an amount and as a share of take-home. The total
-          rate counts payroll deductions as well.
-        </dd>
-        <dt>Typical</dt>
-        <dd>The median of a category&apos;s three most recent entered months, shown beside the month you are entering.</dd>
-        <dt>Eligible months</dt>
-        <dd>
-          The entered months inside the previous twelve calendar months, excluding the one you are
-          looking at. A month nobody entered lowers the count rather than pulling in an older one.
-        </dd>
-        <dt>Not started · In progress · Ready to review · Reviewed · Changed since review · Not yet reviewed</dt>
-        <dd>
-          A month&apos;s review state. Only a reviewed month counts as complete; editing one afterwards
-          makes it changed since review; data that predates reviewing reads as not yet reviewed.
-        </dd>
-        <dt>Snapshot</dt>
-        <dd>
-          One month&apos;s balances, one row per account, written by the monthly update. Also the export
-          ZIP of everything, written nightly — the Backups card means this one.
-        </dd>
-        <dt>Balances as of</dt>
-        <dd>The day your balances describe — the 1st of the month.</dd>
-        <dt>Provisional balances</dt>
-        <dd>Recorded before their date; final once saved again on or after it.</dd>
-        <dt>A month’s story</dt>
-        <dd>Its spending and take-home, and the net-worth change from its 1st to the next 1st.</dd>
-        <dt>Due · overdue</dt>
-        <dd>
-          The monthly update’s two parts: balances are due on the 1st and overdue from the 7th; a month’s
-          spending and take-home are due once it ends and overdue from the 16th of the next month. The
-          overdue days move with the reminder day in Settings → Integrations → Calendar feed.
-        </dd>
-        <dt>Partly entered spending</dt>
-        <dd>
-          Spending saved while the month was still running — it counts once you save the month again after
-          it ends or confirm it is complete.
-        </dd>
-        <dt>Derived parent · component account</dt>
-        <dd>A parent whose balance is the sum of its components: you type the components, the parent is read-only.</dd>
-        <dt>Retired</dt>
-        <dd>Kept with its history but out of the monthly update and the charts. Delete is only for things with no history.</dd>
-        <dt>Signed liabilities</dt>
-        <dd>Card and loan balances are stored negative, so net worth is a plain sum.</dd>
-        <dt>Effective-dated budget</dt>
-        <dd>A budget applies from its month forward; the month on screen resolves to the latest row at or before it.</dd>
-        <dt>Basis: confirmed · scheduled · estimated · your figure</dt>
-        <dd>How sure a calendar amount is. Your figure replaces the estimate with what you actually paid.</dd>
-        <dt>Qualifying date · bargain element</dt>
-        <dd>When an ESPP lot becomes a qualifying disposition; the discount and lookback gain at purchase.</dd>
-        <dt>Focal year</dt>
-        <dd>The review year a grant or a raise belongs to — the column Focal history is keyed by.</dd>
-        <dt>Marginal rate · effective rate · safe harbor</dt>
-        <dd>What the next dollar costs; tax over its base; the withholding floor that avoids a penalty.</dd>
-        <dt>FI target · FI ratio · withdrawal rate</dt>
-        <dd>
-          Annual spend divided by the withdrawal rate; the investable balance against that target; the
-          yearly share of the portfolio you plan to draw.
-        </dd>
-        <dt>FI date · 1 in 10, half, 9 in 10 paths</dt>
-        <dd>
-          The month half of Projection&apos;s simulated paths first reach the FI target, with the months
-          the earliest tenth and nine tenths of paths get there.
-        </dd>
-        <dt>Money lasts · plan until</dt>
-        <dd>
-          The share of simulated paths whose balance lasts through December of the plan-until year once
-          withdrawals start after the last retirement; &ldquo;in 9 of 10 paths&rdquo; names the year the
-          unluckiest tenth run out.
-        </dd>
-        <dt>Today&apos;s dollars · future dollars</dt>
-        <dd>A display choice on Projection. Dates, probabilities and targets do not move with it.</dd>
-        <dt>Weekly performance point</dt>
-        <dd>One portfolio value a week, recorded by the Monday price refresh, behind the performance chart.</dd>
-      </dl>
-    ),
+    definitions: [
+      {
+        "id": "term-living-spending",
+        "title": "Living spending",
+        "text": "Spend in categories of kind Living — the lifestyle figure the budgets, the savings rate and the projection use."
+      },
+      {
+        "id": "term-tax-paid-from-take-home-transfers-cash-outflow",
+        "title": "Tax paid from take-home · Transfers · Cash outflow",
+        "text": "Payments in Tax and in Transfer categories, always shown apart from living spend. Cash outflow is living plus tax, transfers excluded."
+      },
+      {
+        "id": "term-cash-saved-savings-rate-cash",
+        "title": "Cash saved · Savings rate — cash",
+        "text": "Take-home minus living spend and tax paid, as an amount and as a share of take-home. The total rate counts payroll deductions as well."
+      },
+      {
+        "id": "term-typical",
+        "title": "Typical",
+        "text": "The median of a category's three most recent entered months, shown beside the month you are entering."
+      },
+      {
+        "id": "term-eligible-months",
+        "title": "Eligible months",
+        "text": "The entered months inside the previous twelve calendar months, excluding the one you are looking at. A month nobody entered lowers the count rather than pulling in an older one."
+      },
+      {
+        "id": "term-not-started-in-progress-ready-to-review-reviewed-changed-since-review-not-yet-reviewed",
+        "title": "Not started · In progress · Ready to review · Reviewed · Changed since review · Not yet reviewed",
+        "text": "A month's review state. Only a reviewed month counts as complete; editing one afterwards makes it changed since review; data that predates reviewing reads as not yet reviewed."
+      },
+      {
+        "id": "term-snapshot",
+        "title": "Snapshot",
+        "text": "One month's balances, one row per account, written by the monthly update. Also the export ZIP of everything, written nightly — the Backups card means this one."
+      },
+      {
+        "id": "term-balances-as-of",
+        "title": "Balances as of",
+        "text": "The day your balances describe — the 1st of the month."
+      },
+      {
+        "id": "term-provisional-balances",
+        "title": "Provisional balances",
+        "text": "Recorded before their date; final once saved again on or after it."
+      },
+      {
+        "id": "term-a-month-s-story",
+        "title": "A month’s story",
+        "text": "Its spending and take-home, and the net-worth change from its 1st to the next 1st."
+      },
+      {
+        "id": "term-due-overdue",
+        "title": "Due · overdue",
+        "text": "The monthly update’s two parts: balances are due on the 1st and overdue from the 7th; a month’s spending and take-home are due once it ends and overdue from the 16th of the next month. The overdue days move with the reminder day in Settings → Integrations → Calendar feed."
+      },
+      {
+        "id": "term-partly-entered-spending",
+        "title": "Partly entered spending",
+        "text": "Spending saved while the month was still running — it counts once you save the month again after it ends or confirm it is complete."
+      },
+      {
+        "id": "term-derived-parent-component-account",
+        "title": "Derived parent · component account",
+        "text": "A parent whose balance is the sum of its components: you type the components, the parent is read-only."
+      },
+      {
+        "id": "term-retired",
+        "title": "Retired",
+        "text": "Kept with its history but out of the monthly update and the charts. Delete is only for things with no history."
+      },
+      {
+        "id": "term-signed-liabilities",
+        "title": "Signed liabilities",
+        "text": "Card and loan balances are stored negative, so net worth is a plain sum."
+      },
+      {
+        "id": "term-effective-dated-budget",
+        "title": "Effective-dated budget",
+        "text": "A budget applies from its month forward; the month on screen resolves to the latest row at or before it."
+      },
+      {
+        "id": "term-basis-confirmed-scheduled-estimated-your-figure",
+        "title": "Basis: confirmed · scheduled · estimated · your figure",
+        "text": "How sure a calendar amount is. Your figure replaces the estimate with what you actually paid."
+      },
+      {
+        "id": "term-qualifying-date-bargain-element",
+        "title": "Qualifying date · bargain element",
+        "text": "When an ESPP lot becomes a qualifying disposition; the discount and lookback gain at purchase."
+      },
+      {
+        "id": "term-focal-year",
+        "title": "Focal year",
+        "text": "The review year a grant or a raise belongs to — the column Focal history is keyed by."
+      },
+      {
+        "id": "term-marginal-rate-effective-rate-safe-harbor",
+        "title": "Marginal rate · effective rate · safe harbor",
+        "text": "What the next dollar costs; tax over its base; the withholding floor that avoids a penalty."
+      },
+      {
+        "id": "term-fi-target-fi-ratio-withdrawal-rate",
+        "title": "FI target · FI ratio · withdrawal rate",
+        "text": "Annual spend divided by the withdrawal rate; the investable balance against that target; the yearly share of the portfolio you plan to draw."
+      },
+      {
+        "id": "term-fi-date-1-in-10-half-9-in-10-paths",
+        "title": "FI date · 1 in 10, half, 9 in 10 paths",
+        "text": "The month half of Projection's simulated paths first reach the FI target, with the months the earliest tenth and nine tenths of paths get there."
+      },
+      {
+        "id": "term-money-lasts-plan-until",
+        "title": "Money lasts · plan until",
+        "text": "The share of simulated paths whose balance lasts through December of the plan-until year once withdrawals start after the last retirement; “in 9 of 10 paths” names the year the unluckiest tenth run out."
+      },
+      {
+        "id": "term-today-s-dollars-future-dollars",
+        "title": "Today's dollars · future dollars",
+        "text": "A display choice on Projection. Dates, probabilities and targets do not move with it."
+      },
+      {
+        "id": "term-weekly-performance-point",
+        "title": "Weekly performance point",
+        "text": "One portfolio value for each Monday, behind the performance chart. Later refreshes can backfill missed points from historical prices."
+      }
+    ],
   },
   {
     id: 'ref-settings-map',
@@ -435,5 +480,6 @@ export const REFERENCE_CARDS: GuideCard[] = [
     keywords: ['settings map', 'where is', 'configure'],
     tasks: [],
     body: <SettingsMapTable />,
+    searchText: SETTINGS_MAP_ROWS.map((row) => `${row.task} ${row.place}`).join(' '),
   },
 ]
