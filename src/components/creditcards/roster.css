@@ -45,7 +45,9 @@
    in those features, and this feature's page sheet is deliberately empty — the feature CSS
    travels with the components. So they live here, scoped to this panel's own table rather
    than leaking a bare `.row-actions` into every sibling panel on the page. */
-.roster-table .row-actions {
+/* Keep the td a table cell so its height and border follow wrapped rows. Only the
+   inner button group uses flex; the cell retains the shared sticky-column styles. */
+.roster-table .roster-actions {
   display: flex;
   gap: 0.4rem;
 }

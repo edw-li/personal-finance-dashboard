@@ -329,7 +329,6 @@ export default function CardDetail({
 
 
       <div className="chip-row">
-        <span className="chip">Holder: {card.primary_holder ?? '—'}</span>
         <span className="chip">AU: {card.authorized_users ?? '—'}</span>
         <span className="chip">
           Opened {card.opened_on ? formatDate(card.opened_on) : '—'}

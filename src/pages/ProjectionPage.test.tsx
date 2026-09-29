@@ -188,8 +188,16 @@ const TREND_TITLE = 'Net worth trend — a curve fitted to your recorded history
 // range carries the knob's words with a " slider" suffix — /volatility/i would name two
 // controls at once. `selector` picks the box out of its own <label>, which also labels the
 // ⓘ button nested inside it. The box is the AmountInput beside the track.
-const box = (label: string) =>
-  screen.getByLabelText(label, { selector: 'input' }) as HTMLInputElement
+function openAssumptions(group: 'Growth' | 'Cash flow' | 'Timeline') {
+  fireEvent.click(screen.getByRole('tab', { name: new RegExp(`^${group}`) }))
+  return screen.getByRole('tabpanel', { name: `${group} assumptions` })
+}
+const box = (label: string) => {
+  const group = ['Monthly contribution', 'Annual spend', 'Withdrawal rate', 'Include scheduled vests'].includes(label)
+    ? 'Cash flow'
+    : label.startsWith('Retires') || ['Horizon (years)', 'Plan until'].includes(label) ? 'Timeline' : 'Growth'
+  return within(openAssumptions(group)).getByLabelText(label, { selector: 'input' }) as HTMLInputElement
+}
 
 // A SliderBox commits on blur (its own test pins the protocol): focus, type in the box's
 // own vocabulary — percents are percents — then blur. That is one URL write.
@@ -304,6 +312,8 @@ describe('ProjectionPage', () => {
       }),
     )
     renderPage()
+    await loaded()
+    openAssumptions('Cash flow')
     const note = await screen.findByText(/From records: \$4,000\.00 cash savings \+ \$400\.00 payroll/)
     // No policy, no leg — but the sum is still spelled out, so the reader can check it.
     expect(note.textContent).toContain('= $4,400.00 (Me $250.00 · Alex $150.00)')
@@ -329,10 +339,13 @@ describe('ProjectionPage', () => {
     expect(box('Withdrawal rate').placeholder).toBe('4')
     expect(box('Horizon (years)').placeholder).toBe('30')
     // Blank means derived: the badge says so, and the caption resets the knob to it.
-    expect(screen.getByRole('button', { name: 'Baseline 5%' })).toBeTruthy()
-    expect(screen.getAllByText('Planning default')).toHaveLength(5)
-    expect(screen.getAllByText('From your records')).toHaveLength(2)
-    expect(screen.getByText('Settings', { selector: '.sandbox-badge' })).toBeTruthy()
+    expect(within(openAssumptions('Timeline')).getAllByText('Planning default')).toHaveLength(1)
+    const growth = within(openAssumptions('Growth'))
+    expect(growth.getByRole('button', { name: 'Baseline 5%' })).toBeTruthy()
+    expect(growth.getAllByText('Planning default')).toHaveLength(4)
+    const cashFlow = within(openAssumptions('Cash flow'))
+    expect(cashFlow.getAllByText('From your records')).toHaveLength(2)
+    expect(cashFlow.getByText('Settings', { selector: '.sandbox-badge' })).toBeTruthy()
   })
 
   it('writes a typed knob to the URL as a fraction and fetches it; blank knobs stay omitted', async () => {
@@ -959,6 +972,7 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     renderPage()
     await loaded()
 
+    openAssumptions('Timeline')
     expect(screen.queryByLabelText(/^Retires/)).toBeNull()
     expect(screen.queryByText(/Retirement months split the plan into phases/)).toBeNull()
   })
@@ -969,6 +983,7 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
 
     await loaded()
     expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00') // tiles still stand
+    openAssumptions('Timeline')
     expect(screen.queryByLabelText(/^Retires/)).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull() // an affordance, never the page banner
   })

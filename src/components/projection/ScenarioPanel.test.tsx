@@ -22,7 +22,7 @@ const echo: ProjectionOut = {
 const people: PersonOut[] = [{ id: 1, name: 'Edward', is_primary: true }, { id: 2, name: 'Grace', is_primary: false }]
 const preview = vi.fn<(s: ProjectionScenario) => Promise<ProjectionOut>>()
 
-function Host() {
+function Host({ compact = false }: { compact?: boolean }) {
   const spec: SandboxSpec<ProjectionScenario, ProjectionOut> = {
     page: 'projection', decode: decodeProjection, encode: encodeProjection, isEmpty: isEmptyProjection,
     preview, dataKey: 'projection', debounceMs: 300, labelFor: labelForProjection,
@@ -31,16 +31,16 @@ function Host() {
   const location = useLocation()
   return (
     <>
-      <ScenarioPanel sandbox={sandbox} baseline={sandbox.baseline} people={people} />
+      <ScenarioPanel sandbox={sandbox} baseline={sandbox.baseline} people={people} compact={compact} />
       <span data-testid="url">{location.pathname + location.search}</span>
     </>
   )
 }
 
-function mount(entry = '/projection') {
+function mount(entry = '/projection', compact = false) {
   render(
     <MemoryRouter initialEntries={[entry]}>
-      <Host />
+      <Host compact={compact} />
     </MemoryRouter>,
   )
 }
@@ -62,6 +62,78 @@ afterEach(() => {
 })
 
 describe('ScenarioPanel', () => {
+  it('groups compact assumptions into keyboard-accessible tabs without recalculating', async () => {
+    mount('/projection', true)
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
+    const tabs = within(screen.getByRole('tablist', { name: 'Assumption groups' }))
+    const growth = tabs.getByRole('tab', { name: 'Growth' })
+    expect(screen.getByRole('tabpanel', { name: 'Growth assumptions' }).id).toBe(growth.getAttribute('aria-controls'))
+    expect(screen.getAllByRole('tabpanel')).toHaveLength(1)
+    expect(screen.getAllByRole('slider').map((el) => el.getAttribute('aria-label'))).toEqual([
+      'Annual return slider', 'Volatility slider', 'Inflation slider', 'Contribution growth slider',
+    ])
+    growth.focus()
+    fireEvent.keyDown(growth, { key: 'ArrowRight' })
+    const cashFlow = tabs.getByRole('tab', { name: 'Cash flow' })
+    expect(document.activeElement).toBe(cashFlow)
+    expect(screen.getByRole('tabpanel', { name: 'Cash flow assumptions' }).id).toBe(cashFlow.getAttribute('aria-controls'))
+    expect(screen.getAllByRole('slider').map((el) => el.getAttribute('aria-label'))).toEqual([
+      'Monthly contribution slider', 'Annual spend slider', 'Withdrawal rate slider',
+    ])
+    fireEvent.keyDown(cashFlow, { key: 'ArrowRight' })
+    const timeline = tabs.getByRole('tab', { name: 'Timeline' })
+    expect(document.activeElement).toBe(timeline)
+    const panel = screen.getByRole('tabpanel', { name: 'Timeline assumptions' })
+    expect(panel.id).toBe(timeline.getAttribute('aria-controls'))
+    expect(within(panel).getByLabelText('Retires — Grace')).toBeTruthy()
+    expect(within(panel).getByRole('slider', { name: 'Horizon (years) slider' })).toBeTruthy()
+    fireEvent.keyDown(timeline, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(growth)
+    expect(url()).toBe('/projection')
+    expect(preview).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps edits visible as counts on other tabs and resets all groups together', async () => {
+    mount('/projection?whatif=annual_return:0.06&whatif=annual_spend:65000&whatif=years:40&whatif=retire:2:2035-06', true)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Baseline 5%' })).toBeTruthy())
+    const tabs = within(screen.getByRole('tablist', { name: 'Assumption groups' }))
+    expect(tabs.getByRole('tab', { name: 'Growth 1 edited assumption' })).toBeTruthy()
+    expect(tabs.getByRole('tab', { name: 'Cash flow 1 edited assumption' })).toBeTruthy()
+    fireEvent.click(tabs.getByRole('tab', { name: 'Timeline 2 edited assumptions' }))
+    expect((screen.getByLabelText('Retires — Grace') as HTMLInputElement).value).toBe('2035-06')
+    fireEvent.click(tabs.getByRole('tab', { name: 'Growth 1 edited assumption' }))
+    expect((screen.getByLabelText('Annual return') as HTMLInputElement).value).toBe('6%')
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to baseline' }))
+    expect(url()).toBe('/projection')
+    expect(tabs.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Growth', 'Cash flow', 'Timeline'])
+    fireEvent.click(tabs.getByRole('tab', { name: 'Timeline' }))
+    expect((screen.getByLabelText('Retires — Grace') as HTMLInputElement).value).toBe('')
+  })
+
+  it('preserves unfinished input and validation when switching compact tabs', async () => {
+    mount('/projection', true)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Baseline 5%' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('tab', { name: 'Cash flow' }))
+    const rate = screen.getByLabelText('Withdrawal rate', { selector: 'input' })
+    fireEvent.focus(rate)
+    fireEvent.change(rate, { target: { value: '150' } })
+    fireEvent.blur(rate)
+    expect(screen.getByRole('alert').textContent).toContain('Withdrawal rate must be between')
+    fireEvent.click(screen.getByRole('tab', { name: 'Timeline' }))
+    const year = screen.getByRole('textbox', { name: 'Plan until' })
+    fireEvent.change(year, { target: { value: '20' } })
+    fireEvent.blur(year)
+    fireEvent.click(screen.getByRole('tab', { name: 'Growth' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Cash flow' }))
+    expect(screen.getByRole('alert').textContent).toContain('Withdrawal rate must be between')
+    fireEvent.click(screen.getByRole('tab', { name: 'Timeline' }))
+    expect((screen.getByRole('textbox', { name: 'Plan until' }) as HTMLInputElement).value).toBe('20')
+    expect(screen.getByRole('alert').textContent).toContain('Plan until must be a year')
+    expect(url()).toBe('/projection')
+    expect(preview).toHaveBeenCalledTimes(1)
+  })
+
   it('opens with the records, defaults and settings identified beside each baseline value', async () => {
     mount()
     expect(screen.getByRole('button', { name: 'Hide assumptions' }).getAttribute('aria-expanded')).toBe('true')

@@ -236,9 +236,8 @@ export default function CardsPanel({
       point_value_cents:
         pointValue === '' ? '1' : canonicalAmount(pointValue, { expressions: false }),
       person_id: ownerValue === '' ? null : Number(ownerValue),
-      // The embossed name is INFORMATIONAL and this form no longer edits it (person_id is
-      // the ownership vocabulary now) — so it comes from the STORED row, exactly like
-      // is_active and sort_order, and a new card simply has none yet.
+      // Preserve the stored informational name on a full-replace save, even though it is
+      // no longer shown in the UI. A new card has no holder name.
       primary_holder: stored?.primary_holder ?? null,
       authorized_users: form.authorized_users.trim() || null,
       opened_on: form.opened_on || null,
@@ -583,7 +582,6 @@ export default function CardsPanel({
                 <th className="reorder-grip-cell" aria-hidden="true" />
                 <th>Card</th>
                 <th>Owner</th>
-                <th>Holder</th>
                 <th>Auth. users</th>
                 <th>Opened</th>
                 <th className="num">Limit</th>
@@ -615,12 +613,10 @@ export default function CardsPanel({
                     </span>
                   </td>
                   {/* NULL is JOINT, never "unknown": the migration backfilled every
-                      pre-existing card to the primary person. `Holder` beside it is the
-                      embossed name — informational, and no longer editable here. */}
+                      pre-existing card to the primary person. */}
                   <td>
                     {card.person_id === null ? 'Joint' : (ownerName.get(card.person_id) ?? '—')}
                   </td>
-                  <td>{card.primary_holder ?? '—'}</td>
                   <td>{card.authorized_users ?? '—'}</td>
                   <td>{card.opened_on ? formatDate(card.opened_on) : '—'}</td>
                   {/* The SERVER's latest limit event, never re-derived here (global rule 9). */}
@@ -632,39 +628,41 @@ export default function CardsPanel({
                     <span className="badge">{card.is_active ? 'Active' : 'Archived'}</span>
                   </td>
                   <td className="row-actions">
-                    <BusyButton
-                      type="button"
-                      className="button"
-                      data-row-edit
-                      aria-label={`Edit ${card.name}`}
-                      // Shut mid-flight like every other button here: this fills the form from
-                      // the row, and a save landing a moment later resets it out from under
-                      // the click. Shut while a row is lifted too (lane R0 consumer rule 5): a
-                      // click mid-drag would act on a row that is about to move.
-                      inert={busy || rowBusy.has(card.id) || reorder.active}
-                      onClick={() => startEdit(card)}
-                    >
-                      Edit
-                    </BusyButton>
-                    <BusyButton
-                      type="button"
-                      className="button"
-                      aria-label={card.is_active ? `Archive ${card.name}` : `Unarchive ${card.name}`}
-                      busy={rowBusy.has(card.id)}
-                      inert={busy || reorder.active}
-                      onClick={() => toggleArchive(card)}
-                    >
-                      {card.is_active ? 'Archive' : 'Unarchive'}
-                    </BusyButton>
-                    <BusyButton
-                      type="button"
-                      className="button"
-                      aria-label={`Delete ${card.name}`}
-                      inert={busy || rowBusy.has(card.id) || reorder.active}
-                      onClick={() => remove(card)}
-                    >
-                      Delete
-                    </BusyButton>
+                    <div className="roster-actions">
+                      <BusyButton
+                        type="button"
+                        className="button"
+                        data-row-edit
+                        aria-label={`Edit ${card.name}`}
+                        // Shut mid-flight like every other button here: this fills the form from
+                        // the row, and a save landing a moment later resets it out from under
+                        // the click. Shut while a row is lifted too (lane R0 consumer rule 5): a
+                        // click mid-drag would act on a row that is about to move.
+                        inert={busy || rowBusy.has(card.id) || reorder.active}
+                        onClick={() => startEdit(card)}
+                      >
+                        Edit
+                      </BusyButton>
+                      <BusyButton
+                        type="button"
+                        className="button"
+                        aria-label={card.is_active ? `Archive ${card.name}` : `Unarchive ${card.name}`}
+                        busy={rowBusy.has(card.id)}
+                        inert={busy || reorder.active}
+                        onClick={() => toggleArchive(card)}
+                      >
+                        {card.is_active ? 'Archive' : 'Unarchive'}
+                      </BusyButton>
+                      <BusyButton
+                        type="button"
+                        className="button"
+                        aria-label={`Delete ${card.name}`}
+                        inert={busy || rowBusy.has(card.id) || reorder.active}
+                        onClick={() => remove(card)}
+                      >
+                        Delete
+                      </BusyButton>
+                    </div>
                   </td>
                 </tr>
               ))}

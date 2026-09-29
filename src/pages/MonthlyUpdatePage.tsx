@@ -1837,7 +1837,11 @@ function MonthlyUpdateWizard() {
                 <Link to="/guide?section=start#start-setup">start with the guide</Link>.
               </p>
             )}
-            <table className="data-table entry-table" hidden={!loading && accounts.length === 0}>
+            <table
+              className="data-table entry-table entry-balances"
+              data-owner-groups={people.length > 1 || undefined}
+              hidden={!loading && accounts.length === 0}
+            >
               <thead>
                 <tr>
                   <th>Account</th>
@@ -1856,7 +1860,9 @@ function MonthlyUpdateWizard() {
                     <Fragment key={section.key}>
                       {section.label !== null && (
                         <tr className="entry-owner-row">
-                          <th colSpan={4}>{section.label}</th>
+                          <th colSpan={4}>
+                            <span className="entry-owner-heading">{section.label}</span>
+                          </th>
                         </tr>
                       )}
                       {GROUP_ORDER.map((group) => {
@@ -1887,7 +1893,7 @@ function MonthlyUpdateWizard() {
                                   className={derived ? 'entry-derived' : undefined}
                                 >
                                   <td
-                                    className={account.is_component ? 'entry-component' : undefined}
+                                    className={`entry-account-name${account.is_component ? ' entry-component' : ''}`}
                                   >
                                     {readOnly ? (
                                       // No <label>: there is no control to point at. The badge

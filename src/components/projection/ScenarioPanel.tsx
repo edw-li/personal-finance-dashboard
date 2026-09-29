@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 import InfoHint from '../InfoHint'
+import Segmented from '../shell/Segmented'
 import CompareTable from '../../sandbox/CompareTable'
 import { compareDecimals } from '../../sandbox/decimal'
 import SandboxPanel from '../../sandbox/SandboxPanel'
@@ -62,6 +63,25 @@ const ORDER: ProjectionKnob[] = ['annual_return', 'monthly_contribution', 'vests
 // A knob added to the codec cannot silently vanish from the card.
 if (ORDER.length !== KNOBS.length) throw new Error('ScenarioPanel: ORDER must list every knob')
 
+const GROUPS = [
+  { value: 'growth', label: 'Growth' },
+  { value: 'cash-flow', label: 'Cash flow' },
+  { value: 'timeline', label: 'Timeline' },
+] as const
+type AssumptionGroup = (typeof GROUPS)[number]['value']
+const GROUP_FOR: Record<ProjectionKnob, AssumptionGroup> = {
+  annual_return: 'growth',
+  volatility: 'growth',
+  inflation: 'growth',
+  contribution_growth: 'growth',
+  monthly_contribution: 'cash-flow',
+  vests: 'cash-flow',
+  annual_spend: 'cash-flow',
+  swr: 'cash-flow',
+  years: 'timeline',
+  plan_until: 'timeline',
+}
+
 export default function ScenarioPanel({
   sandbox,
   baseline,
@@ -75,6 +95,8 @@ export default function ScenarioPanel({
   compact?: boolean
 }) {
   const [open, setOpen] = useState(true)
+  const [group, setGroup] = useState<AssumptionGroup>('growth')
+  const panelId = useId()
   const [monthError, setMonthError] = useState<string | null>(null)
   // The month boxes' own transient text. A browser WITHOUT a month picker renders
   // type="month" as a plain text field and hands over one character at a time, so a
@@ -170,194 +192,172 @@ export default function ScenarioPanel({
   const vestsOn = scenario.knobs.vests === undefined ? (vests?.included ?? false) : scenario.knobs.vests !== '0'
   const vestsHint = vests === null ? '' : vestsHintText(vests, primary?.name ?? null)
 
-  return (
-    <SandboxPanel
-      eyebrow="Planning assumptions"
-      hint="Inputs from your records, Settings, or planning defaults. An edited input is a scenario override. Clearing it restores its baseline; your financial records stay unchanged."
-      open={open}
-      onToggle={() => setOpen((o) => !o)}
-      toggleLabels={{ open: 'Show assumptions', close: 'Hide assumptions' }}
-      sandbox={sandbox}
-      resetLabel="Reset to baseline"
-      staleNoun="this projection"
-      skeletonHeight={220}
-      hidePins={compact}
-      compare={compact ? undefined :
-        <CompareTable<ProjectionOut>
-          rows={COMPARE_ROWS}
-          baseline={baseline}
-          scenario={sandbox.result}
-          valueOf={projectionValue}
-          pins={sandbox.pins.map((pin) => ({ id: pin.id, label: pin.label, result: sandbox.pinResults[pin.id] }))}
-          onUnpin={sandbox.unpin}
-          caption="Headline figures — baseline against the live scenario and any pins"
-        />
-      }
-    >
-      {ORDER.map((key) => {
-        if (key === 'plan_until') {
-          return (
-            <div key={key} className="slider-box projection-plan-until">
-              <div className="slider-box-head">
-                <label htmlFor="scenario-plan_until">
-                  {LABELS.plan_until}
-                  <InfoHint text={HINTS.plan_until ?? ''} />
-                </label>
-                {scenario.knobs.plan_until === undefined && live?.plan_until != null && (
-                  <span className="sandbox-badge">{live.plan_until_source === 'setting' ? 'Settings' : 'Horizon default'}</span>
-                )}
-              </div>
-              <input
-                id="scenario-plan_until"
-                className="field-input"
-                inputMode="numeric"
-                aria-label={LABELS.plan_until}
-                aria-describedby={planError !== null ? 'scenario-plan-until-error' : undefined}
-                placeholder={planPlaceholder}
-                value={planDraft ?? scenario.knobs.plan_until ?? ''}
-                onChange={(e) => {
-                  setPlanDraft(e.target.value)
-                  setPlanError(null) // the sentence described what WAS in the box
-                }}
-                onBlur={commitPlanUntil}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter') return
-                  e.preventDefault() // Enter inside a card must not implicit-submit
-                  commitPlanUntil()
-                }}
-              />
-              {planError !== null && (
-                <p id="scenario-plan-until-error" className="sandbox-field-error" role="alert">
-                  {planError}
-                </p>
-              )}
-            </div>
-          )
-        }
-        if (key === 'vests') {
-          // Only when there are grants to include (the echo is null without them).
-          if (vests === null) return null
-          return (
-            <div key={key} className="slider-box projection-vests">
-              <div className="slider-box-head">
-                {/* The ⓘ sits beside the words, as on every other knob, but outside the <label>:
-                    a label would otherwise name the hint button too. */}
-                <span className="projection-toggle-head">
-                  <label htmlFor="scenario-vests" className="projection-toggle">
-                    <input
-                      id="scenario-vests"
-                      type="checkbox"
-                      checked={vestsOn}
-                      disabled={vests.excluded_reason !== null}
-                      // Checked is the default: drop the entry rather than spell `vests:1`.
-                      onChange={(e) => knob('vests')(e.target.checked ? '' : '0', true)}
-                    />
-                    {LABELS.vests}
-                  </label>
-                  <InfoHint text={vestsHint} />
-                </span>
-              </div>
-              <span className="projection-derived">
-                {vests.excluded_reason ??
-                  (vests.next_12_months === null
-                    ? null
-                    : `≈ ${formatCurrencyCompact(vests.next_12_months)} over the next 12 months, after withholding`)}
-              </span>
-            </div>
-          )
-        }
-        const slider = (
-          <SliderBox
-            key={key}
-            id={`scenario-${key}`}
-            label={LABELS[key]}
-            hint={HINTS[key]}
-            kind={SLIDER[key].kind}
-            value={scenario.knobs[key] ?? ''}
-            actual={derived[key]}
-            sourceLabel={key === 'annual_spend' || key === 'monthly_contribution' ? 'From your records' : key === 'swr' ? 'Settings' : 'Planning default'}
-            baselineLabel="Baseline"
-            min={SLIDER[key].min}
-            max={SLIDER[key].max}
-            step={SLIDER[key].step}
-            onChange={knob(key)}
-          />
-        )
-        // The echo's own arithmetic under the contribution knob, so a derived figure is
-        // never a bare number the reader has to trust: cash savings + payroll deductions,
-        // per person. Absent on a backend older than the breakdown, and whenever the
-        // derived run computed the contribution from nothing.
-        // The echo's own arithmetic under the contribution knob, and the WINDOW under both
-        // figures the data derives (spec §3): a trailing mean is only honest beside the
-        // months it averaged, and those months are no longer "the last 12" — they are the
-        // last 12 that were entered AND paid. The window comes from the BASELINE echo, so it
-        // keeps describing the derivation even while a typed knob overrides the value.
-        const derivedWindow = baseline?.derived_window ?? null
-        // 2026-09-07 budget-seed spec §4: the budgets' own annual figure as a preset beside
-        // the derived one. Absent from an older backend and null without budgets, so the
-        // button exists only when the echo carries a number.
-        const budgetAnnual = key === 'annual_spend' ? (baseline?.budget_annual_spend ?? null) : null
-        const budgetMonth = baseline?.budget_month ?? null
-        const showsBudgets = budgetAnnual !== null
-        // Compared as a DECIMAL, not as text: a hand-typed 61752 is the same annual spend as
-        // the echo's 61752.00, and both spellings survive the URL, so a string test would
-        // leave the preset offering a figure the knob already carries.
-        const usingBudgets =
-          budgetAnnual !== null &&
-          scenario.knobs.annual_spend !== undefined &&
-          compareDecimals(scenario.knobs.annual_spend, budgetAnnual) === 0
-        const windowed = key === 'monthly_contribution' || key === 'annual_spend'
-        const showsBreakdown = key === 'monthly_contribution' && breakdown !== null
-        if (!showsBreakdown && !(windowed && derivedWindow !== null) && !showsBudgets) return slider
-        return (
-          <div key={key} className="slider-box">
-            {slider}
-            {key === 'monthly_contribution' && breakdown !== null && (
-              <span className="projection-derived">
-                From records: {formatCurrency(breakdown.cash)} cash savings +{' '}
-                {formatCurrency(breakdown.payroll)} payroll deductions
-                {Number(breakdown.employer) !== 0 &&
-                  ` + ${formatCurrency(breakdown.employer)} employer match`}
-                {' = '}
-                {formatCurrency(breakdown.total)}
-                {breakdown.by_person.length > 0 &&
-                  ` (${breakdown.by_person
-                    .map((row) =>
-                      Number(row.employer_monthly) === 0
-                        ? `${row.name} ${formatCurrency(row.monthly)}`
-                        : `${row.name} ${formatCurrency(row.monthly)} + ${formatCurrency(row.employer_monthly)} match`,
-                    )
-                    .join(' · ')})`}
-              </span>
-            )}
-            {windowed && derivedWindow !== null && (
-              <span className="projection-derived">
-                Records from {windowWords(derivedWindow)} ({derivedWindow.months}{' '}
-                {derivedWindow.months === 1 ? 'month' : 'months'})
-              </span>
-            )}
-            {budgetAnnual !== null && (
-              // A flex row (ProjectionPage.css): the sentence is its own item and wraps as a unit
-              // under the button when the column is narrow (audit P-8).
-              <span className="projection-derived projection-derived-preset">
-                <button
-                  type="button"
-                  className="button"
-                  disabled={usingBudgets}
-                  onClick={() => knob('annual_spend')(budgetAnnual, true)}
-                >
-                  {usingBudgets
-                    ? 'using your budgets'
-                    : `Use my budgets · ${formatCurrency(budgetAnnual)}/yr`}
-                </button>
-                {budgetMonth !== null && (
-                  <span>12 × the living-category budgets resolved for {formatMonth(budgetMonth)}.</span>
-                )}
-              </span>
+  const controls = ORDER.map((key) => {
+    if (key === 'plan_until') {
+      return (
+        <div key={key} className="slider-box projection-plan-until">
+          <div className="slider-box-head">
+            <label htmlFor="scenario-plan_until">
+              {LABELS.plan_until}
+              <InfoHint text={HINTS.plan_until ?? ''} />
+            </label>
+            {scenario.knobs.plan_until === undefined && live?.plan_until != null && (
+              <span className="sandbox-badge">{live.plan_until_source === 'setting' ? 'Settings' : 'Horizon default'}</span>
             )}
           </div>
-        )
-      })}
+          <input
+            id="scenario-plan_until"
+            className="field-input"
+            inputMode="numeric"
+            aria-label={LABELS.plan_until}
+            aria-describedby={planError !== null ? 'scenario-plan-until-error' : undefined}
+            placeholder={planPlaceholder}
+            value={planDraft ?? scenario.knobs.plan_until ?? ''}
+            onChange={(e) => {
+              setPlanDraft(e.target.value)
+              setPlanError(null) // the sentence described what WAS in the box
+            }}
+            onBlur={commitPlanUntil}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return
+              e.preventDefault() // Enter inside a card must not implicit-submit
+              commitPlanUntil()
+            }}
+          />
+          {planError !== null && (
+            <p id="scenario-plan-until-error" className="sandbox-field-error" role="alert">
+              {planError}
+            </p>
+          )}
+        </div>
+      )
+    }
+    if (key === 'vests') {
+      // Only when there are grants to include (the echo is null without them).
+      if (vests === null) return null
+      return (
+        <div key={key} className="slider-box projection-vests">
+          <div className="slider-box-head">
+            {/* The ⓘ sits beside the words, as on every other knob, but outside the <label>:
+                a label would otherwise name the hint button too. */}
+            <span className="projection-toggle-head">
+              <label htmlFor="scenario-vests" className="projection-toggle">
+                <input
+                  id="scenario-vests"
+                  type="checkbox"
+                  checked={vestsOn}
+                  disabled={vests.excluded_reason !== null}
+                  // Checked is the default: drop the entry rather than spell `vests:1`.
+                  onChange={(e) => knob('vests')(e.target.checked ? '' : '0', true)}
+                />
+                {LABELS.vests}
+              </label>
+              <InfoHint text={vestsHint} />
+            </span>
+          </div>
+          <span className="projection-derived">
+            {vests.excluded_reason ??
+              (vests.next_12_months === null
+                ? null
+                : `≈ ${formatCurrencyCompact(vests.next_12_months)} over the next 12 months, after withholding`)}
+          </span>
+        </div>
+      )
+    }
+    const slider = (
+      <SliderBox
+        key={key}
+        id={`scenario-${key}`}
+        label={LABELS[key]}
+        hint={HINTS[key]}
+        kind={SLIDER[key].kind}
+        value={scenario.knobs[key] ?? ''}
+        actual={derived[key]}
+        sourceLabel={key === 'annual_spend' || key === 'monthly_contribution' ? 'From your records' : key === 'swr' ? 'Settings' : 'Planning default'}
+        baselineLabel="Baseline"
+        min={SLIDER[key].min}
+        max={SLIDER[key].max}
+        step={SLIDER[key].step}
+        onChange={knob(key)}
+      />
+    )
+    // The echo's own arithmetic under the contribution knob, so a derived figure is
+    // never a bare number the reader has to trust: cash savings + payroll deductions,
+    // per person. Absent on a backend older than the breakdown, and whenever the
+    // derived run computed the contribution from nothing.
+    // The echo's own arithmetic under the contribution knob, and the WINDOW under both
+    // figures the data derives (spec §3): a trailing mean is only honest beside the
+    // months it averaged, and those months are no longer "the last 12" — they are the
+    // last 12 that were entered AND paid. The window comes from the BASELINE echo, so it
+    // keeps describing the derivation even while a typed knob overrides the value.
+    const derivedWindow = baseline?.derived_window ?? null
+    // 2026-09-07 budget-seed spec §4: the budgets' own annual figure as a preset beside
+    // the derived one. Absent from an older backend and null without budgets, so the
+    // button exists only when the echo carries a number.
+    const budgetAnnual = key === 'annual_spend' ? (baseline?.budget_annual_spend ?? null) : null
+    const budgetMonth = baseline?.budget_month ?? null
+    const showsBudgets = budgetAnnual !== null
+    // Compared as a DECIMAL, not as text: a hand-typed 61752 is the same annual spend as
+    // the echo's 61752.00, and both spellings survive the URL, so a string test would
+    // leave the preset offering a figure the knob already carries.
+    const usingBudgets =
+      budgetAnnual !== null &&
+      scenario.knobs.annual_spend !== undefined &&
+      compareDecimals(scenario.knobs.annual_spend, budgetAnnual) === 0
+    const windowed = key === 'monthly_contribution' || key === 'annual_spend'
+    const showsBreakdown = key === 'monthly_contribution' && breakdown !== null
+    if (!showsBreakdown && !(windowed && derivedWindow !== null) && !showsBudgets) return slider
+    return (
+      <div key={key} className="slider-box">
+        {slider}
+        {key === 'monthly_contribution' && breakdown !== null && (
+          <span className="projection-derived">
+            From records: {formatCurrency(breakdown.cash)} cash savings +{' '}
+            {formatCurrency(breakdown.payroll)} payroll deductions
+            {Number(breakdown.employer) !== 0 &&
+              ` + ${formatCurrency(breakdown.employer)} employer match`}
+            {' = '}
+            {formatCurrency(breakdown.total)}
+            {breakdown.by_person.length > 0 &&
+              ` (${breakdown.by_person
+                .map((row) =>
+                  Number(row.employer_monthly) === 0
+                    ? `${row.name} ${formatCurrency(row.monthly)}`
+                    : `${row.name} ${formatCurrency(row.monthly)} + ${formatCurrency(row.employer_monthly)} match`,
+                )
+                .join(' · ')})`}
+          </span>
+        )}
+        {windowed && derivedWindow !== null && (
+          <span className="projection-derived">
+            Records from {windowWords(derivedWindow)} ({derivedWindow.months}{' '}
+            {derivedWindow.months === 1 ? 'month' : 'months'})
+          </span>
+        )}
+        {budgetAnnual !== null && (
+          // A flex row (ProjectionPage.css): the sentence is its own item and wraps as a unit
+          // under the button when the column is narrow (audit P-8).
+          <span className="projection-derived projection-derived-preset">
+            <button
+              type="button"
+              className="button"
+              disabled={usingBudgets}
+              onClick={() => knob('annual_spend')(budgetAnnual, true)}
+            >
+              {usingBudgets
+                ? 'using your budgets'
+                : `Use my budgets · ${formatCurrency(budgetAnnual)}/yr`}
+            </button>
+            {budgetMonth !== null && (
+              <span>12 × the living-category budgets resolved for {formatMonth(budgetMonth)}.</span>
+            )}
+          </span>
+        )}
+      </div>
+    )
+  })
+  const retirementControls = (
+    <>
       {people.map((person) => (
         <div key={person.id} className="slider-box">
           <div className="slider-box-head">
@@ -383,7 +383,67 @@ export default function ScenarioPanel({
       <div id="scenario-retire-error">
         <FeedBanner error={monthError} />
       </div>
-      {!compact && <ScenarioHints people={people} vests={vests} />}
+    </>
+  )
+
+  return (
+    <SandboxPanel
+      eyebrow="Planning assumptions"
+      hint="Inputs from your records, Settings, or planning defaults. An edited input is a scenario override. Clearing it restores its baseline; your financial records stay unchanged."
+      open={open}
+      onToggle={() => setOpen((o) => !o)}
+      toggleLabels={{ open: 'Show assumptions', close: 'Hide assumptions' }}
+      sandbox={sandbox}
+      resetLabel="Reset to baseline"
+      staleNoun="this projection"
+      skeletonHeight={220}
+      hidePins={compact}
+      presets={compact && (
+        <div className="projection-assumption-tabs">
+          <Segmented
+            variant="tabs"
+            size="sm"
+            ariaLabel="Assumption groups"
+            value={group}
+            onChange={setGroup}
+            panelIds={Object.fromEntries(GROUPS.map(({ value }) => [value, `${panelId}-${value}`]))}
+            options={GROUPS.map((option) => {
+              const count = ORDER.filter((key) => GROUP_FOR[key] === option.value && scenario.knobs[key] !== undefined).length
+                + (option.value === 'timeline' ? Object.keys(scenario.retirements).length : 0)
+              return {
+                ...option,
+                badge: count > 0 ? <span aria-label={`${count} edited ${count === 1 ? 'assumption' : 'assumptions'}`}>{count}</span> : undefined,
+              }
+            })}
+          />
+        </div>
+      )}
+      compare={compact ? undefined :
+        <CompareTable<ProjectionOut>
+          rows={COMPARE_ROWS}
+          baseline={baseline}
+          scenario={sandbox.result}
+          valueOf={projectionValue}
+          pins={sandbox.pins.map((pin) => ({ id: pin.id, label: pin.label, result: sandbox.pinResults[pin.id] }))}
+          onUnpin={sandbox.unpin}
+          caption="Headline figures — baseline against the live scenario and any pins"
+        />
+      }
+    >
+      {compact ? GROUPS.map(({ value, label }) => (
+        // Keep each group mounted: a tab switch must preserve unfinished input and validation.
+        <div key={value} id={`${panelId}-${value}`} className="projection-assumption-group"
+          role="tabpanel" aria-label={`${label} assumptions`} hidden={group !== value}>
+          {controls.filter((_, index) => GROUP_FOR[ORDER[index]] === value)}
+          {value === 'timeline' && retirementControls}
+        </div>
+      )) : (
+        <>
+          {controls}
+          {retirementControls}
+          <ScenarioHints people={people} vests={vests} />
+        </>
+      )}
     </SandboxPanel>
   )
 }
