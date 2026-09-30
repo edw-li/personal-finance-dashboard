@@ -26,6 +26,7 @@ export interface MonthSaveInput {
   spending: {
     amounts: SpendingMonthUpsert['amounts']
     netPay: string
+    netPayByPerson?: Record<number, string>
     hadNetPay: boolean
     recordZero: boolean
   }
@@ -75,6 +76,10 @@ export function buildMonthSave(input: MonthSaveInput): BuiltMonthSave {
     // null (the server deletes the row); a month that never had one says nothing about it.
     if (input.spending.netPay !== '') spending.net_pay = input.spending.netPay
     else if (input.spending.hadNetPay) spending.net_pay = null
+    if (input.spending.netPayByPerson !== undefined) {
+      spending.net_pay_by_person = input.spending.netPay === '' ? null : input.spending.netPayByPerson
+      if (input.spending.netPay === '') spending.net_pay = null
+    }
     if (input.spending.recordZero) spending.confirm_zero = true
     body.spending = spending
   }

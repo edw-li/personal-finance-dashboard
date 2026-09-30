@@ -231,6 +231,96 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
+describe('household member take-home', () => {
+  beforeEach(() => {
+    vi.mocked(householdApi.fetchHousehold).mockResolvedValue({
+      people: [{ id: 1, name: 'Edward', is_primary: true }, { id: 2, name: 'Grace', is_primary: false }],
+      marriage_date: null,
+    })
+  })
+
+  it('derives the household total and saves the individual amounts, requiring explicit zero for no income', async () => {
+    renderPage('/update?month=2026-08-01&step=spending')
+    fireEvent.change(await screen.findByLabelText('Edward take-home'), { target: { value: '$4,000.10' } })
+    expect(screen.getByLabelText('Household take-home total').textContent).toBe('$4,000.10')
+    expect(screen.getByRole('button', { name: 'Save August spending' }).getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Save August spending' }))
+    expect(monthReviewApi.saveMonthReview).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Grace take-home'), { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save August spending' }))
+    await waitFor(() => expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [], net_pay: '4000.10', net_pay_by_person: { 1: '4000.10', 2: '0.00' },
+    }))
+    expect(await screen.findByRole('heading', { name: 'August spending saved' })).toBeTruthy()
+    expect(sessionStorage.getItem('finance-update-draft:flows:2026-08-01')).toBeNull()
+  })
+
+  it('restores an incomplete member draft after leaving the page', async () => {
+    const page = renderPage('/update?month=2026-08-01&step=spending')
+    fireEvent.change(await screen.findByLabelText('Edward take-home'), { target: { value: '123.45' } })
+    page.unmount()
+    renderPage('/update?month=2026-08-01&step=spending')
+    expect((await screen.findByLabelText('Edward take-home') as HTMLInputElement).value).toBe('123.45')
+    expect((screen.getByLabelText('Grace take-home') as HTMLInputElement).value).toBe('')
+    expect(screen.getByRole('button', { name: 'Save August spending' }).getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+    expect(await screen.findByText(/Complete each person’s take-home in Spending/)).toBeTruthy()
+  })
+
+  it('keeps a legacy total during unrelated spending edits, without inventing a member breakdown', async () => {
+    vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+      month: '2026-08-01', exists: true, net_pay: '6000.00', net_pay_by_person: null, amounts: [], budgets: [],
+    })
+    renderPage('/update?month=2026-08-01&step=spending')
+    expect((await screen.findByLabelText('Edward take-home') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('Grace take-home') as HTMLInputElement).value).toBe('')
+    expect(screen.getByLabelText('Household take-home total').textContent).toBe('$6,000.00')
+    fireEvent.change(screen.getByLabelText('Food'), { target: { value: '250' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save August spending' }))
+    await waitFor(() => expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [{ category_id: 7, amount: '250' }], net_pay: '6000.00',
+    }))
+  })
+
+  it('loads saved member amounts and reviews offsetting edits even when the total stays the same', async () => {
+    vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+      month: '2026-08-01', exists: true, net_pay: '6000.00',
+      net_pay_by_person: { 1: '4000.00', 2: '2000.00' }, amounts: [], budgets: [],
+    })
+    renderPage('/update?month=2026-08-01&step=spending')
+    expect((await screen.findByLabelText('Edward take-home') as HTMLInputElement).value).toBe('4000.00')
+    expect((screen.getByLabelText('Grace take-home') as HTMLInputElement).value).toBe('$2,000.00')
+    fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+    fireEvent.click(await screen.findByLabelText('I checked August household take-home.'))
+    fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
+    fireEvent.change(screen.getByLabelText('Edward take-home'), { target: { value: '3000' } })
+    fireEvent.change(screen.getByLabelText('Grace take-home'), { target: { value: '3000' } })
+    fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+    const changes = await screen.findByRole('table', { name: 'Entries that will be saved' })
+    expect((screen.getByLabelText('I checked August household take-home.') as HTMLInputElement).checked).toBe(false)
+    expect(within(changes).getByRole('rowheader', { name: /Edward take-home/ })).toBeTruthy()
+    expect(within(changes).getByRole('rowheader', { name: /Grace take-home/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Save progress' }))
+    await waitFor(() => expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [], net_pay: '6000.00', net_pay_by_person: { 1: '3000.00', 2: '3000.00' },
+    }))
+  })
+
+  it('clears the saved total and breakdown together when all member entries are removed', async () => {
+    vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+      month: '2026-08-01', exists: true, net_pay: '6000.00',
+      net_pay_by_person: { 1: '4000.00', 2: '2000.00' }, amounts: [], budgets: [],
+    })
+    renderPage('/update?month=2026-08-01&step=spending')
+    fireEvent.change(await screen.findByLabelText('Edward take-home'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Grace take-home'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save August spending' }))
+    await waitFor(() => expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [], net_pay: null, net_pay_by_person: null,
+    }))
+  })
+})
+
 it('walks balances -> spending -> review and submits both PUTs', async () => {
   renderWizard()
   // Step 1: balance input pre-filled from the prior month (2026-07 snapshot).
@@ -1069,11 +1159,10 @@ it('keeps the flat group walk for a one-person household', async () => {
   expect(document.querySelectorAll('tr.entry-subtotal-row').length).toBe(1)
 })
 
-it('names the pay box as a HOUSEHOLD figure — one stream, two earners', async () => {
+it('keeps the single-person take-home box labelled as the household total', async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /^next: [a-z]+ spending$/i }))
-  // The field, the step heading and the ⓘ hint all say the same word; a box still called
-  // "Net pay" on a married household reads as one person's paycheck.
+  // With one person, the single entry is also the household total.
   expect(await screen.findByLabelText('Household take-home')).toBeTruthy()
   expect(screen.queryByLabelText('Net pay (take-home)')).toBeNull()
   expect(screen.getByRole('heading', { name: /spending & take-home/i })).toBeTruthy()

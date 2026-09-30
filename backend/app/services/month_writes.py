@@ -17,6 +17,7 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    Person,
     SpendingCategory,
 )
 from app.schemas.net_worth import BalanceEntry, MonthUpsert, MonthUpsertResult
@@ -27,6 +28,7 @@ from app.services.derived_accounts import derived_parent_balances
 from app.services.money import MONEY_MAX_ABS_12_2, quantize_money, require_first_of_month
 from app.services.month_review import day_label
 from app.services.spending_guard import EMPTY_MONTH_REFUSAL, records_something
+from app.services.take_home import total_take_home
 
 
 async def write_balances(
@@ -209,13 +211,26 @@ async def write_spending(
     # omitted = leave it alone; a string = upsert; an EXPLICIT null = clear the month's
     # cashflow row. model_fields_set is what tells an omitted field from a null one.
     net_pay_present = "net_pay" in body.model_fields_set
-    net_pay_provided = net_pay_present and body.net_pay is not None
-    net_pay_clear = net_pay_present and body.net_pay is None
+    breakdown_present = "net_pay_by_person" in body.model_fields_set
+    breakdown = None
     net_pay_value = (
         quantize_money(body.net_pay, "net_pay", max_abs=MONEY_MAX_ABS_12_2)
-        if net_pay_provided
+        if body.net_pay is not None
         else None
     )
+    if body.net_pay_by_person is not None:
+        people = set((await db.execute(select(Person.id))).scalars())
+        breakdown, derived_pay = total_take_home(body.net_pay_by_person, people)
+        if net_pay_present and net_pay_value != derived_pay:
+            raise HTTPException(
+                422, "Household take-home must equal the sum of each person's take-home"
+            )
+        net_pay_present = True
+        net_pay_value = derived_pay
+    elif breakdown_present and not net_pay_present:
+        raise HTTPException(422, "Supply net_pay when clearing its per-person breakdown")
+    net_pay_provided = net_pay_present and net_pay_value is not None
+    net_pay_clear = net_pay_present and net_pay_value is None
     if net_pay_value is not None and net_pay_value < 0:
         # Take-home pay can't be negative; a typo'd minus sign would flip the
         # savings-rate denominator into flattering nonsense (Task 7 review).
@@ -285,12 +300,17 @@ async def write_spending(
     if net_pay_provided:
         cashflow = await db.get(MonthlyCashflow, month)
         if cashflow is None:
-            cashflow = MonthlyCashflow(month=month, net_pay=net_pay_value)
+            cashflow = MonthlyCashflow(
+                month=month, net_pay=net_pay_value, net_pay_by_person=breakdown
+            )
             db.add(cashflow)
             await db.flush()
             batch.record_insert(cashflow, month=month)
         else:
             before = row_image(cashflow)
+            # An aggregate-only correction cannot retain a breakdown with a different sum.
+            if breakdown_present or cashflow.net_pay != net_pay_value:
+                cashflow.net_pay_by_person = breakdown
             cashflow.net_pay = net_pay_value
             batch.record_update(cashflow, before, month=month)
         net_pay_note = ", take-home set"

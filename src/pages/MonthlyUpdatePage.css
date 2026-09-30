@@ -70,6 +70,16 @@
 /* The single-column entry table: Tab/Enter walk straight down one visual column,
    the way the sheet's muscle memory expects (spec §4.2). (.group-block died with the
    per-group cards this table replaced.) */
+.entry-take-home { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem 1.5rem; margin: 1rem 0 1.5rem; }
+.entry-take-home-members { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; }
+.entry-take-home-members label { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+.entry-take-home-members input { width: 11rem; max-width: 100%; }
+.entry-take-home-total { display: flex; flex-direction: column; justify-content: center; gap: 0.25rem; padding: 0.5rem 0.85rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.entry-take-home-total > span, .entry-take-home-total small { color: var(--muted); font-size: 0.75rem; }
+.entry-take-home-total output { font-size: 1.2rem; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.entry-take-home > .drill-hint { grid-column: 1 / -1; margin: 0; }
+.entry-take-home .drill-hint .button { margin-inline-start: 0.5rem; }
+@container page (max-width: 640px) { .entry-take-home { grid-template-columns: minmax(0, 1fr); } }
 .entry-table { width: 100%; }
 .entry-table td, .entry-table th { padding: 0.3rem 0.6rem; }
 .entry-table .entry-cell-col { width: 160px; }

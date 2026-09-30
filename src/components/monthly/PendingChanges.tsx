@@ -81,6 +81,11 @@ export default function PendingChanges({ accounts, people, balanceRows, category
     if (amountKey(saved.netPay) !== amountKey(current.netPay)) {
       rows.push(amountRow('take-home', 'Household take-home', 'Income', saved.netPay || undefined, current.netPay, true))
     }
+    for (const person of people) {
+      const before = saved.netPayByPerson?.[person.id]
+      const after = current.netPayByPerson?.[person.id] ?? ''
+      if (amountKey(before) !== amountKey(after)) rows.push(amountRow(`take-home-${person.id}`, `${person.name} take-home`, 'Income breakdown', before, after, true))
+    }
     if (current.recordZero && !saved.recordZero) rows.push({ key: 'zero', label: 'Record $0 spending',
       context: 'Confirmation', before: 'Not confirmed', after: 'Confirmed for this month' })
   }

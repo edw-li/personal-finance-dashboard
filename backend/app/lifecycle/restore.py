@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,7 @@ from app.config import settings
 from app.database import Base
 from app.models import AppSetting, ChangeLog, LifecycleRun
 from app.schemas.lifecycle import RestoreReport, RestoreSchema, RestoreTableDiff
+from app.schemas.spending import SpendingMonthUpsert
 from app.services.assistant_models import KEY_SETTING
 from app.services.price_service import LAST_REFRESH_KEY, REFRESH_RUNS_KEY
 from app.services.snapshot import (
@@ -47,6 +49,7 @@ from app.services.snapshot import (
     trim_directory,
     write_restore_point,
 )
+from app.services.take_home import total_take_home
 
 logger = logging.getLogger(__name__)
 
@@ -219,12 +222,31 @@ def parse_tables(snapshot: LoadedSnapshot, *, user_id: int | None) -> ParsedTabl
             out = _rewrite_findings(out, user_id, parsed.warnings)
         parsed.rows[name] = out
     _validate_allocation_metadata(parsed.rows)
+    _validate_take_home(parsed.rows)
     if snapshot.environment is not None and snapshot.environment != settings.environment:
         parsed.warnings.append(
             f"Snapshot was exported from a '{snapshot.environment}' environment; "
             f"this server is '{settings.environment}'"
         )
     return parsed
+
+
+def _validate_take_home(tables: dict[str, list[dict[str, object]]]) -> None:
+    person_ids = {row["id"] for row in tables["people"]}
+    for row in tables["monthly_cashflow"]:
+        if row.get("net_pay_by_person") is None:
+            continue
+        try:
+            body = SpendingMonthUpsert.model_validate(
+                {"net_pay": row["net_pay"], "net_pay_by_person": row["net_pay_by_person"]}
+            )
+            breakdown, total = total_take_home(body.net_pay_by_person, person_ids)
+            if total != body.net_pay:
+                raise ValueError("household take-home does not match its individual amounts")
+            row["net_pay_by_person"] = breakdown
+        except (ValidationError, HTTPException, ValueError) as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            raise SnapshotError(422, f"Snapshot monthly_cashflow take-home: {detail}") from None
 
 
 def _rewrite_findings(

@@ -23,6 +23,26 @@ const input = (overrides: Partial<RestoreInput> = {}): RestoreInput => ({
 })
 
 describe('restoreParts', () => {
+  it('restores member entries and recomputes their total, retaining missing new members as blanks', () => {
+    const out = restoreParts(input({
+      personIds: [1, 2, 3],
+      flowsDraft: { netPay: 'stale', netPayByPerson: { 1: '0.105', 2: '0.105' } },
+    }))
+    expect(out.flows.netPay).toBe('0.22')
+    expect(out.flows.netPayByPerson).toEqual({ 1: '0.105', 2: '0.105', 3: '' })
+    expect(out.restored.flows).toBe(true)
+  })
+
+  it('preserves an edited legacy draft total without keeping an incompatible saved breakdown', () => {
+    const out = restoreParts(input({
+      flowsSeed: { amounts: {}, netPay: '1000.00', netPayByPerson: { 1: '400', 2: '600' }, recordZero: false },
+      flowsDraft: { netPay: '1500.00' },
+    }))
+    expect(out.flows.netPay).toBe('1500.00')
+    expect(out.flows.netPayByPerson).toBeUndefined()
+    expect(out.restored.flows).toBe(true)
+  })
+
   it('with no drafts, both parts are their seeds and nothing is restored or dropped', () => {
     const out = restoreParts(input())
     expect(out.balances).toEqual(input().balancesSeed)

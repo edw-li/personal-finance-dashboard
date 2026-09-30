@@ -65,13 +65,15 @@ export const ROUTINE_CARDS: GuideCard[] = [
         where: 'Monthly update → Spending',
         steps: [
           'Once the month has ended and its charges have posted, open its **Spending** step.',
-          'Type the month’s take-home in **Household take-home** — one figure, never per person.',
+          'Enter each person’s take-home for the month; **Household take-home** adds the amounts automatically. A one-person household has a single take-home box.',
           'Type each category’s spend; **Typical (3-mo median)** sits beside it.',
           'To record a month that really spent nothing, tick **Confirm remaining categories as $0**.',
           'Press **Save <Month> spending**.',
         ],
         to: '/update?step=spending',
         watch: [
+          'Once you start a breakdown, enter an amount for everyone, including 0 for no take-home. Leave everyone blank if take-home is not recorded.',
+          'Older months keep their saved household total until you replace it with individual amounts; no historical breakdown is guessed.',
           'A category left at its 0.00 seed is skipped, not recorded as a zero.',
           'Saving spending never creates or changes the month’s balances.',
           'A charge that posts later is a plain edit — change the figure and save again.',
@@ -187,7 +189,7 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Clear a saved take-home',
         where: 'Monthly update → Spending',
         steps: [
-          'Blank the **Household take-home** box on a month that had one.',
+          'Clear every person’s take-home box. For an older total with no breakdown, use **Clear saved take-home**; a one-person household can clear its single box.',
           'Press **Save <Month> spending** — the month’s cashflow row is deleted and the receipt says take-home was cleared.',
         ],
         to: '/update?step=spending',

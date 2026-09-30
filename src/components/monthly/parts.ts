@@ -23,6 +23,7 @@ export interface BalancesPart {
 export interface FlowsPart {
   amounts: Record<number, string>
   netPay: string
+  netPayByPerson?: Record<number, string>
   /** The $0 consent: part of what a save sends, never part of a draft (2026-09-04 spec §4). */
   recordZero: boolean
 }
@@ -55,7 +56,11 @@ export function balancesKey(part: {
   return JSON.stringify([recordKey(part.balances), part.notes, sortedIds(part.typedParents)])
 }
 
-export function flowsKey(part: { amounts: Record<number, string>; netPay: string }): string {
+export function flowsKey(part: { amounts: Record<number, string>; netPay: string; netPayByPerson?: Record<number, string> }): string {
   // A blank take-home means "none", never zero — it keeps a key of its own.
-  return JSON.stringify([recordKey(part.amounts), part.netPay.trim() === '' ? '' : amountKey(part.netPay)])
+  return JSON.stringify([
+    recordKey(part.amounts),
+    part.netPay.trim() === '' ? '' : amountKey(part.netPay),
+    recordKey(part.netPayByPerson ?? {}).filter(([, value]) => value !== 't:'),
+  ])
 }

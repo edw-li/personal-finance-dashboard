@@ -1,5 +1,6 @@
 import type { BalancesDraft, FlowsDraft } from './drafts'
-import { balancesKey, flowsKey, type BalancesPart, type FlowsPart } from './parts'
+import { amountKey, balancesKey, flowsKey, type BalancesPart, type FlowsPart } from './parts'
+import { takeHomeStatus } from './takeHome'
 
 // Restoring unsaved work when a month loads (2026-09-23 spec §M6): each part's stored draft is laid
 // over its server seed when it differs from it, and dropped when it matches — a leftover with
@@ -15,6 +16,7 @@ export interface RestoreInput {
    *  added since the draft was written still seeds. */
   accountIds: number[]
   categoryIds: number[]
+  personIds?: number[]
   /** The page's derived-parents rule: every parent not in `typed` becomes the sum of its components. */
   derive: (typed: Set<number>, record: Record<number, string>) => Record<number, string>
   /** The month has not begun (spec §M3): its spending cannot be entered yet, so a spending draft is
@@ -26,7 +28,7 @@ export interface RestoreInput {
 export interface RestoredParts {
   /** What goes on screen: the restored draft, or the seed. */
   balances: BalancesPart
-  flows: Pick<FlowsPart, 'amounts' | 'netPay'>
+  flows: Pick<FlowsPart, 'amounts' | 'netPay' | 'netPayByPerson'>
   /** A draft was laid over the part — its banner shows. */
   restored: { balances: boolean; flows: boolean }
   /** A stored draft to forget: it matched its seed. */
@@ -58,6 +60,16 @@ export function restoreParts(input: RestoreInput): RestoredParts {
           notes: balancesDraft.notes ?? balancesSeed.notes,
           typedParents: typed,
         }
+  // An older draft may contain only an edited household total. Preserve that edit without
+  // pairing it with a server breakdown that no longer adds up to the draft's total.
+  const draftPay = flowsDraft?.netPayByPerson === undefined
+    ? (flowsDraft?.netPay !== undefined && amountKey(flowsDraft.netPay) !== amountKey(flowsSeed.netPay)
+        ? undefined : flowsSeed.netPayByPerson)
+    : Object.fromEntries(
+        (input.personIds ?? Object.keys(flowsDraft.netPayByPerson).map(Number)).map(id => [
+          id, flowsDraft.netPayByPerson?.[id] ?? flowsSeed.netPayByPerson?.[id] ?? '',
+        ]),
+      )
   const draftFlows =
     flowsDraft === null
       ? null
@@ -65,14 +77,20 @@ export function restoreParts(input: RestoreInput): RestoredParts {
           amounts: Object.fromEntries(
             input.categoryIds.map((id) => [id, flowsDraft.amounts?.[String(id)] ?? flowsSeed.amounts[id]]),
           ),
-          netPay: flowsDraft.netPay ?? flowsSeed.netPay,
+          netPay: draftPay === undefined
+            ? (flowsDraft.netPay ?? flowsSeed.netPay)
+            : takeHomeStatus(draftPay, input.personIds ?? []).total,
+          ...(draftPay === undefined ? {} : { netPayByPerson: draftPay }),
         }
   const restoreBalances = draftBalances !== null && balancesKey(draftBalances) !== balancesKey(balancesSeed)
   const flowsDiffer = draftFlows !== null && flowsKey(draftFlows) !== flowsKey(flowsSeed)
   const restoreFlows = flowsDiffer && !input.notBegun
   return {
     balances: restoreBalances && draftBalances !== null ? draftBalances : balancesSeed,
-    flows: restoreFlows && draftFlows !== null ? draftFlows : { amounts: flowsSeed.amounts, netPay: flowsSeed.netPay },
+    flows: restoreFlows && draftFlows !== null ? draftFlows : {
+      amounts: flowsSeed.amounts, netPay: flowsSeed.netPay,
+      ...(flowsSeed.netPayByPerson === undefined ? {} : { netPayByPerson: flowsSeed.netPayByPerson }),
+    },
     restored: { balances: restoreBalances, flows: restoreFlows },
     // A matching draft goes; a differing spending draft of a month not begun stays for later.
     drop: { balances: balancesDraft !== null && !restoreBalances, flows: flowsDraft !== null && !flowsDiffer },

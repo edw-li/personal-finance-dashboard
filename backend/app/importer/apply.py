@@ -664,7 +664,12 @@ async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: Sheet
         else:
             _diff_update(
                 cashflow,
-                {"net_pay": month_row.net_pay},
+                {
+                    "net_pay": month_row.net_pay,
+                    **(
+                        {"net_pay_by_person": None} if cashflow.net_pay != month_row.net_pay else {}
+                    ),
+                },
                 cashflow_counts,
                 report,
                 f"monthly_cashflow[{month_row.month.isoformat()}]",

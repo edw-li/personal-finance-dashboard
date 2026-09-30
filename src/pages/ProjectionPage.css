@@ -60,17 +60,19 @@
 /* …and in that band the five tiles are a balanced 3 + 2 — panels.css's rule for every five-tile row
    now (2026-09-25 polish spec §4.2), the one this sheet used to keep for itself. */
 .projection-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
-.projection-assumptions { min-width: 0; }
-.projection-assumptions .sandbox-card { padding: 16px; }
+/* Both cards fill the workspace row: shorter Growth/Timeline panels distribute their
+   controls within the chart's height, while the taller Cash flow tab grows the chart. */
+.projection-assumptions { min-width: 0; display: flex; flex-direction: column; }
+.projection-assumptions .sandbox-card { padding: 16px; flex: 1; display: flex; flex-direction: column; }
 .projection-assumptions .sandbox-header { align-items: flex-start; flex-direction: column; }
 .projection-assumptions .sandbox-header-actions { flex-wrap: wrap; }
-.projection-assumptions .sandbox-controls { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.projection-assumptions .sandbox-controls { flex: 1; grid-template-columns: minmax(0, 1fr); gap: 18px; }
 .projection-assumption-tabs { margin-top: 16px; }
 .projection-assumption-tabs .segmented { display: flex; }
 .projection-assumption-tabs [role='tab'] { flex: 1; justify-content: center; white-space: nowrap; }
 /* Each tab keeps its fields mounted, including partial edits. Its grid follows the
    controls' responsive columns without letting the hidden groups reserve any height. */
-.projection-assumption-group { display: grid; grid-column: 1 / -1; grid-template-columns: inherit; gap: inherit; min-width: 0; }
+.projection-assumption-group { display: grid; grid-column: 1 / -1; grid-template-columns: inherit; align-content: space-between; gap: inherit; min-width: 0; }
 .projection-assumption-group[hidden] { display: none; }
 .projection-assumptions .slider-box-head { align-items: flex-start; }
 .projection-assumptions .sandbox-badge { font-size: 0.63rem; white-space: nowrap; }

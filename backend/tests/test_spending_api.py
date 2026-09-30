@@ -179,6 +179,7 @@ async def test_get_spending_month(auth_client, db):
         "month": "2030-01-01",
         "exists": False,
         "net_pay": None,
+        "net_pay_by_person": None,
         "amounts": [],
         "budgets": [],
     }

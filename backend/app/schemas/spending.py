@@ -47,6 +47,7 @@ class AmountEntry(BaseModel):
 
 class SpendingMonthUpsert(BaseModel):
     net_pay: Decimal | None = None
+    net_pay_by_person: dict[int, Decimal] | None = None
     amounts: list[AmountEntry] = []
     # Spec §4: an all-zero month with no take-home is refused unless the client SAYS it
     # means it (the wizard's "Record this month as $0" checkbox). Default False, so an
@@ -58,6 +59,7 @@ class SpendingMonthOut(BaseModel):
     month: date
     exists: bool
     net_pay: Decimal | None
+    net_pay_by_person: dict[int, Decimal] | None = None
     amounts: list[AmountEntry]
     # Resolved budgets for THIS month (spec §2 rule) — the wizard's "of {budget}" subtext
     # needs the ENTRY month, which is usually not on the matrix's entered-months axis

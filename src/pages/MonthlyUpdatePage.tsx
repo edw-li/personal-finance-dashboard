@@ -29,6 +29,8 @@ import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthRe
 import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
 import { useEntryHeaders } from '../components/monthly/useEntryHeaders'
+import TakeHomeInputs from '../components/monthly/TakeHomeInputs'
+import { canonicalTakeHome, takeHomeStatus, type TakeHomeAmounts } from '../components/monthly/takeHome'
 import { SegmentedGroup } from '../components/shell/Segmented'
 import HistoricalReview from '../components/monthly/HistoricalReview'
 import WhatsDue, { DuePartLink } from '../components/monthly/WhatsDue'
@@ -401,6 +403,7 @@ function MonthlyUpdateWizard() {
   const [balances, setBalances] = useState<Record<number, string>>({})
   const [amounts, setAmounts] = useState<Record<number, string>>({})
   const [netPay, setNetPay] = useState('')
+  const [netPayByPerson, setNetPayByPerson] = useState<TakeHomeAmounts>()
   const [notes, setNotes] = useState('')
   const [prevNetWorth, setPrevNetWorth] = useState<number | null>(null)
   // The prior month's per-account balances — the table's "Last month" column and the
@@ -746,7 +749,10 @@ function MonthlyUpdateWizard() {
           notes: seededNotes,
           typedParents: sortedIds(handTyped),
         }
-        const flowsSeed: FlowsPart = { amounts: seededAmounts, netPay: seededNetPay, recordZero: false }
+        const flowsSeed: FlowsPart = {
+          amounts: seededAmounts, netPay: seededNetPay,
+          netPayByPerson: spendMonth.net_pay_by_person ?? undefined, recordZero: false,
+        }
         // A whole-month draft from before the parts were split becomes two part drafts on first
         // read (spec §M6); then each part is restored — or dropped — on its own (restore.ts).
         splitLegacyDraft(month)
@@ -757,6 +763,7 @@ function MonthlyUpdateWizard() {
           flowsDraft: readDraft<FlowsDraft>('flows', month),
           accountIds: visibleAccounts.map((a) => a.id),
           categoryIds: activeCategories.map((c) => c.id),
+          personIds: householdData?.people.map(person => person.id),
           derive: (typed, record) => deriveParents(derivationFor(byParent, typed), record),
           notBegun: monthNotBegun(month),
         })
@@ -767,6 +774,7 @@ function MonthlyUpdateWizard() {
         setNotes(restored.balances.notes)
         setAmounts(restored.flows.amounts)
         setNetPay(restored.flows.netPay)
+        setNetPayByPerson(restored.flows.netPayByPerson)
         setBalancesBase({ month, part: balancesSeed })
         setFlowsBase({ month, part: flowsSeed, waiting: restored.flowsWaiting })
         setRestoredParts(restored.restored)
@@ -806,11 +814,11 @@ function MonthlyUpdateWizard() {
   // untouched seed would look like "nothing typed". The effect after this one restores it instead.
   useEffect(() => {
     if (loading || notBegun || flowsBase === null || flowsBase.month !== month || flowsBase.waiting) return
-    const now = { amounts, netPay }
+    const now = { amounts, netPay, netPayByPerson }
     currentRaw.current.flows = JSON.stringify(now)
     if (flowsKey(now) === flowsKey(flowsBase.part)) removeDraft('flows', month)
     else writeDraft('flows', month, now)
-  }, [amounts, netPay, flowsBase, month, loading, notBegun])
+  }, [amounts, netPay, netPayByPerson, flowsBase, month, loading, notBegun])
 
   // The month on screen has begun — midnight passed, and useProductToday re-rendered with the
   // server's new day — while a spending draft waited for it (spec review G1): reload the month, as a
@@ -854,6 +862,7 @@ function MonthlyUpdateWizard() {
       if (flowsBase === null || flowsBase.month !== month) return
       setAmounts(flowsBase.part.amounts)
       setNetPay(flowsBase.part.netPay)
+      setNetPayByPerson(flowsBase.part.netPayByPerson)
       // The $0 consent is part of the spending part (never of its draft): back to the seed whole,
       // or a leftover tick would keep the part dirty over the figures just put back (review M4).
       setRecordZero(flowsBase.part.recordZero)
@@ -889,9 +898,10 @@ function MonthlyUpdateWizard() {
   const balancesValid = accounts.every(
     (a) => isReadOnlyRow(a) || isAmount(balances[a.id] ?? ''),
   )
+  const takeHomeValid = netPayByPerson === undefined || takeHomeStatus(netPayByPerson, people.map(person => person.id)).valid
   const amountsValid =
     categories.every((c) => isAmount(amounts[c.id] ?? '')) &&
-    (netPay.trim() === '' || isAmount(netPay))
+    (netPay.trim() === '' || isAmount(netPay)) && takeHomeValid
 
   // Committed values, like every other live figure on this page — a cell still holding "$250"
   // (no blur yet) is entered.
@@ -1000,7 +1010,7 @@ function MonthlyUpdateWizard() {
   const flowsDirty =
     flowsBase !== null &&
     flowsBase.month === month &&
-    (flowsKey({ amounts, netPay }) !== flowsKey(flowsBase.part) || recordZero !== flowsBase.part.recordZero)
+    (flowsKey({ amounts, netPay, netPayByPerson }) !== flowsKey(flowsBase.part) || recordZero !== flowsBase.part.recordZero)
 
 
   // What a Review save would send now (monthSave.ts) — the pre-save note and the receipt's "still
@@ -1010,7 +1020,7 @@ function MonthlyUpdateWizard() {
   const confirmationInputs = {
     balances: JSON.stringify({ balances, notes, typedParents: sortedIds(typedParents) }),
     spending: JSON.stringify({ amounts, recordZero }),
-    take_home: netPay,
+    take_home: JSON.stringify({ netPay, netPayByPerson }),
   }
   const reviewed: ReviewedFeeds = {
     balances: reviewConfirmations.balances === confirmationInputs.balances,
@@ -1073,6 +1083,7 @@ function MonthlyUpdateWizard() {
       categories.map((c) => [c.id, canonicalAmount(amounts[c.id] ?? '')]),
     )
     const canonNetPay = netPay.trim() === '' ? '' : canonicalAmount(netPay)
+    const canonNetPayByPerson = netPayByPerson === undefined ? undefined : canonicalTakeHome(netPayByPerson)
     // Each part saves only itself (2026-09-23 spec §M1) — buildMonthSave holds the rule. A month's
     // first snapshot is only ever the Balances step's own Save: the Review never records untouched
     // pre-filled balances.
@@ -1090,6 +1101,7 @@ function MonthlyUpdateWizard() {
         // `sentCategories` is the component-level memo above — one rule for the wire and the review.
         amounts: sentCategories.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
         netPay: canonNetPay,
+        netPayByPerson: canonNetPayByPerson,
         hadNetPay,
         recordZero,
       },
@@ -1127,7 +1139,8 @@ function MonthlyUpdateWizard() {
             ? {
                 result: result.spending,
                 blank: categories.length - sentCategories.length + result.spending.skipped_blank,
-                takeHome: canonNetPay !== '' && amountKey(canonNetPay) !== amountKey(flowsBase.part.netPay),
+                takeHome: canonNetPay !== '' && (amountKey(canonNetPay) !== amountKey(flowsBase.part.netPay)
+                  || JSON.stringify(canonNetPayByPerson) !== JSON.stringify(flowsBase.part.netPayByPerson)),
               }
             : null,
         sentBalances: sendBalances,
@@ -1177,9 +1190,10 @@ function MonthlyUpdateWizard() {
         if (unchangedSinceSubmit.flows) {
           setAmounts(canonAmounts)
           setNetPay(canonNetPay)
+          setNetPayByPerson(canonNetPayByPerson)
           setRestoredParts((current) => ({ ...current, flows: false }))
         }
-        setFlowsBase({ month, part: { amounts: canonAmounts, netPay: canonNetPay, recordZero } })
+        setFlowsBase({ month, part: { amounts: canonAmounts, netPay: canonNetPay, netPayByPerson: canonNetPayByPerson, recordZero } })
         // Only a leg that RAN may teach us the server's state: an unsent part changed nothing,
         // so a month that had a take-home still has it, and an empty month is still empty.
         setHadNetPay(canonNetPay !== '')
@@ -1390,11 +1404,13 @@ function MonthlyUpdateWizard() {
   // with the close, so neither balances rule applies to them: the server records them first.
   const closeBlocker = !balancesValid
     ? 'Fix balance entries first.'
-    : !monthExisted && !balancesDirty
-      ? noBalancesBlocker(month)
-      : !balancesDirty && serverEarlyBlocker !== null
-        ? serverEarlyBlocker
-        : null
+    : !takeHomeValid
+      ? 'Complete each person’s take-home in Spending, or leave everyone blank, before saving this review.'
+      : !monthExisted && !balancesDirty
+        ? noBalancesBlocker(month)
+        : !balancesDirty && serverEarlyBlocker !== null
+          ? serverEarlyBlocker
+          : null
   // The month's story on Review (spec §M5): this 1st → the next 1st, from saved figures.
   const story = monthStory(month, nextSnapshot)
   // "Next" leads to what is due (spec §M1): on the current month's Balances step, while an ended
@@ -2147,7 +2163,16 @@ function MonthlyUpdateWizard() {
                 {partialBanner(month)}
               </p>
             )}
-            <div className="meta-row">
+            {people.length > 1 || (people.length > 0 && netPayByPerson !== undefined) ? (
+              <TakeHomeInputs
+                people={people} amounts={netPayByPerson} total={netPay} disabled={notBegun}
+                onChange={next => {
+                  setNetPayByPerson(next)
+                  setNetPay(takeHomeStatus(next, people.map(person => person.id)).total)
+                }}
+                onClearLegacy={() => setNetPay('')}
+              />
+            ) : <div className="meta-row">
               <label>
                 Household take-home
                 <AmountInput
@@ -2155,11 +2180,11 @@ function MonthlyUpdateWizard() {
                   autoFocus
                   disabled={notBegun}
                   value={netPay}
-                  onValueChange={setNetPay}
+                  onValueChange={next => { setNetPay(next); setNetPayByPerson(undefined) }}
                   placeholder="leave blank to skip"
                 />
               </label>
-            </div>
+            </div>}
             {/* Same single visual column as the balances step — DOM order is the categories'
                 render order, so the Phase 1 Enter/arrow protocol walks straight down. */}
             <table className="data-table entry-table">
@@ -2362,7 +2387,7 @@ function MonthlyUpdateWizard() {
                   ? {
                       accounts, people, balanceRows: balanceSaveRows, categoryRows: sentCategories,
                       saved: { ...balancesBase.part, ...flowsBase.part },
-                      current: { balances, amounts, notes, netPay, typedParents: sortedIds(typedParents), recordZero },
+                      current: { balances, amounts, notes, netPay, netPayByPerson, typedParents: sortedIds(typedParents), recordZero },
                       storedBalances: savedBalances, storedCategories, send: reviewSend,
                     }
                   : null

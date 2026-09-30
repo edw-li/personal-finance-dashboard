@@ -16,6 +16,7 @@ export interface BalancesDraft {
 export interface FlowsDraft {
   amounts?: Record<string, string>
   netPay?: string
+  netPayByPerson?: Record<string, string>
 }
 
 const PREFIX = 'finance-update-draft:'

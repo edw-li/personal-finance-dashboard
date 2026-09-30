@@ -24,7 +24,8 @@ from app.models import (
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.schemas.month_review import FeedCoverage, MonthReviewOut, ReviewedFeeds
 from app.services import clock, day_labels
-from app.services.review_input_v1 import month_input, revision
+from app.services.review_input import month_input
+from app.services.review_input_v1 import revision
 
 REVIEW_INPUT_TABLES = (
     "accounts",

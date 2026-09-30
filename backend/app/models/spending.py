@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -52,6 +53,8 @@ class MonthlyCashflow(Base):
 
     month: Mapped[date] = mapped_column(Date, primary_key=True)  # first of month
     net_pay: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # NULL preserves historical household totals whose individual amounts were never recorded.
+    net_pay_by_person: Mapped[dict[str, str] | None] = mapped_column(JSONB(none_as_null=True))
 
 
 class CategoryBudget(Base):

@@ -29,6 +29,14 @@ describe('reviewSends', () => {
 })
 
 describe('buildMonthSave', () => {
+  it('sends the member breakdown with its total, and clears both together', () => {
+    const spending = { amounts: [], netPay: '6000.00', netPayByPerson: { 1: '4000.00', 2: '2000.00' }, hadNetPay: true, recordZero: false }
+    expect(buildMonthSave(input('spending', { spending })).body.spending)
+      .toEqual({ amounts: [], net_pay: '6000.00', net_pay_by_person: { 1: '4000.00', 2: '2000.00' } })
+    expect(buildMonthSave(input('spending', { spending: { ...spending, netPay: '', netPayByPerson: { 1: '', 2: '' } } })).body.spending)
+      .toEqual({ amounts: [], net_pay: null, net_pay_by_person: null })
+  })
+
   it('a balances save carries the balances leg only, notes blank as null, never recorded_on', () => {
     const built = buildMonthSave(input('balances'))
     expect(built.sendBalances).toBe(true)

@@ -325,6 +325,8 @@ export interface SpendingMonth {
   month: string
   exists: boolean
   net_pay: string | null
+  /** Saved member amounts; absent/null for historical aggregate-only entries. */
+  net_pay_by_person?: Record<number, string> | null
   amounts: AmountEntry[]
   /** Budgets RESOLVED for this month — only categories with one appear (wizard subtext). */
   budgets: AmountEntry[]
@@ -397,6 +399,7 @@ export interface SpendingUpsertResult {
  *  implicit zeros that every chart would then read as a real month of spending nothing. */
 export interface SpendingMonthUpsert {
   net_pay?: string | null
+  net_pay_by_person?: Record<number, string> | null
   amounts: AmountEntry[]
   confirm_zero?: boolean
 }

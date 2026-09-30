@@ -661,6 +661,7 @@ async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> Spending
         month=month,
         exists=bool(rows) or cashflow is not None,
         net_pay=None if cashflow is None else cashflow.net_pay,
+        net_pay_by_person=None if cashflow is None else cashflow.net_pay_by_person,
         amounts=[AmountEntry(category_id=r.category_id, amount=r.amount) for r in rows],
         budgets=budgets,
     )
