@@ -28,6 +28,7 @@ import { usePopoverDismiss } from '../components/usePopoverDismiss'
 import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthReview'
 import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
+import { useEntryHeaders } from '../components/monthly/useEntryHeaders'
 import HistoricalReview from '../components/monthly/HistoricalReview'
 import WhatsDue, { DuePartLink } from '../components/monthly/WhatsDue'
 import {
@@ -879,6 +880,8 @@ function MonthlyUpdateWizard() {
   // that only rides along to explain its parent's total. Neither is typed, pasted, focused,
   // validated or sent.
   const isReadOnlyRow = (a: AccountOut) => derivedByParent.has(a.id) || !a.is_active
+  const balanceSaveRows = accounts.filter(a => !isReadOnlyRow(a))
+    .filter(a => a.parent_account_id === null || !typedParents.has(a.parent_account_id))
 
   // A derived row has no box, so it has nothing to validate — and its value is always
   // canonical by construction.
@@ -1080,10 +1083,7 @@ function MonthlyUpdateWizard() {
       notBegun,
       balances: {
         notes,
-        rows: accounts
-          .filter((a) => !isReadOnlyRow(a))
-          .filter((a) => a.parent_account_id === null || !typedParents.has(a.parent_account_id))
-          .map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
+        rows: balanceSaveRows.map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
       },
       spending: {
         // `sentCategories` is the component-level memo above — one rule for the wire and the review.
@@ -1439,6 +1439,8 @@ function MonthlyUpdateWizard() {
     // An owner with nothing to enter gets no header and no subtotal row.
     return sections.filter((section) => section.rows.length > 0)
   }, [accounts, people])
+
+  const { tableRef: balanceTableRef, contextRef: balanceContextRef } = useEntryHeaders(step, accounts, people)
 
   // The balances rows in RENDERED order — the same walk the table below performs. Hoisted
   // because three things must agree on it: the autofocus target, the Enter/arrow protocol's
@@ -1838,6 +1840,7 @@ function MonthlyUpdateWizard() {
               </p>
             )}
             <table
+              ref={balanceTableRef}
               className="data-table entry-table entry-balances"
               data-owner-groups={people.length > 1 || undefined}
               hidden={!loading && accounts.length === 0}
@@ -1850,17 +1853,30 @@ function MonthlyUpdateWizard() {
                   <th className="num">{dayOf(month)}</th>
                   <th className="num entry-delta">Δ since {dayOf(addMonths(month, -1))}</th>
                 </tr>
+                <tr className="entry-context-row"><td colSpan={4}>
+                  <div className="entry-context-content">
+                    <span ref={balanceContextRef} className="entry-context-label" aria-hidden="true" />
+                    {ownerSections.length > 1 && <nav className="entry-owner-jumps" aria-label="Jump to a person's balances">
+                      <span>Jump to</span>
+                      {ownerSections.map(section => <button key={section.key} type="button" className="button"
+                        onClick={() => {
+                          const heading = document.getElementById(`balance-owner-${section.key}`)
+                          heading?.closest('tr')?.scrollIntoView({ block: 'start' })
+                          heading?.focus({ preventScroll: true })
+                        }}>{section.label}</button>)}
+                    </nav>}
+                  </div>
+                </td></tr>
               </thead>
-              <tbody>
                 {ownerSections.map((section) => {
                   const ownerTotals = subtotalOf(section.rows)
                   // Same cents rule as every other subtotal here.
                   const ownerCents = Math.round((ownerTotals.now - ownerTotals.prior) * 100)
                   return (
-                    <Fragment key={section.key}>
+                    <tbody key={section.key} data-entry-owner={section.label ?? undefined}>
                       {section.label !== null && (
                         <tr className="entry-owner-row">
-                          <th colSpan={4}>
+                          <th colSpan={4} id={`balance-owner-${section.key}`} tabIndex={-1}>
                             <span className="entry-owner-heading">{section.label}</span>
                           </th>
                         </tr>
@@ -1890,6 +1906,7 @@ function MonthlyUpdateWizard() {
                               return (
                                 <tr
                                   key={account.id}
+                                  data-entry-group={GROUP_LABELS[group]}
                                   className={derived ? 'entry-derived' : undefined}
                                 >
                                   <td
@@ -2025,10 +2042,9 @@ function MonthlyUpdateWizard() {
                           </td>
                         </tr>
                       )}
-                    </Fragment>
+                    </tbody>
                   )
                 })}
-              </tbody>
             </table>
             <p className="drill-hint">
               Liabilities are stored signed — enter card balances as negative numbers.
@@ -2338,10 +2354,15 @@ function MonthlyUpdateWizard() {
                 hint="(take-home − living − tax) ÷ take-home — the cash rate the Spending page reports for the month."
               />
             </div>
-            <ReviewChanges accounts={accounts} categories={categories} balances={balances} amounts={amounts}
-              saved={
+            <ReviewChanges accounts={accounts} categories={categories} amounts={amounts}
+              pending={
                 balancesBase?.month === month && flowsBase?.month === month
-                  ? { balances: balancesBase.part.balances, amounts: flowsBase.part.amounts }
+                  ? {
+                      accounts, people, balanceRows: balanceSaveRows, categoryRows: sentCategories,
+                      saved: { ...balancesBase.part, ...flowsBase.part },
+                      current: { balances, amounts, notes, netPay, typedParents: sortedIds(typedParents), recordZero },
+                      storedBalances: savedBalances, storedCategories, send: reviewSend,
+                    }
                   : null
               }
               balanceStory={{
@@ -2355,7 +2376,7 @@ function MonthlyUpdateWizard() {
                     ? `Reading ${balancesPartName(addMonths(month, 1))}…`
                     : `No balance changed from ${dayOf(month)} to ${dayOf(addMonths(month, 1))}.`),
               }}
-              month={month} matrix={matrix} monthExisted={monthExisted} recordedCategories={recordedCategoryIds} />
+              month={month} matrix={matrix} recordedCategories={recordedCategoryIds} />
             <fieldset className="review-confirmations" disabled={saving}>
               <legend>Confirm this month is complete</legend>
               {(['balances', 'spending', 'take_home'] as const).map(feed => <label key={feed}>

@@ -183,13 +183,12 @@ async def owned_world(db):
     return me, partner, snap
 
 
-async def test_person_view_is_owned_plus_joint(db, owned_world):
+async def test_person_view_is_exclusively_owned(db, owned_world):
     me, _partner, snap = owned_world
     _snaps, accounts, balances = await load_balance_matrix(db, owner_clause(str(me.id)))
-    assert [a.slug for a in accounts] == ["my-checking", "joint-savings"]
-    # "Primary holder + spouse secondary" is what a joint account IS: my view is mine AND ours.
-    assert net_worth_for(snap.id, accounts, balances) == Decimal("170.00")
-    assert group_totals_for(snap.id, accounts, balances)["cash"] == Decimal("170.00")
+    assert [a.slug for a in accounts] == ["my-checking"]
+    assert net_worth_for(snap.id, accounts, balances) == Decimal("100.00")
+    assert group_totals_for(snap.id, accounts, balances)["cash"] == Decimal("100.00")
 
 
 async def test_joint_view_is_null_owned_only(db, owned_world):
@@ -202,9 +201,9 @@ async def test_joint_view_is_null_owned_only(db, owned_world):
 async def test_partner_view_excludes_their_own_component(db, owned_world):
     _me, partner, snap = owned_world
     _snaps, accounts, balances = await load_balance_matrix(db, owner_clause(str(partner.id)))
-    assert [a.slug for a in accounts] == ["sam-401k", "sam-401k-bucket", "joint-savings"]
-    # 1000 + 70; the 400 component is listed but never counted.
-    assert net_worth_for(snap.id, accounts, balances) == Decimal("1070.00")
+    assert [a.slug for a in accounts] == ["sam-401k", "sam-401k-bucket"]
+    # The 400 component is listed but never counted; Joint stays in its own view.
+    assert net_worth_for(snap.id, accounts, balances) == Decimal("1000.00")
 
 
 async def test_absent_owner_loads_the_whole_household(db, owned_world):

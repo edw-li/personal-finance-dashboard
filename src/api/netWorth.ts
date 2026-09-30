@@ -62,11 +62,8 @@ export async function reorderAccounts(
   return { data, batchId: headers.get('x-change-batch') }
 }
 
-/** The page-level ownership scope. `null` is the household view and sends NO param at all,
- *  so an unfiltered request stays byte-identical to the pre-ownership one. A person id is
- *  INCLUSIVE of joint (their accounts plus person_id-NULL accounts — matches how a couple
- *  reads "mine"); `'joint'` is the NULL-owned accounts alone. The exclusive per-owner
- *  split lives in the response's `owner_series`, not in this param. */
+/** Exclusive ownership scope: null = the whole household, a person id = their accounts
+ *  only, and 'joint' = NULL-owned accounts only. All sends no query parameter. */
 export type OwnerScope = number | 'joint' | null
 
 export function fetchTimeseries(

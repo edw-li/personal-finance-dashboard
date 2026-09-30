@@ -401,10 +401,16 @@ describe('CreditCardsPage', () => {
     expect(dining.textContent).toContain('tie')
   })
 
-  it('condition notes render the ⁺ marker with the note as its label', async () => {
+  it('opens reward conditions in a dismissible bubble', async () => {
     renderPage()
     await screen.findByText('Rewards matrix — best card per category')
-    expect(screen.getByLabelText('portal')).toBeTruthy()
+    const trigger = screen.getAllByRole('button', { name: /Reward condition for/ })[0]
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog').textContent).toContain('portal')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
   })
 
   it('the footer allocates estimated $/yr and dashes unweighted categories out', async () => {
@@ -940,9 +946,9 @@ describe('CreditCardsPage — card ownership', () => {
     // default answer opens with the very same four — so the cards words only show in the bubble.
     fireEvent.click(scopeRow.querySelector('button.info-hint') as HTMLElement)
     const sentence = screen.getByRole('tooltip').textContent ?? ''
-    expect(sentence).toContain("A person's view is their own cards plus the joint ones")
+    expect(sentence).toContain("Each person's view includes only their own cards")
     // ...and not the shell's generic default, which says "accounts".
-    expect(sentence).not.toContain('their own accounts plus the joint ones')
+    expect(sentence).not.toContain('their own accounts')
   })
 
   it('shows the owner per row and defaults a NEW card to the primary person', async () => {
@@ -1012,7 +1018,24 @@ describe('CreditCardsPage — card ownership', () => {
 })
 
 describe('CreditCardsPage — owner chips and the household advantage', () => {
-  it('scopes the matrix, the KPIs and the credit line to the chosen owner — never the roster', async () => {
+  it('partitions person and shared cards in Manage and starts All despite an old saved owner', async () => {
+    localStorage.setItem('finance.scope', JSON.stringify({ owner: 2 }))
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx(), { ...SAVOR, person_id: null }, RH])
+    renderPage('/credit-cards?section=manage')
+    await screen.findByRole('button', { name: 'Edit Venture X' })
+    expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('true')
+    const rowNames = () => [...document.querySelectorAll('.roster-table tbody tr')].map(row => row.querySelector('button[aria-label^="Edit "]')?.getAttribute('aria-label')?.slice(5))
+    expect(rowNames()).toEqual(['Venture X', 'SavorOne', 'RH Gold'])
+    for (const [owner, expected] of [['Ed', 'Venture X'], ['Sam', 'RH Gold'], ['Joint', 'SavorOne']]) {
+      fireEvent.click(screen.getByRole('button', { name: owner }))
+      expect(rowNames()).toEqual([expected])
+    }
+    expect((screen.getByLabelText('Owner', { selector: 'select' }) as HTMLSelectElement).value).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(rowNames()).toHaveLength(3)
+  })
+
+  it('scopes the matrix, KPIs, credit lines and Manage roster to the chosen owner', async () => {
     renderPage()
     await screen.findByText('Rewards matrix — best card per category')
     // All: three cards in the matrix header, and the KPI count agrees.
@@ -1022,7 +1045,7 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Open SavorOne details' })).toBeNull(),
     )
-    // Sam's scope = Sam's cards ∪ the joint ones. Nothing here is joint, so only RH Gold.
+    // Sam's view contains only Sam's cards.
     expect(screen.getByRole('button', { name: 'Open RH Gold details' })).toBeTruthy()
     const activeTile = screen
       .getAllByText('Active cards')[0]
@@ -1034,6 +1057,10 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
     expect(screen.getByText(/No limit history yet/)).toBeTruthy()
     expect(screen.getByTestId('location').textContent).toContain('owner=2')
     fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    expect(screen.queryByRole('button', { name: 'Edit SavorOne' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Edit RH Gold' })).toBeTruthy()
+    expect((screen.getByLabelText('Owner', { selector: 'select' }) as HTMLSelectElement).value).toBe('2')
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
     expect(screen.getByRole('button', { name: 'Edit SavorOne' })).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: 'Rewards' }))
 

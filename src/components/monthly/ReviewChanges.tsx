@@ -1,16 +1,15 @@
 import type { AccountOut, CategoryOut, SpendingMatrix } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
-import { balancesPartName } from './monthlyCopy'
 import { committed } from './parts'
 import { formatCurrency } from '../../utils/format'
 import { typicalSpend } from '../../utils/spending'
+import PendingChanges, { type PendingChangesProps } from './PendingChanges'
 
 interface Change { id: number; label: string; before: number; after: number }
 const entered = (value: string | undefined) => {
   const canonical = canonicalAmount(value ?? '')
   return canonical !== '' && Number.isFinite(Number(canonical))
 }
-const changed = (before: string | undefined, after: string | undefined) => entered(before) !== entered(after) || committed(before) !== committed(after)
 const largest = (rows: Change[]) => rows.filter(row => Math.round((row.after - row.before) * 100) !== 0)
   .sort((a, b) => Math.abs(b.after - b.before) - Math.abs(a.after - a.before)).slice(0, 3)
 
@@ -39,12 +38,10 @@ export interface BalanceStory {
   empty: string
 }
 
-export default function ReviewChanges({ accounts, categories, balances, amounts, saved, month, matrix, monthExisted, recordedCategories, balanceStory }: {
-  accounts: AccountOut[]; categories: CategoryOut[]; balances: Record<number, string>; amounts: Record<number, string>
-  /** Each part as last loaded or saved (2026-09-23 spec §M1) — what "Changes since last save" counts
-   *  against. Null before the month's first load has landed. */
-  saved: { balances: Record<number, string>; amounts: Record<number, string> } | null
-  month: string; matrix: SpendingMatrix | null; monthExisted: boolean
+export default function ReviewChanges({ accounts, categories, amounts, pending, month, matrix, recordedCategories, balanceStory }: {
+  accounts: AccountOut[]; categories: CategoryOut[]; amounts: Record<number, string>
+  pending: PendingChangesProps | null
+  month: string; matrix: SpendingMatrix | null
   /** The category ids the month records a spending row for — the page's `sentCategories` with
    *  `spendingPresent` folded in (empty for a month with no spending at all). A category outside
    *  it is an untouched "0.00" seed, and a seed is not a figure to check against a median (bug F2). */
@@ -57,26 +54,13 @@ export default function ReviewChanges({ accounts, categories, balances, amounts,
   // change the month produced (spec §M5 — "the story uses saved figures").
   const story = to === null ? [] : largest(balanceRows.filter(a => entered(from[a.id]) && entered(to[a.id]))
     .map(a => ({ id: a.id, label: a.name, before: committed(from[a.id]), after: committed(to[a.id]) })))
-  const unsavedBalances = saved ? balanceRows.filter(a => changed(saved.balances[a.id], balances[a.id])).length : 0
-  const unsavedCategories = saved ? categories.filter(c => changed(saved.amounts[c.id], amounts[c.id])).length : 0
   const unusual = largest(categories.flatMap(c => {
     const typical = matrix ? typicalSpend(matrix, month, c.id) : null
     return typical === null || !recordedCategories.has(c.id) || !entered(amounts[c.id]) ? [] : [{ id: c.id, label: c.name, before: typical, after: committed(amounts[c.id]) }]
   }))
-  const balancesWord = unsavedBalances === 1 ? 'balance' : 'balances'
-  const categoriesWord = unsavedCategories === 1 ? 'category' : 'categories'
   return <div className="review-changes">
-    {/* T4 (2026-09-13 audit): the count is the eyebrow of the tables it summarises, the method
-        note their footer — connective tissue attached to its subject instead of floating. */}
-    <div className="review-changes-head">
-      <h3 className="eyebrow">Changes since last save</h3>
-      {/* A month with no snapshot has no balances to count: the Review never records the
-          carried-forward ones nobody touched (2026-09-23 spec §M1; spec review G3) — its spending
-          changes are still counted. */}
-      <span className="review-changes-count" role="status">{monthExisted
-        ? `${unsavedBalances} ${balancesWord} · ${unsavedCategories} ${categoriesWord}`
-        : `${balancesPartName(month)} not recorded yet · ${unsavedCategories} ${categoriesWord}`}</span>
-    </div>
+    {pending && <PendingChanges {...pending} />}
+    <h3 className="eyebrow review-insights-heading">Month-to-month insights</h3>
     <div className="review-change-grid">
       <ChangeTable title={balanceStory.title} rows={story} empty={balanceStory.empty} columns={balanceStory.columns} />
       <ChangeTable title="Largest spending differences · recent median" rows={unusual} empty="No differences with an available recent reference." columns={['Reference', 'Entered']} />

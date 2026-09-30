@@ -425,6 +425,7 @@ export default function CategoriesPanel({
     <section className="card span-12" ref={panelRef}>
       <h2 className="eyebrow">
         Categories &amp; weights
+        <span className="badge">Household</span>
         <InfoHint text="Matrix rows. Weight = estimated annual spend: blank uses the mapped spending category's trailing-12-month figure; a typed amount overrides it. Pin forces the 'use which card' answer for a row." />
       </h2>
       {/* The rows on screen decide, as in CardsPanel: the empty note and the table read

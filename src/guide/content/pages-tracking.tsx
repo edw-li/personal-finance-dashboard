@@ -18,6 +18,7 @@ export const TRACKING_CARDS: GuideCard[] = [
         where: 'Overview → Whose',
         steps: [
           'Pick **All**, a person or **Joint** in the sticky row — the chips appear once two people exist.',
+          '**All** is the default. Each person includes only their own accounts; **Joint** includes only shared accounts.',
           'Net worth, the tiles and holdings follow the choice.',
           'Spending and portfolio performance have no owner dimension; their hints say so rather than filtering.',
         ],
@@ -616,9 +617,9 @@ export const TRACKING_CARDS: GuideCard[] = [
         title: 'Choose who holds a card',
         where: 'Credit cards → Manage → Owner',
         steps: [
-          'Pick a person in **Owner**, or pick **Joint** for a card you both use — a new card starts on the primary person.',
-          'Rewards, Credit lines and the tiles then follow the **Whose** chips.',
-          'Manage is the one view the chips never narrow, because it is where ownership is edited.',
+          'Pick a person in **Owner**, or pick **Joint** for a shared card. A new card follows the selected owner; on All it starts on the primary person.',
+          'Rewards, Credit lines, the tiles and the Manage roster follow **Whose**. Each person shows only their cards; Joint shows only shared cards.',
+          'Choose **All** to see or reorder the whole household roster. The household wallet comparison and card-detail verdict always compare the full lineup.',
         ],
         to: '/credit-cards?section=manage',
         keywords: ['joint card', 'ownership', 'whose card'],

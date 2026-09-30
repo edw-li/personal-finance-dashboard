@@ -8,6 +8,7 @@ import { useConfirm } from '../feedback/confirm'
 import { flashElement, revealEditor } from '../feedback/reveal'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import RewardCondition from './RewardCondition'
 import TableScroll from '../TableScroll'
 import type {
   CreditCardOut,
@@ -350,9 +351,7 @@ export default function RewardsMatrix({
                       >
                         {shown}
                         {condition && (
-                          <sup className="mx-note" title={condition} aria-label={condition}>
-                            ⁺
-                          </sup>
+                          <RewardCondition text={condition} card={card.name} category={category.name} />
                         )}
                         {tie && <span className="mx-tie">tie</span>}
                       </td>
@@ -474,7 +473,7 @@ export default function RewardsMatrix({
       <p className="drill-hint">
         {editing
           ? 'Blank multiplier = N/A (the card is unusable for that category). Save applies every change at once.'
-          : 'Click a card’s column header for its details. ⁺ marks a condition — hover it. Green follows effective return even in multiplier view, so a green 2x can honestly beat a plain 3x.'}
+          : 'Click a card’s column header for its details. Click ⁺ to read a reward condition; dismiss it with Escape or a click outside. Green follows effective return even in multiplier view, so a green 2x can honestly beat a plain 3x.'}
       </p>
     </div>
   )

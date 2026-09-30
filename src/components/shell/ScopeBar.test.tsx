@@ -47,11 +47,11 @@ const HOUSEHOLD = {
 const ALONE = { people: [{ id: 2, name: 'Edward', is_primary: true }], marriage_date: null }
 
 // A page's override, in miniature (Portfolio's real one adds that performance is household-wide).
-const OWNER_HINT = "A person's view is their own accounts plus the joint ones."
+const OWNER_HINT = "Each person's view includes only their own accounts."
 // The shell's own two sentences, spelled out again here on purpose: these tests pin the WORDS
 // every owner page shows, not whatever the module happens to export.
 const DEFAULT_JOINT =
-  "A person's view is their own accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts."
+  "Each person's view includes only their own accounts. Joint shows only shared accounts. All includes the whole household and is the default view."
 const DEFAULT_SOLO = 'Each person has their own view; nothing here is shared.'
 
 beforeEach(() => {

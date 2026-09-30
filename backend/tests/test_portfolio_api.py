@@ -1550,35 +1550,39 @@ async def test_holdings_owner_scope_is_consistent_end_to_end(auth_client, db):
 
     scoped = (await auth_client.get(f"{HOLDINGS}?owner={me.id}")).json()
     row = scoped["holdings"][0]
-    assert row["shares"] == "12.000000"  # mine 10 + ours 2, never theirs
-    assert row["accounts"] == ["Mine", "Ours"]
+    assert row["shares"] == "10.000000"
+    assert row["accounts"] == ["Mine"]
     assert row["weight_pct"] == "1.000000"  # the only row -> weights re-normalize
-    assert scoped["totals"]["market_value"] == "1200.00"
-    assert scoped["totals"]["cost_basis"] == "580.00"
-    assert scoped["totals"]["unrealized_gl"] == "620.00"
+    assert scoped["totals"]["market_value"] == "1000.00"
+    assert scoped["totals"]["cost_basis"] == "500.00"
+    assert scoped["totals"]["unrealized_gl"] == "500.00"
     assert scoped["totals"]["realized_gl"] == "0.00"  # the sale was Sam's
-    assert scoped["totals"]["dividends_collected"] == "12.00"  # the 99 has no account
+    # Joint and account-less rows are outside this person's view.
+    assert scoped["totals"]["dividends_collected"] == "10.00"
     assert Decimal(scoped["totals"]["market_value"]) == sum(
         Decimal(h["market_value"]) for h in scoped["holdings"]
     )
 
     theirs = (await auth_client.get(f"{HOLDINGS}?owner={sam.id}")).json()
-    assert theirs["totals"]["market_value"] == "500.00"  # theirs 300 + ours 200
+    assert theirs["totals"]["market_value"] == "300.00"
     assert theirs["totals"]["realized_gl"] == "80.00"
 
     joint = (await auth_client.get(f"{HOLDINGS}?owner=joint")).json()
     assert joint["totals"]["market_value"] == "200.00"
     assert joint["holdings"][0]["accounts"] == ["Ours"]
+    for metric in ("market_value", "cost_basis", "unrealized_gl", "realized_gl"):
+        assert Decimal(household["totals"][metric]) == sum(
+            Decimal(view["totals"][metric]) for view in (scoped, theirs, joint)
+        )
 
 
 async def test_allocation_realized_transactions_and_dividends_take_the_same_scope(auth_client, db):
     me, sam = await _seed_owned_portfolio(auth_client, db)
 
     allocation = (await auth_client.get(f"{ALLOCATION}?by=account&owner={me.id}")).json()
-    assert allocation["total_market_value"] == "1200.00"
+    assert allocation["total_market_value"] == "1000.00"
     assert [(s["key"], s["market_value"], s["weight_pct"]) for s in allocation["slices"]] == [
-        ("Mine", "1000.00", "0.833333"),
-        ("Ours", "200.00", "0.166667"),  # re-normalized over the filtered set
+        ("Mine", "1000.00", "1.000000"),
     ]
 
     assert (await auth_client.get(f"{REALIZED}?owner={me.id}")).json() == {
@@ -1593,10 +1597,8 @@ async def test_allocation_realized_transactions_and_dividends_take_the_same_scop
     assert [t["account"] for t in txns] == ["Ours"]
 
     dividends = (await auth_client.get(f"{DIVIDENDS}?owner={me.id}")).json()
-    # The list's own (pay_date DESC, id DESC) order is untouched by scoping — all three
-    # share a pay_date, so newest-inserted first: Ours, then Mine.
+    # Only this person's account appears; Joint has its own filter.
     assert [(d["account"], d["amount"]) for d in dividends] == [
-        ("Ours", "2.00"),
         ("Mine", "10.00"),
     ]  # the account-less 99.00 is household-only
     assert len((await auth_client.get(DIVIDENDS)).json()) == 3

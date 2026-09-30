@@ -41,6 +41,8 @@ import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
 import './roster.css'
+import type { OwnerScope } from '../../api/netWorth'
+import { ownerMatches } from './rewardsMath'
 
 const CURRENCIES: RewardsCurrency[] = ['cash', 'points', 'miles']
 
@@ -75,12 +77,14 @@ export default function CardsPanel({
   cards,
   accounts,
   people,
+  owner = null,
   onChanged,
 }: {
   cards: CreditCardOut[]
   accounts: AccountOut[]
   /** Primary first, then by id — the page's ordering, so the select reads like the chips. */
   people: PersonOut[]
+  owner?: OwnerScope
   onChanged: () => void | Promise<void>
 }) {
   const [form, setForm] = useState<CardFormState>(EMPTY_CARD)
@@ -150,6 +154,7 @@ export default function CardsPanel({
     activeOverrides.has(row.id) ? { ...row, is_active: activeOverrides.get(row.id)! } : row,
   )
   const orderedRef = useLatest(ordered)
+  const visibleCards = ordered.filter((card) => ownerMatches(card.person_id, owner))
   const cardById = new Map(ordered.map((card) => [card.id, card]))
 
   // A card is paid from a LIABILITY account and nothing else — offering the cash and
@@ -164,7 +169,11 @@ export default function CardsPanel({
   const defaultOwner = people.find((p) => p.is_primary)
   const ownerValue =
     form.person_id === OWNER_UNSET
-      ? defaultOwner === undefined
+      ? owner === 'joint'
+        ? ''
+        : typeof owner === 'number'
+          ? String(owner)
+          : defaultOwner === undefined
         ? ''
         : String(defaultOwner.id)
       : form.person_id
@@ -418,18 +427,18 @@ export default function CardsPanel({
   }
 
   const reorder = useReorder({
-    items: ordered.map((card) => ({ id: card.id })),
+    items: visibleCards.map((card) => ({ id: card.id })),
     labelOf: (id) => cardById.get(id)?.name ?? 'this card',
     // Any request of the roster in flight — a save, an archive, a delete, a reorder — leaves
     // the grips focusable but inert (lane R0 consumer rule 4), so a drop never races a save.
-    disabled: busy || rowBusy.size > 0,
+    disabled: busy || rowBusy.size > 0 || owner !== null,
     onCommit: saveOrder,
   })
 
   // A card with no opened date has no anniversary, so the calendar can date neither its
   // fee nor an anniversary-cadence credit reset (2026-09-03 calendar spec §6) — the one
   // stored gap on this page that silently costs events elsewhere, so the roster says so.
-  const undated = cards.filter((card) => card.is_active && card.opened_on === null)
+  const undated = visibleCards.filter((card) => card.is_active && card.opened_on === null)
 
   return (
     <section className="card span-12" ref={panelRef}>
@@ -568,8 +577,9 @@ export default function CardsPanel({
           )}
         </div>
       </form>
-      {ordered.length === 0 ? (
-        <p className="empty-note">No cards yet — add your first card above.</p>
+      {owner !== null && <p className="drill-hint">{owner === 'joint' ? 'Showing shared cards.' : `Showing only ${ownerName.get(owner) ?? 'this owner'}’s cards.`} Select All to reorder the household roster.</p>}
+      {visibleCards.length === 0 ? (
+        <p className="empty-note">{owner === null ? 'No cards yet — add your first card above.' : 'No cards for this owner yet — add one above or select All.'}</p>
       ) : (
         <>
           {/* Once per list and outside the table — a <span> is not a valid child of one (lane
@@ -591,7 +601,7 @@ export default function CardsPanel({
               </tr>
             </thead>
             <tbody>
-              {ordered.map((card) => (
+              {visibleCards.map((card) => (
                 <tr
                   key={card.id}
                   id={`card-row-${card.id}`}

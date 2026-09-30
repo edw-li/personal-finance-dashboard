@@ -879,7 +879,7 @@ async def test_account_defaults_to_joint_when_no_owner_is_sent(auth_client):
 
 async def _seed_owned_timeseries(db):
     """Two months x {mine, theirs, joint}. Every figure below is hand-checkable:
-    household 1170 -> 1330, my view 170 -> 230, their view 1070 -> 1180, joint 70 -> 80."""
+    household 1170 -> 1330, my view 100 -> 150, their view 1000 -> 1100, joint 70 -> 80."""
     me = Person(name="Me", is_primary=True)
     partner = Person(name="Sam", is_primary=False)
     db.add_all([me, partner])
@@ -927,17 +927,16 @@ async def test_timeseries_without_owner_is_the_whole_household(auth_client, db):
     ]
 
 
-async def test_timeseries_owner_person_is_owned_plus_joint(auth_client, db):
+async def test_timeseries_owner_person_is_exclusively_owned(auth_client, db):
     me, _partner = await _seed_owned_timeseries(db)
     body = (await auth_client.get(f"/api/v1/net-worth/timeseries?owner={me.id}")).json()
-    assert body["net_worth"] == ["170.00", "230.00"]
-    assert [a["slug"] for a in body["accounts"]] == ["my-checking", "joint-savings"]
-    assert body["group_totals"]["cash"] == ["170.00", "230.00"]
+    assert body["net_worth"] == ["100.00", "150.00"]
+    assert [a["slug"] for a in body["accounts"]] == ["my-checking"]
+    assert body["group_totals"]["cash"] == ["100.00", "150.00"]
     assert body["group_totals"]["taxable"] == ["0.00", "0.00"]
     # The scoped view's own owner split still sums to the scoped net worth.
     assert body["owner_series"] == [
         {"person_id": me.id, "name": "Me", "values": ["100.00", "150.00"]},
-        {"person_id": None, "name": None, "values": ["70.00", "80.00"]},
     ]
 
 
@@ -947,6 +946,20 @@ async def test_timeseries_owner_joint_is_null_owned_only(auth_client, db):
     assert body["net_worth"] == ["70.00", "80.00"]
     assert [a["slug"] for a in body["accounts"]] == ["joint-savings"]
     assert body["owner_series"] == [{"person_id": None, "name": None, "values": ["70.00", "80.00"]}]
+
+
+async def test_owner_filters_partition_the_household_at_every_snapshot(auth_client, db):
+    me, partner = await _seed_owned_timeseries(db)
+    household = (await auth_client.get("/api/v1/net-worth/timeseries")).json()
+    views = [
+        (await auth_client.get(f"/api/v1/net-worth/timeseries?owner={owner}")).json()
+        for owner in (me.id, partner.id, "joint")
+    ]
+    ids = [{account["id"] for account in view["accounts"]} for view in views]
+    assert set.union(*ids) == {account["id"] for account in household["accounts"]}
+    assert all(not ids[a] & ids[b] for a, b in ((0, 1), (0, 2), (1, 2)))
+    for index, total in enumerate(household["net_worth"]):
+        assert Decimal(total) == sum(Decimal(view["net_worth"][index]) for view in views)
 
 
 async def test_summary_owner_totals_and_scoped_deltas(auth_client, db):
@@ -962,12 +975,11 @@ async def test_summary_owner_totals_and_scoped_deltas(auth_client, db):
     ]
 
     scoped = (await auth_client.get(f"/api/v1/net-worth/summary?owner={me.id}")).json()
-    assert scoped["net_worth"] == "230.00"
-    assert scoped["mom_delta"] == "60.00"
-    assert scoped["mom_pct"] == "0.352941"  # 60/170, 6dp HALF_UP
+    assert scoped["net_worth"] == "150.00"
+    assert scoped["mom_delta"] == "50.00"
+    assert scoped["mom_pct"] == "0.500000"
     assert scoped["owner_totals"] == [
         {"person_id": me.id, "name": "Me", "total": "150.00"},
-        {"person_id": None, "name": None, "total": "80.00"},
     ]
 
     joint = (await auth_client.get("/api/v1/net-worth/summary?owner=joint")).json()
@@ -1087,19 +1099,18 @@ async def test_summary_owner_and_month_scope_both_the_view_and_its_delta(auth_cl
         await auth_client.get(f"/api/v1/net-worth/summary?owner={me.id}&month=2026-07-01")
     ).json()
     assert july["month"] == "2026-07-01"
-    assert july["net_worth"] == "170.00"  # mine 100 + joint 70, not the household's 1170
+    assert july["net_worth"] == "100.00"
     assert july["mom_delta"] is None  # July is the first month in the book
     assert july["owner_totals"] == [
         {"person_id": me.id, "name": "Me", "total": "100.00"},
-        {"person_id": None, "name": None, "total": "70.00"},
     ]
     assert july["groups"]  # a viewed month still carries its group breakdown
 
     august = (
         await auth_client.get(f"/api/v1/net-worth/summary?owner={me.id}&month=2026-08-01")
     ).json()
-    assert august["net_worth"] == "230.00"
-    assert august["mom_delta"] == "60.00"  # 230 - 170: BOTH months owner-scoped
+    assert august["net_worth"] == "150.00"
+    assert august["mom_delta"] == "50.00"  # 150 - 100: both months owner-scoped
 
 
 async def test_summary_month_param_404s_on_an_empty_book(auth_client):

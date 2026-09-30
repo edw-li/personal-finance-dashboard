@@ -415,11 +415,11 @@ describe('weights', () => {
 })
 
 describe('ownerMatches', () => {
-  // The net-worth grammar, reused verbatim: a PERSON's scope includes the joint rows,
-  // because that is what joint means; `joint` is the NULL-only slice; null is everybody.
-  it('gives a person their own cards PLUS the joint ones', () => {
+  it('keeps each person and Joint in exclusive partitions', () => {
     expect(ownerMatches(1, 1)).toBe(true)
-    expect(ownerMatches(null, 1)).toBe(true)
+    expect(ownerMatches(null, 1)).toBe(false)
+    expect(ownerMatches(null, 2)).toBe(false)
+    expect(ownerMatches(2, 2)).toBe(true)
     expect(ownerMatches(2, 1)).toBe(false)
   })
 

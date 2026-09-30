@@ -90,9 +90,7 @@ export default function CreditCardsPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [fromCache, setFromCache] = useState(cached !== undefined)
-  // Owner comes from the shared URL scope (2026-09-03 spec §6), never page-local state: the
-  // chip the user picked on Net worth is still the chip here. null = the whole household, and
-  // that scope is byte-identical to the pre-ownership page.
+  // Owner comes from the URL; a fresh page opens on the whole household.
   const { scope } = useScope({ owner: true })
   const owner = scope.owner
 
@@ -368,10 +366,10 @@ export default function CreditCardsPage() {
           // you — so the sentence rides in the bar's own ⓘ. Standing beside it as a second
           // ⓘ (which is where it started) put two of them side by side once the bar grew a
           // default explanation of its own.
-          <ScopeBar
+          activeCard === null ? <ScopeBar
             owner
-            ownerHint="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The matrix, the tiles and the credit-line chart follow this; Manage always lists every card, since it is where ownership is edited."
-          />
+            ownerHint="Each person's view includes only their own cards. Joint shows only shared cards; All includes everyone. Rewards, credit lines and the card roster follow this filter. Card details compare against the whole household."
+          /> : undefined
         }
         resource={{
           // `cards === null` is the first-payload sentinel: a seeded snapshot fills it before
@@ -525,6 +523,7 @@ export default function CreditCardsPage() {
 {cards !== null && (
                 <CardsPanel
                   cards={cards}
+                  owner={owner}
                   accounts={accounts}
                   people={orderedPeople}
                   onChanged={load}

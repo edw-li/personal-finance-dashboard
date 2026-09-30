@@ -612,15 +612,15 @@ export default function OverviewPage() {
                         // (StatTile's delta grammar). Up is good here, so glyph and tone agree.
                         // The amount is one unbreakable run (W4): the sub-line wraps, it never does.
                         <span
-                          className={`ytd-value ${
+                          className={`ytd-value ytd-change ${
                             ytd.netWorthDelta > 0 ? 'delta-positive' : ytd.netWorthDelta < 0 ? 'delta-negative' : ''
                           }`.trim()}
                         >
-                          <span aria-hidden="true">
+                          <span className="ytd-amount"><span aria-hidden="true">
                             {ytd.netWorthDelta > 0 ? '▲ ' : ytd.netWorthDelta < 0 ? '▼ ' : ''}
                           </span>
-                          {formatCurrency(ytd.netWorthDelta)}
-                          {ytd.netWorthPct !== null && ` (${formatPct(ytd.netWorthPct)})`}
+                          {formatCurrency(ytd.netWorthDelta)}</span>
+                          {ytd.netWorthPct !== null && <> <span className="ytd-percent">({formatPct(ytd.netWorthPct)})</span></>}
                         </span>
                       )}
                       <span className="ytd-sub">{ytd.netWorthWords}</span>

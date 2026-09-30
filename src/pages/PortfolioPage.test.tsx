@@ -734,9 +734,7 @@ it('shows the alert alone on a failed first load and retries back into the skele
 // lives in the scope row's ⓘ (ScopeBar's ownerHint), so it is on screen at every scope
 // including All; the half that only means something beside the chart stays on the card.
 const OWNER_HINT =
-  "A person's view is their own portfolio accounts plus the joint ones — that is what a " +
-  'joint account is. Joint shows only the shared accounts. Performance, sparklines and ' +
-  'price refresh always cover the whole household.'
+  "Each person's view includes only their own portfolio accounts. Joint shows only shared accounts; All includes everyone. Performance history and price refresh cover the whole household."
 const HOUSEHOLD_HINT =
   'The owner chips scope holdings, allocation, dividends, transactions and realized gains ' +
   '— not this chart, the sparklines or price refresh, which always cover the whole ' +
@@ -745,9 +743,12 @@ const HOUSEHOLD_HINT =
 it('opens the allocation donut from its task view while retaining performance', async () => {
   renderPage()
   await screen.findByText('Performance')
+  expect(screen.getByRole('group', { name: 'Time range' })).toBeTruthy()
+  expect(screen.getByText('Performance').closest('section')?.textContent).toContain('Household')
   expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
   fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
   await screen.findByLabelText('Portfolio allocation by asset class')
+  expect(screen.queryByRole('group', { name: 'Time range' })).toBeNull()
   expect(screen.getByRole('group', { name: 'Export portfolio-performance', hidden: true })).toBeTruthy()
   // The industry heat treemap lives with the holdings now (2026-09-13 polish §11), not here.
   expect(screen.queryByLabelText(/Holdings grouped by known industry/)).toBeNull()

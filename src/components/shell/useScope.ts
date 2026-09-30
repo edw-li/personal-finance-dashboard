@@ -5,7 +5,7 @@ import type { RangePreset } from '../../charts/timeZoom'
 import { STORAGE_KEYS, getLocal, setLocal, subscribe } from '../../prefs/prefsStore'
 
 // The ONE scope rule (2026-09-03 shell spec §6): the URL is the source of truth, localStorage
-// remembers owner and range across pages, defaults fill whatever is left. `month` is never
+// remembers the time range across pages. An absent owner starts on All. `month` is never
 // remembered — it means something different on every page that has one.
 // An alias of prefsStore's registry, not a second copy of the spelling (useScope.test pins
 // it): the store owns every storage key, and two literals for one key is how a rename
@@ -28,7 +28,6 @@ export interface ScopeUses {
 }
 
 interface ScopeMemory {
-  owner?: OwnerScope
   range?: RangePreset
 }
 
@@ -69,9 +68,6 @@ export function readMemory(): ScopeMemory {
     const memory: ScopeMemory = {}
     // Storage is user-writable and survives schema changes — validate it with the same
     // predicates the URL goes through rather than trusting whatever is on disk.
-    if (record.owner === null || record.owner === 'joint' || isPersonId(record.owner)) {
-      memory.owner = record.owner
-    }
     const range = typeof record.range === 'string' ? parseRange(record.range) : undefined
     if (range !== undefined) memory.range = range
     return memory
@@ -109,10 +105,9 @@ export function useScope(uses: ScopeUses = {}): {
   // second would drop the first's key. The ref carries the uncommitted params until the URL
   // catches up: `base` is the URL the write was computed from, `next` is what it will become.
   const pendingRef = useRef<{ base: string; next: URLSearchParams } | null>(null)
-  // 2026-09-23 spec §B8: the owner/range values arrival normalisation wrote in THIS page view —
-  // the only URL values the account's scope may replace when it is adopted after the first
-  // render. A deep link never lands here, and a pick deletes its key (setScope).
-  const normalizedRef = useRef<{ owner?: string; range?: string }>({})
+  // Only a defaulted range can adopt account preferences. Owner always defaults to All;
+  // explicit owner links and selections live in the URL for this page.
+  const normalizedRef = useRef<{ range?: string }>({})
   useEffect(() => {
     // Landed (the URL is what we wrote) or superseded (the URL moved elsewhere): either way the
     // ref is no longer ahead of the URL. Only "URL still at the base" means in flight — which
@@ -130,7 +125,7 @@ export function useScope(uses: ScopeUses = {}): {
     const owner = parseOwner(rawOwner)
     const range = parseRange(rawRange)
     return {
-      owner: owner !== undefined ? owner : (memory.owner ?? null),
+      owner: owner !== undefined ? owner : null,
       range: range !== undefined ? range : (memory.range ?? DEFAULT_RANGE),
       month: parseMonth(rawMonth) ?? null,
     }
@@ -146,7 +141,6 @@ export function useScope(uses: ScopeUses = {}): {
     let changed = false
     if (uses.owner && rawOwner !== ownerToParam(scope.owner)) {
       next.set('owner', ownerToParam(scope.owner))
-      normalizedRef.current.owner = ownerToParam(scope.owner)
       changed = true
     }
     if (uses.range && rawRange !== scope.range) {
@@ -170,12 +164,9 @@ export function useScope(uses: ScopeUses = {}): {
     }
   }, [uses.owner, uses.range, uses.month, rawOwner, rawRange, rawMonth, scope, searchParams, setSearchParams])
 
-  // Adoption (2026-09-23 spec §B8). Memory is read once per URL change, so on a new browser the
-  // first page normalised the DEFAULTS into the URL — and when the account's `scope` landed a
-  // moment later, only the next page used it: Whose and the range switched under the reader
-  // with no click. Now an adopted scope re-normalises, with replace, every key this page view's
-  // arrival normalisation wrote and the reader has not touched since. Refreshed after every
-  // render (the useSandbox refs idiom) so the listener always sees the current URL and `uses`.
+  // Late account preferences may replace the default range, but never a linked or chosen
+  // range. Owner preferences from older versions are ignored. Refresh after every render so
+  // the subscription reads the current URL and the keys this page uses.
   const adoptRef = useRef<() => void>(() => {})
   useEffect(() => {
     adoptRef.current = () => {
@@ -187,14 +178,6 @@ export function useScope(uses: ScopeUses = {}): {
       const next = new URLSearchParams(seed)
       let changed = false
       // A key qualifies only while the URL still carries what normalisation wrote there.
-      if (uses.owner && record.owner !== undefined && seed.get('owner') === record.owner && memory.owner !== undefined) {
-        const owner = ownerToParam(memory.owner)
-        if (owner !== record.owner) {
-          next.set('owner', owner)
-          record.owner = owner
-          changed = true
-        }
-      }
       if (uses.range && record.range !== undefined && seed.get('range') === record.range && memory.range !== undefined) {
         if (memory.range !== record.range) {
           next.set('range', memory.range)
@@ -228,8 +211,6 @@ export function useScope(uses: ScopeUses = {}): {
       // adoption landing afterwards must leave that key alone (spec §B8).
       if (partial.owner !== undefined) {
         next.set('owner', ownerToParam(partial.owner))
-        memory.owner = partial.owner
-        delete normalizedRef.current.owner
       }
       if (partial.range !== undefined) {
         next.set('range', partial.range)
@@ -246,7 +227,7 @@ export function useScope(uses: ScopeUses = {}): {
       }
       // Memory records a deliberate pick even when the URL already agrees, so it stays ahead of
       // the no-op check below.
-      if (partial.owner !== undefined || partial.range !== undefined) writeMemory(memory)
+      if (partial.range !== undefined) writeMemory(memory)
       // Nothing to write: no location.key churn, and — the load-bearing half — no phantom
       // pending write whose base equals the URL, which would never clear and would wedge
       // normalization for the life of the page.

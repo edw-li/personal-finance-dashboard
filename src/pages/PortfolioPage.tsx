@@ -677,10 +677,10 @@ export default function PortfolioPage() {
           // Overrides the bar's default "Whose": this page's accounts are portfolio labels,
           // and — the part no other page has to say — the performance line, the sparklines
           // and price refresh ignore the chips entirely.
-          <ScopeBar
+          views.section === 'manage' && tab === 'securities' ? undefined : <ScopeBar
             owner
-            range
-            ownerHint="A person's view is their own portfolio accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts. Performance, sparklines and price refresh always cover the whole household."
+            range={views.section === 'overview'}
+            ownerHint="Each person's view includes only their own portfolio accounts. Joint shows only shared accounts; All includes everyone. Performance history and price refresh cover the whole household."
           />
         }
         // A failed FIRST load leaves holdings null: the frame shows the alert alone rather
@@ -782,6 +782,7 @@ export default function PortfolioPage() {
             <LocalSectionPanel state={views} section="overview">
               <ChartCard
                 title="Performance"
+                actions={<span className="badge">Household</span>}
                 hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison. The line above the chart compares like with like: on All, the portfolio against the same deposits in VOO; over a shorter range, against the same money in VOO — the portfolio's value when the range opens, grown at VOO's rate, plus every deposit since. S&P 500 — starting balance only invests just the first week's balance; it stays off until you pick it in the legend. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Dated buys and sells ride the line; the ticks along the bottom mark weeks with logged dividends and older ex-dividend dates of securities held then or now (per-share only — dollar amounts that old are unknowable from undated imports)."
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
                 option={performanceOption}

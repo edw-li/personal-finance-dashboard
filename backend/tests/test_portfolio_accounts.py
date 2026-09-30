@@ -234,13 +234,14 @@ async def test_load_portfolio_scopes_transactions_and_dividends(db):
     _s, txns, _l, _h, dividends = await load_portfolio(
         db, owner_filter=portfolio_owner_clause(str(me.id))
     )
-    assert sorted(t.account for t in txns) == ["Mine", "Ours"]  # mine AND ours, never theirs
-    assert sum(d.amount for d in dividends) == Decimal("12.00")  # the account-less 99 is out
+    assert sorted(t.account for t in txns) == ["Mine"]
+    # Joint and account-less rows are outside this person's view.
+    assert sum(d.amount for d in dividends) == Decimal("10.00")
 
     _s, txns, _l, _h, dividends = await load_portfolio(
         db, owner_filter=portfolio_owner_clause(str(sam.id))
     )
-    assert sorted(t.account for t in txns) == ["Ours", "Theirs"]
+    assert sorted(t.account for t in txns) == ["Theirs"]
 
     _s, txns, _l, _h, dividends = await load_portfolio(
         db, owner_filter=portfolio_owner_clause("joint")
@@ -253,7 +254,7 @@ async def test_scoped_fold_keeps_the_label_key(db):
     me, _sam = await _owned_book(db)
     _s, txns, _l, _h, _d = await load_portfolio(db, owner_filter=portfolio_owner_clause(str(me.id)))
     positions = fold_transactions(txns)
-    assert sorted(positions) == [(1, "Mine"), (1, "Ours")]
+    assert sorted(positions) == [(1, "Mine")]
     assert positions[(1, "Mine")].shares == Decimal("10")
 
 

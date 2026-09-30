@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { useId, useLayoutEffect, useRef } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 // panels.css first, shell.css second: both files define `.segmented` rules at the same
 // specificity, so source order decides the winner. Pinning the order here (rather than
@@ -25,6 +25,8 @@ type SegmentedProps<V extends string> = {
   options: readonly SegmentedOption<V>[]
   ariaLabel: string
   size?: 'sm' | 'md'
+  /** A sliding highlight for a single-selection toggle. */
+  animateIndicator?: boolean
   /** tabs only: the id of the panel each tab controls, by value. */
   panelIds?: Partial<Record<V, string>>
 } & (
@@ -40,7 +42,28 @@ type SegmentedProps<V extends string> = {
 )
 
 export default function Segmented<V extends string>(props: SegmentedProps<V>) {
-  const { variant, options, ariaLabel, size = 'md', panelIds } = props
+  const { variant, options, ariaLabel, size = 'md', panelIds, animateIndicator = false } = props
+  const groupRef = useRef<HTMLDivElement>(null)
+  const indicatorRef = useRef<HTMLSpanElement>(null)
+  const sliding = animateIndicator && !props.multiple && variant === 'toggle'
+  useLayoutEffect(() => {
+    const group = groupRef.current
+    const indicator = indicatorRef.current
+    if (!sliding || group === null || indicator === null) return
+    const place = () => {
+      const selected = group.querySelector<HTMLButtonElement>('button.active')
+      if (selected === null) { indicator.hidden = true; delete group.dataset.indicatorReady; return }
+      indicator.style.width = `${selected.offsetWidth}px`
+      indicator.style.transform = `translateX(${selected.offsetLeft}px)`
+      indicator.hidden = false
+      group.dataset.indicatorReady = 'true'
+    }
+    place()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place)
+    observer?.observe(group)
+    group.querySelectorAll('button').forEach(button => observer?.observe(button))
+    return () => observer?.disconnect()
+  }, [sliding, props.value, options])
   // Ids come from useId, not the label: two groups can legitimately share a label on one
   // page, and a value may contain characters an id cannot.
   const idBase = useId()
@@ -86,12 +109,13 @@ export default function Segmented<V extends string>(props: SegmentedProps<V>) {
     options.find((o) => !o.disabled)?.value
 
   const role = variant === 'tabs' ? 'tablist' : 'group'
-  const className = ['segmented', `segmented-${variant}`, size === 'sm' ? 'segmented-sm' : '']
+  const className = ['segmented', `segmented-${variant}`, size === 'sm' ? 'segmented-sm' : '', sliding ? 'segmented-sliding' : '']
     .filter(Boolean)
     .join(' ')
 
   return (
-    <div className={className} role={role} aria-label={ariaLabel}>
+    <div ref={groupRef} className={className} role={role} aria-label={ariaLabel}>
+      {sliding && <span ref={indicatorRef} className="segmented-indicator" aria-hidden="true" hidden />}
       {options.map((option, index) => {
         const on = isOn(option.value)
         // The key stays off this object: React 19 warns when a key is spread in with the rest

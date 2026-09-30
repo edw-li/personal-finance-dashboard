@@ -260,7 +260,8 @@ export const REFERENCE_CARDS: GuideCard[] = [
           <h4>Whose figures and the window</h4>
           <p>
             <code>?owner=</code> is whose figures — everyone, joint, or one person; <code>?range=</code> is
-            the window. Owner and window are remembered as you move between pages; the month is not.
+            the window. New pages default to All; each person includes only their own accounts and
+            Joint includes only shared accounts. The window is remembered between pages; the month is not.
           </p>
         </div>
         <div className="guide-fact">

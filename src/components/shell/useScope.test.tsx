@@ -94,11 +94,11 @@ describe('useScope', () => {
     expect(scope()).toBe('2|ytd|2026-02-01')
   })
 
-  it('falls back to memory, then defaults, and rewrites the URL on arrival (replace)', () => {
+  it('defaults owner to All even with a remembered person, while retaining the saved range', () => {
     localStorage.setItem(SCOPE_KEY, JSON.stringify({ owner: 'joint', range: 'all' }))
     mount('/net-worth')
-    expect(scope()).toBe('joint|all|null')
-    expect(url()).toBe('/net-worth?owner=joint&range=all')
+    expect(scope()).toBe('null|all|null')
+    expect(url()).toBe('/net-worth?owner=all&range=all')
   })
 
   it('defaults to the household and one year', () => {
@@ -110,8 +110,8 @@ describe('useScope', () => {
   it('normalizes only the keys the page uses', () => {
     localStorage.setItem(SCOPE_KEY, JSON.stringify({ owner: 2, range: 'ytd' }))
     mount('/credit-cards', { owner: true })
-    expect(url()).toBe('/credit-cards?owner=2')
-    expect(scope()).toBe('2|ytd|null') // range is still readable, just not written
+    expect(url()).toBe('/credit-cards?owner=all')
+    expect(scope()).toBe('null|ytd|null') // range is still readable, just not written
   })
 
   it('leaves a month param alone on a page that does not use month', () => {
@@ -120,14 +120,14 @@ describe('useScope', () => {
     expect(scope()).toBe('null|1y|2026-07-01') // readable, but neither rewritten nor dropped
   })
 
-  it('setScope writes the URL and remembers owner and range, never month', () => {
+  it('setScope writes the URL and remembers only range', () => {
     mount('/net-worth')
     act(() => screen.getByText('owner 2').click())
     act(() => screen.getByText('ytd').click())
     act(() => screen.getByText('feb').click())
     expect(scope()).toBe('2|ytd|2026-02-01')
     expect(url()).toBe('/net-worth?owner=2&range=ytd&month=2026-02')
-    expect(JSON.parse(localStorage.getItem(SCOPE_KEY) ?? '{}')).toEqual({ owner: 2, range: 'ytd' })
+    expect(JSON.parse(localStorage.getItem(SCOPE_KEY) ?? '{}')).toEqual({ range: 'ytd' })
     act(() => screen.getByText('latest').click())
     expect(url()).toBe('/net-worth?owner=2&range=ytd')
   })
@@ -173,8 +173,8 @@ describe('useScope', () => {
     localStorage.clear()
     act(() => screen.getByText('owner 2 twice').click()) // now BOTH picks are no-ops
     expect(url()).toBe('/net-worth?owner=2')
-    // A deliberate re-pick is still remembered even though nothing was written to the URL.
-    expect(JSON.parse(localStorage.getItem(SCOPE_KEY) ?? '{}')).toEqual({ owner: 2 })
+    // Owner selection is page-local, including a deliberate re-pick.
+    expect(localStorage.getItem(SCOPE_KEY)).toBeNull()
 
     // No phantom pending write is left behind, so the next declared key still normalizes.
     view.setUses({ owner: true, range: true })
@@ -215,18 +215,18 @@ describe('useScope — the remembered scope, adopted from the account', () => {
     vi.mocked(patchPrefs).mockResolvedValue({ prefs: {} })
   })
 
-  it('an answer that lands before the page mounts is simply its memory', async () => {
+  it('account preferences before mount restore only the range', async () => {
     await accountAnswers()
     mount('/net-worth', { owner: true, range: true })
-    expect(url()).toBe('/net-worth?owner=2&range=all')
+    expect(url()).toBe('/net-worth?owner=all&range=all')
   })
 
-  it('an answer that lands after mount replaces what arrival normalisation wrote', async () => {
+  it('late account preferences update the range and leave All selected', async () => {
     mount('/net-worth', { owner: true, range: true })
     expect(url()).toBe('/net-worth?owner=all&range=1y')
     await accountAnswers()
-    expect(url()).toBe('/net-worth?owner=2&range=all')
-    expect(scope()).toBe('2|all|null')
+    expect(url()).toBe('/net-worth?owner=all&range=all')
+    expect(scope()).toBe('null|all|null')
   })
 
   it('never overrides a deep link', async () => {
@@ -254,7 +254,7 @@ describe('useScope — the remembered scope, adopted from the account', () => {
     act(() => screen.getByText('ytd').click())
     await accountAnswers() // the browser wins this one and seeds the account
     await accountAnswers() // a later sync in the same tab adopts the account's copy
-    expect(url()).toBe('/net-worth?owner=2&range=ytd')
+    expect(url()).toBe('/net-worth?owner=all&range=ytd')
   })
 
   it('a pick that lands back on the normalised value is still the reader’s pick', async () => {
@@ -278,7 +278,7 @@ describe('useScope — the remembered scope, adopted from the account', () => {
   it('a page that does not use a key is not handed it', async () => {
     mount('/credit-cards', { owner: true })
     await accountAnswers()
-    expect(url()).toBe('/credit-cards?owner=2')
+    expect(url()).toBe('/credit-cards?owner=all')
   })
 
   it('the page and its scope row adopt together, neither undoing the other', async () => {
@@ -307,6 +307,6 @@ describe('useScope — the remembered scope, adopted from the account', () => {
     const params = () => new URLSearchParams(screen.getByTestId('twin-url').textContent ?? '')
     expect([params().get('owner'), params().get('range')]).toEqual(['all', '1y'])
     await accountAnswers()
-    expect([params().get('owner'), params().get('range')]).toEqual(['2', 'all'])
+    expect([params().get('owner'), params().get('range')]).toEqual(['all', 'all'])
   })
 })

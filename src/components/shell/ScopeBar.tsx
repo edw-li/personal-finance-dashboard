@@ -86,7 +86,7 @@ const RANGE_OPTIONS: { value: RangePreset; label: string }[] = [
 // everywhere instead of each page wording it afresh. Which sentence applies follows the chips
 // actually offered: a Joint chip means there are shared accounts to explain.
 const OWNER_HINT_JOINT =
-  "A person's view is their own accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts."
+  "Each person's view includes only their own accounts. Joint shows only shared accounts. All includes the whole household and is the default view."
 const OWNER_HINT_SOLO = 'Each person has their own view; nothing here is shared.'
 
 export const HOUSEHOLD_SNAPSHOT = 'shell:household'
@@ -281,6 +281,7 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
           <Segmented
             variant="toggle"
             ariaLabel="Whose"
+            animateIndicator
             options={ownerOptions}
             value={ownerChipValue}
             onChange={(value) => setScope({ owner: ownerFromValue(value) })}

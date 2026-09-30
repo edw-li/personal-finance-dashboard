@@ -6,7 +6,7 @@ Every writer — the ledger router, the importer, anything later — resolves th
 a label can never exist twice and a re-tagged owner can never be silently overwritten.
 """
 
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import PortfolioAccount
@@ -48,11 +48,11 @@ def portfolio_owner_clause(owner: str) -> ColumnElement[bool]:
     accounts (net_worth_calc.owner_clause is its twin; both parse through
     services.ownership.parse_owner).
 
-    `joint` selects the NULL-owned accounts only; a person id selects that person's accounts
-    PLUS the joint ones — "mine and ours", the same inclusive person view the net-worth
-    pages use. Raises ValueError on anything else so the router answers 422.
+    `joint` selects the NULL-owned accounts only; a person id selects only that person's
+    accounts, matching the exclusive net-worth filters. Raises ValueError on anything
+    else so the router answers 422.
     """
     person_id = parse_owner(owner)
     if person_id is None:
         return PortfolioAccount.person_id.is_(None)
-    return or_(PortfolioAccount.person_id == person_id, PortfolioAccount.person_id.is_(None))
+    return PortfolioAccount.person_id == person_id

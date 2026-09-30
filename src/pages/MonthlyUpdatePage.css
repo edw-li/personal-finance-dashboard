@@ -133,6 +133,29 @@
 .entry-table tbody > .entry-owner-row:first-child th {
   padding-top: 0.6rem;
 }
+.entry-context-content { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.entry-owner-jumps { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; font-size: 0.75rem; color: var(--muted); }
+.entry-owner-jumps .button { padding: 0.2rem 0.55rem; font-size: inherit; }
+.entry-balances thead th, .entry-balances .entry-context-row td {
+  position: sticky;
+  top: var(--sticky-inset, 0px);
+  z-index: 4;
+  background: var(--surface);
+  box-shadow: 0 1px var(--border);
+}
+.entry-balances .entry-context-row td {
+  top: calc(var(--sticky-inset, 0px) + var(--entry-columns-height, 30px));
+  z-index: 3;
+  padding: 0.45rem 0.6rem;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.entry-context-label { border-left: 2px solid var(--accent); padding-left: 0.6rem; }
+.entry-balances .entry-owner-row th:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.entry-balances .entry-owner-row, .entry-balances input { scroll-margin-top: calc(var(--sticky-inset, 0px) + var(--entry-header-height, 60px) + 8px); }
 .entry-owner-heading {
   display: block;
   padding: 0.55rem 0.6rem;
@@ -323,6 +346,16 @@
 .review-changes-head .eyebrow { margin: 0; }
 .review-changes-count { color: var(--muted); font-size: .85rem; }
 .review-changes-footer { margin: .75rem 0 0; padding-top: .6rem; border-top: 1px solid var(--border); }
+.review-pending .review-changes-head { margin-top: 0; }
+.review-pending-details { margin-top: .75rem; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.review-pending-details summary { padding: .7rem .9rem; cursor: pointer; font-weight: 600; background: var(--surface-2); }
+.review-pending-details .table-scroll { max-height: 22rem; }
+.review-pending-details table { width: 100%; font-size: .85rem; }
+.review-pending-details thead th { position: sticky; top: 0; background: var(--surface-2); z-index: 1; }
+.review-pending-details tbody th { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.review-pending-details th small { display: block; margin-top: .2rem; color: var(--muted); font-weight: 400; }
+.review-pending-details td:not(.numeric) { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 22rem; }
+.review-insights-heading { margin: 1.5rem 0 0; padding-top: 1.2rem; border-top: 1px solid var(--border); }
 /* The gate sentence sits right above the button it explains (T4), on a line of its own and
    right-aligned over the actions: in the slot beside them it wrapped against "Save progress" once
    the primary read "Save and close September" (batch 2 final verification D6). It leads the footer

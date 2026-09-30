@@ -57,7 +57,7 @@ export default function PortfolioAccountsCard({ people }: { people: PersonOut[] 
     <section className="card span-8" id="portfolio-accounts" role="region" aria-label="Portfolio accounts">
         <h2 className="eyebrow portfolio-accounts-heading">
           Portfolio accounts
-          <InfoHint text="The account labels your transactions and dividends are filed under. Owner blank = joint; a person's Portfolio view is their own labels plus the joint ones. Labels are fixed here — they are the positions' identity." />
+          <InfoHint text="The account labels your transactions and dividends are filed under. Owner blank = Joint. Each person's Portfolio view includes only their own accounts; Joint shows shared accounts, and All includes everyone. Labels are fixed here — they are the positions' identity." />
         </h2>
         <FeedBanner
           error={portfolioError}

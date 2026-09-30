@@ -8,7 +8,7 @@ and grouped).
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ACCOUNT_GROUPS, Account, AccountBalance, AppSetting, NetWorthSnapshot
@@ -31,18 +31,15 @@ def owner_clause(owner: str) -> ColumnElement[bool]:
     services.portfolio_accounts.portfolio_owner_clause; both parse through
     services.ownership.parse_owner, so the GRAMMAR cannot drift either.
 
-    `joint` selects the NULL-owned accounts only. A person id selects that person's accounts
-    PLUS the joint ones, because "primary holder, spouse secondary" is what a joint account
-    actually is: a person's view is "mine and ours", never "mine alone". The person views
-    therefore OVERLAP by design and must never be summed — the disjoint split for stacking
-    is owner_totals_for below.
+    `joint` selects the NULL-owned accounts only. A person id selects only that person's
+    accounts. These exclusive slices partition the unfiltered household view.
 
     Raises ValueError (via parse_owner) on anything else so the router answers 422.
     """
     person_id = parse_owner(owner)
     if person_id is None:
         return Account.person_id.is_(None)
-    return or_(Account.person_id == person_id, Account.person_id.is_(None))
+    return Account.person_id == person_id
 
 
 async def load_balance_matrix(

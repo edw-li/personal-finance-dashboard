@@ -192,7 +192,9 @@
 
 /* Keep the info button beside the title text, including when a badge makes the words wrap. */
 .stat-label-text {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 /* Keep the joining space and button together so the icon cannot wrap on its own. */

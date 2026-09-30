@@ -101,6 +101,8 @@
 .ytd-fact .ytd-value {
   white-space: nowrap;
 }
+.ytd-fact .ytd-change { display: flex; flex-wrap: wrap; gap: 0.15rem 0.4em; white-space: normal; }
+.ytd-amount, .ytd-percent { white-space: nowrap; }
 
 .ytd-fact .ytd-sub {
   color: var(--muted);

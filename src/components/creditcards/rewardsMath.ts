@@ -336,13 +336,11 @@ export function cardTies(cardId: number, result: OptimizerResult): TieGroup[] {
   return [...groups.values()]
 }
 
-/** Owner-scope membership, the net-worth grammar verbatim: absent (null) is the whole
- *  household, a person id is THEIR cards plus the JOINT ones — either spouse can hold a
- *  joint card — and 'joint' is the NULL-owned slice alone. */
+/** Exclusive owner filters: All includes everyone; each person and Joint are separate. */
 export function ownerMatches(personId: number | null, scope: OwnerScope): boolean {
   if (scope === null) return true
   if (scope === 'joint') return personId === null
-  return personId === scope || personId === null
+  return personId === scope
 }
 
 /**
@@ -370,9 +368,9 @@ export function householdAdvantage(
     netOf(wallet, totalOf(computeVerdicts(wallet, categories, rates)))
   const household = netFor(actives)
   const best = Math.max(
-    // ownerMatches is the single owner-of-record rule the sibling test pins: a person's
-    // wallet is their cards plus joint.
-    ...owners.map((owner) => netFor(actives.filter((c) => ownerMatches(c.ownerId, owner)))),
+    // This household comparison models access to shared cards, independently of the
+    // exclusive ownership filter used to browse the roster.
+    ...owners.map((owner) => netFor(actives.filter((c) => c.ownerId === owner || c.ownerId === null))),
   )
   const delta = household - best
   // TIE_EPSILON, not > 0: float dust from three independent sums must not render as

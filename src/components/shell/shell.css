@@ -46,6 +46,18 @@
   cursor: not-allowed;
 }
 
+.segmented-sliding { position: relative; isolation: isolate; }
+.segmented-sliding > button { position: relative; z-index: 1; }
+.segmented-sliding[data-indicator-ready] > button.active { background: transparent; }
+.segmented-indicator {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 6px;
+  background: var(--fill);
+  pointer-events: none;
+  transition: transform var(--t-page) var(--ease-out), width var(--t-page) var(--ease-out);
+}
+
 /* Chips: pill-shaped, no shared border box (the drill-down / trend pickers). */
 .segmented-chips {
   border: none;
