@@ -36,6 +36,20 @@ beforeEach(() => {
 afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); vi.clearAllMocks(); Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true }) })
 
 describe('assistant evidence and working context', () => {
+  it('waits for the saved default before sending an automatic chart explanation', async () => {
+    let land!: (settings: unknown) => void
+    mocks.settings.mockImplementation(() => new Promise(resolve => { land = resolve }))
+    mount()
+    const captured = { chartTitle: 'Account values', sourceRoute: '/net-worth', capturedAt: '2026-09-30T09:00:00Z',
+      selection: { kind: 'entity', id: 'account:7', entityId: 7, entityType: 'account', label: 'Brokerage', scope: 1, values: [{ label: 'Balance', value: '5000.00', unit: 'USD' }] } }
+    act(() => window.dispatchEvent(new CustomEvent(EXPLAIN_SELECTION_EVENT, { detail: captured })))
+    await screen.findByRole('complementary', { name: 'Assistant' })
+    expect(mocks.stream).not.toHaveBeenCalled()
+    await act(async () => land({ key: { configured: true }, default_model: 'alternate' }))
+    await waitFor(() => expect(mocks.stream).toHaveBeenCalledOnce())
+    expect(mocks.stream.mock.calls[0][0].model).toBe('alternate')
+  })
+
   it('retains a computed review after provider failure and saves only this dated finding', async () => {
     mocks.settings.mockResolvedValue({ key: { configured: false }, default_model: 'kimi-k3' })
     mount()
@@ -115,8 +129,9 @@ describe('assistant evidence and working context', () => {
     expect(dialog.getAttribute('aria-modal')).toBeNull()
     expect(document.querySelector('.detail-panel-backdrop')).toBeNull()
     expect(document.querySelector('.detail-layout-content')!.hasAttribute('inert')).toBe(false)
-    // B2: one chrome row — the drawer's own header is gone; its controls are the panel's actions.
+    // The layout toggle, model and New chat share the panel's header controls.
     const controls = dialog.querySelector('.detail-panel-controls') as HTMLElement
+    expect(within(controls).getByRole('group', { name: 'Detail panel layout' })).toBeTruthy()
     expect(within(controls).getByRole('combobox', { name: 'Model' })).toBeTruthy()
     expect(within(controls).getByRole('button', { name: 'New chat' })).toBeTruthy()
     expect(document.querySelector('.assistant-header')).toBeNull()

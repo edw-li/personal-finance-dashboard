@@ -26,20 +26,24 @@ vi.mock('../../api/assistantStream', async () => {
 
 import { requestAssistantOpen, useAssistantView } from './viewState'
 import AssistantDrawer from './AssistantDrawer'
+import { publishAssistantSettings } from '../../api/assistantSettingsEvents'
+import { readAssistantModel, writeAssistantModel } from '../../api/assistantSession'
+import type { AssistantSettingsOut, AssistantModelsOut } from '../../types/api'
 
-const MODELS = {
+const MODELS: AssistantModelsOut = {
   configured: true,
   key_source: 'env' as const,
   key_ok: true,
   checked_at: '2026-09-01T00:00:00Z',
   models: [
-    { key: 'kimi-k3', label: 'Kimi K3', available: true, supports_tools: true, default: true },
+    { key: 'kimi-k3', label: 'Kimi K3', available: true, supports_tools: true, default: true, catalog_id: null },
     {
       key: 'nemotron-3.5-lightning',
       label: 'Nemotron 3.5 Lightning',
       available: true,
       supports_tools: true,
       default: false,
+      catalog_id: null,
     },
   ],
 }
@@ -133,6 +137,96 @@ async function openDrawerUnconfigured() {
 }
 
 describe('AssistantDrawer', () => {
+  it.each([null, 'kimi-k3'])('uses the saved Nemotron default with legacy browser selection %s', async stored => {
+    if (stored !== null) sessionStorage.setItem('assistant:model', stored)
+    fetchAssistantSettings.mockResolvedValue({ key: { configured: true, source: 'env' }, default_model: 'nemotron-3.5-lightning' })
+    streamChat.mockImplementation(() => ({ abort: vi.fn(), finished: Promise.resolve() }))
+    mount()
+    const input = await openDrawer()
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('nemotron-3.5-lightning')
+    expect(sessionStorage.getItem('assistant:model')).toBeNull()
+    fireEvent.change(input, { target: { value: 'Which model answers?' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(streamChat.mock.calls[0][0].model).toBe('nemotron-3.5-lightning')
+  })
+
+  it.each([true, false])('waits for Settings instead of seeding Kimi (catalog first: %s)', async catalogFirst => {
+    let settingsLand!: (value: AssistantSettingsOut) => void
+    let modelsLand!: (value: AssistantModelsOut) => void
+    fetchAssistantSettings.mockImplementation(() => new Promise(resolve => { settingsLand = resolve }))
+    fetchAssistantModels.mockImplementation(() => new Promise(resolve => { modelsLand = resolve }))
+    mount()
+    expect(sessionStorage.getItem('assistant:model')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /open assistant/i }))
+    const select = screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement
+    expect(select.value).toBe('')
+    expect(select.disabled).toBe(true)
+    const settings = { key: { configured: true, source: 'env' as const }, default_model: 'nemotron-3.5-lightning' }
+    if (catalogFirst) {
+      await act(async () => modelsLand(MODELS))
+      expect(select.value).toBe('')
+      await act(async () => settingsLand(settings))
+    } else {
+      await act(async () => settingsLand(settings))
+      await act(async () => modelsLand(MODELS))
+    }
+    expect(select.value).toBe('nemotron-3.5-lightning')
+    expect(sessionStorage.getItem('assistant:model')).toBeNull()
+  })
+
+  it('keeps an explicit choice for the chat, then New chat restores the Settings default', async () => {
+    fetchAssistantSettings.mockResolvedValue({ key: { configured: true, source: 'env' }, default_model: 'nemotron-3.5-lightning' })
+    const page = mount()
+    await openDrawer()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), { target: { value: 'kimi-k3' } })
+    expect(readAssistantModel('nemotron-3.5-lightning')).toBe('kimi-k3')
+    page.unmount()
+    mount()
+    await openDrawer()
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('kimi-k3')
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('nemotron-3.5-lightning')
+    expect(sessionStorage.getItem('assistant:model')).toBeNull()
+  })
+
+  it('adopts a saved default immediately without losing the composer or an in-flight answer', async () => {
+    const abort = vi.fn()
+    streamChat.mockImplementation(() => ({ abort, finished: new Promise(() => {}) }))
+    mount()
+    const input = await openDrawer()
+    fireEvent.change(input, { target: { value: 'Keep this draft' } })
+    act(() => publishAssistantSettings({ key: { configured: true, source: 'env' }, default_model: 'nemotron-3.5-lightning' }))
+    expect(input.value).toBe('Keep this draft')
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('nemotron-3.5-lightning')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(streamChat.mock.calls[0][0].model).toBe('nemotron-3.5-lightning')
+    act(() => publishAssistantSettings({ key: { configured: true, source: 'env' }, default_model: 'kimi-k3' }))
+    expect(abort).not.toHaveBeenCalled()
+    expect(screen.getByText('Keep this draft')).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('kimi-k3')
+  })
+
+  it('does not let an older settings GET overwrite the default just saved', async () => {
+    let land!: (value: AssistantSettingsOut) => void
+    fetchAssistantSettings.mockImplementation(() => new Promise(resolve => { land = resolve }))
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: /open assistant/i }))
+    act(() => publishAssistantSettings({ key: { configured: true, source: 'env' }, default_model: 'nemotron-3.5-lightning' }))
+    await act(async () => land({ key: { configured: true, source: 'env' }, default_model: 'kimi-k3' }))
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('nemotron-3.5-lightning')
+  })
+
+  it('refreshes the default on reopening and drops an override tied to the old default', async () => {
+    writeAssistantModel('nemotron-3.5-lightning', 'kimi-k3')
+    mount()
+    await openDrawer()
+    fireEvent.click(screen.getByRole('button', { name: 'Close assistant' }))
+    fetchAssistantSettings.mockResolvedValue({ key: { configured: true, source: 'env' }, default_model: 'nemotron-3.5-lightning' })
+    await openDrawer()
+    await waitFor(() => expect(sessionStorage.getItem('assistant:model')).toBeNull())
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('nemotron-3.5-lightning')
+  })
+
   it('opens from the launcher, focuses the input, Esc closes and restores focus', async () => {
     mount()
     const launcher = screen.getByRole('button', { name: /open assistant/i })
@@ -613,7 +707,7 @@ describe('AssistantDrawer', () => {
   // the <select> with no matching option (value reads back as '') and name a dead model on
   // every send.
   it('reconciles a persisted model the catalog no longer offers', async () => {
-    sessionStorage.setItem('assistant:model', 'gone-model')
+    writeAssistantModel('gone-model', 'kimi-k3')
     streamChat.mockImplementation(
       (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
         h.onDone({ model_used: 'kimi-k3' })

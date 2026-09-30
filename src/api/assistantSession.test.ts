@@ -3,6 +3,7 @@ import {
   appendThinking,
   beginAssistantSession,
   clearAssistantSession,
+  clearAssistantModel,
   readAssistantModel,
   readAssistantTranscript,
   THINKING_CAP,
@@ -28,11 +29,33 @@ afterEach(() => {
 })
 
 describe('assistantSession', () => {
+  it('ignores the legacy automatic Kimi seed and removes it', () => {
+    sessionStorage.setItem('assistant:model', 'kimi-k3')
+    expect(readAssistantModel('nemotron-3.5-lightning')).toBeNull()
+    expect(sessionStorage.getItem('assistant:model')).toBeNull()
+  })
+
+  it('discards a chat override when the Settings default changes', () => {
+    writeAssistantModel('kimi-k3', 'nemotron-3.5-lightning')
+    expect(readAssistantModel('nemotron-3-ultra-550b')).toBeNull()
+    expect(readAssistantModel('nemotron-3.5-lightning')).toBeNull()
+  })
+
+  it('clears only the override for a new chat, without ending the authenticated session', () => {
+    writeAssistantTranscript([item('kept until the conversation clears it')])
+    writeAssistantModel('kimi-k3', 'nemotron-3.5-lightning')
+    clearAssistantModel()
+    expect(readAssistantModel('nemotron-3.5-lightning')).toBeNull()
+    expect(readAssistantTranscript()).toHaveLength(1)
+    writeAssistantModel('nemotron-3-ultra-550b', 'nemotron-3.5-lightning')
+    expect(readAssistantModel('nemotron-3.5-lightning')).toBe('nemotron-3-ultra-550b')
+  })
+
   it('round-trips the transcript and model', () => {
     writeAssistantTranscript([item('hello')])
-    writeAssistantModel('kimi-k3')
+    writeAssistantModel('kimi-k3', 'nemotron-3.5-lightning')
     expect(readAssistantTranscript()).toEqual([item('hello')])
-    expect(readAssistantModel()).toBe('kimi-k3')
+    expect(readAssistantModel('nemotron-3.5-lightning')).toBe('kimi-k3')
   })
 
   it('caps the stored transcript, dropping oldest', () => {
@@ -62,14 +85,14 @@ describe('assistantSession', () => {
       throw new DOMException('QuotaExceededError')
     })
     expect(() => writeAssistantTranscript([item('x')])).not.toThrow()
-    expect(() => writeAssistantModel('kimi-k3')).not.toThrow()
+    expect(() => writeAssistantModel('kimi-k3', 'nemotron-3.5-lightning')).not.toThrow()
     expect(setItem).toHaveBeenCalledTimes(2) // the guard was really exercised, not skipped
     setItem.mockRestore()
   })
 
   it('clearAssistantSession removes both keys', () => {
     writeAssistantTranscript([item('x')])
-    writeAssistantModel('kimi-k3')
+    writeAssistantModel('kimi-k3', 'nemotron-3.5-lightning')
     clearAssistantSession()
     expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
     expect(sessionStorage.getItem('assistant:model')).toBeNull()
@@ -82,7 +105,7 @@ describe('assistantSession', () => {
     writeAssistantTranscript([item('asked before the 401')])
     clearAssistantSession()
     writeAssistantTranscript([item('a token that arrived late')])
-    writeAssistantModel('kimi-k3')
+    writeAssistantModel('kimi-k3', 'nemotron-3.5-lightning')
     expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
     expect(sessionStorage.getItem('assistant:model')).toBeNull()
   })
@@ -94,9 +117,9 @@ describe('assistantSession', () => {
     clearAssistantSession()
     beginAssistantSession()
     writeAssistantTranscript([item('new session')])
-    writeAssistantModel('kimi-k3')
+    writeAssistantModel('kimi-k3', 'nemotron-3.5-lightning')
     expect(readAssistantTranscript()).toEqual([item('new session')])
-    expect(readAssistantModel()).toBe('kimi-k3')
+    expect(readAssistantModel('nemotron-3.5-lightning')).toBe('kimi-k3')
   })
 
   describe('appendThinking', () => {

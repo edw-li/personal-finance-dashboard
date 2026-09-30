@@ -123,21 +123,34 @@ export function writeAssistantTranscript(items: TranscriptItem[]): void {
   }
 }
 
-export function readAssistantModel(): string | null {
+/** Only an explicit chat override is remembered, together with the Settings default it
+ *  was chosen under. Legacy bare strings also contained automatic Kimi seeds, so they
+ *  cannot establish user intent and must not override the saved default. */
+export function readAssistantModel(defaultModel: string): string | null {
   try {
-    return sessionStorage.getItem(MODEL_KEY)
+    const choice: unknown = JSON.parse(sessionStorage.getItem(MODEL_KEY) ?? 'null')
+    if (choice !== null && typeof choice === 'object' && 'key' in choice && 'defaultModel' in choice
+      && typeof choice.key === 'string' && choice.key !== '' && choice.defaultModel === defaultModel) return choice.key
+    clearAssistantModel()
+    return null
   } catch {
+    clearAssistantModel()
     return null // storage blocked entirely — fall back to the server's default model
   }
 }
 
-export function writeAssistantModel(key: string): void {
+export function writeAssistantModel(key: string, defaultModel: string): void {
   if (sessionEnded) return
   try {
-    sessionStorage.setItem(MODEL_KEY, key)
+    sessionStorage.setItem(MODEL_KEY, JSON.stringify({ key, defaultModel }))
   } catch {
     // Same posture as the transcript write.
   }
+}
+
+export function clearAssistantModel(): void {
+  try { sessionStorage.removeItem(MODEL_KEY) }
+  catch { /* Blocked storage must not prevent starting a new chat. */ }
 }
 
 /** Re-arms the writers after a session end that did NOT tear the document down. Called on

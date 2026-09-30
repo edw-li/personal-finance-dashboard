@@ -115,6 +115,17 @@
   color: var(--text);
 }
 
+/* At phone / narrow dock widths, an icon leaves room for the model name while keeping
+   the layout toggle and model picker together. The full label stays in the tooltip. */
+.detail-panel:has(.assistant-dock-mount) { container: assistant-panel / inline-size; }
+.assistant-new-chat { display: inline-flex; align-items: center; justify-content: center; }
+.assistant-new-chat-icon { display: none; }
+@container assistant-panel (max-width: 400px) {
+  .assistant-new-chat { width: 28px; height: 28px; padding: 0; }
+  .assistant-new-chat-icon { display: block; }
+  .assistant-new-chat-label { display: none; }
+}
+
 /* A row, not prose: label · (i) · views. The label ellipsises (on Taxes it reads "Taxes · 2026 ·
    Married filing jointly"), the (i) keeps its box, the tablist sits at the right edge. */
 .assistant-context {

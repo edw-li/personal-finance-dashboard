@@ -15,10 +15,25 @@ vi.mock('./client', async (importOriginal) => ({
   apiReadOnly: vi.fn(),
 }))
 import { api, apiReadOnly } from './client'
+import { onAssistantSettingsChanged } from './assistantSettingsEvents'
 
 beforeEach(() => vi.clearAllMocks())
 
 describe('assistant client', () => {
+  it('publishes the saved Settings echo only after a successful save', async () => {
+    const settings = { key: { configured: true, source: 'env' as const }, default_model: 'nemotron-3.5-lightning' }
+    const heard = vi.fn()
+    const unsubscribe = onAssistantSettingsChanged(heard)
+    try {
+      vi.mocked(api).mockResolvedValueOnce(settings)
+      expect(await putAssistantSettings({ default_model: settings.default_model })).toEqual(settings)
+      expect(heard).toHaveBeenCalledExactlyOnceWith(settings)
+      vi.mocked(api).mockRejectedValueOnce(new Error('Save failed'))
+      await expect(putAssistantSettings({ default_model: 'kimi-k3' })).rejects.toThrow('Save failed')
+      expect(heard).toHaveBeenCalledTimes(1)
+    } finally { unsubscribe() }
+  })
+
   it('GETs the settings row', async () => {
     await fetchAssistantSettings()
     expect(vi.mocked(api).mock.calls[0][0]).toBe('/assistant/settings')

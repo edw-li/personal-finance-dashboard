@@ -35,7 +35,7 @@ describe("details.css — the panel header row survives the assistant's controls
   // track hands the overflow to the select's own `flex: 1 1 auto; min-width: 0; text-overflow`.
   it('gives the title track a floor and lets the controls track shrink', () => {
     expect(declarationsFor(details, '.detail-panel'))
-      .toContain('grid-template-columns: auto minmax(min(40%, 12rem), 1fr) minmax(0, auto);')
+      .toContain('grid-template-columns: auto minmax(min(25%, 6rem), 1fr) minmax(0, auto);')
     expect(declarationsFor(details, '.detail-panel-controls')).toContain('min-width: 0;')
   })
 })

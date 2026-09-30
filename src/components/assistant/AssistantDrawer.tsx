@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 // KeyboardEvent, which React's same-named type would otherwise shadow.
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Info, Sparkles, Square, X } from 'lucide-react'
+import { Info, MessageSquarePlus, Sparkles, Square, X } from 'lucide-react'
 import {
   fetchAssistantModels,
   fetchAssistantSettings,
@@ -12,12 +12,14 @@ import {
 } from '../../api/assistant'
 import {
   appendThinking,
+  clearAssistantModel,
   readAssistantModel,
   readAssistantTranscript,
   writeAssistantModel,
   writeAssistantTranscript,
 } from '../../api/assistantSession'
 import type { TranscriptItem } from '../../api/assistantSession'
+import { onAssistantSettingsChanged } from '../../api/assistantSettingsEvents'
 import { fetchHousehold } from '../../api/household'
 import { streamChat } from '../../api/assistantStream'
 import type { ChatStreamHandle } from '../../api/assistantStream'
@@ -153,9 +155,11 @@ function RetryCountdown({
 /** The header's controls. Inside the shared panel they render in the panel's own chrome row
  *  (`DetailPanelRequest.actions`, spec §4); standalone they sit in the drawer's header. Module scope
  *  so the element type is stable across the drawer's per-token re-renders. */
-function AssistantHeaderActions({ model, models, streaming, onModel, onNewChat }: {
+function AssistantHeaderActions({ model, models, defaultModel, settingsFailed, streaming, onModel, onNewChat }: {
   model: string
   models: AssistantModelsOut | null
+  defaultModel?: string
+  settingsFailed: boolean
   streaming: boolean
   onModel: (key: string) => void
   onNewChat: () => void
@@ -166,11 +170,13 @@ function AssistantHeaderActions({ model, models, streaming, onModel, onNewChat }
         className="assistant-model-select"
         aria-label="Model"
         value={model}
-        disabled={streaming}
+        disabled={streaming || model === ''}
+        title={model === '' ? undefined : `${modelLabel(model, models)} — ${model === defaultModel ? 'default from Settings' : 'for this chat; New chat uses the Settings default'}`}
         onChange={(event) => onModel(event.target.value)}
       >
+        {model === '' && <option value="">{settingsFailed ? 'Model unavailable' : 'Loading model…'}</option>}
         {(
-          models?.models ?? [
+          models?.models ?? (model === '' ? [] : [
             {
               key: model,
               label: modelLabel(model, null),
@@ -179,7 +185,7 @@ function AssistantHeaderActions({ model, models, streaming, onModel, onNewChat }
               default: true,
               catalog_id: null,
             },
-          ]
+          ])
         ).map((m) => (
           <option key={m.key} value={m.key} disabled={!m.available}>
             {m.label}
@@ -187,8 +193,9 @@ function AssistantHeaderActions({ model, models, streaming, onModel, onNewChat }
           </option>
         ))}
       </select>
-      <button type="button" className="assistant-icon-button" onClick={onNewChat}>
-        New chat
+      <button type="button" className="assistant-icon-button assistant-new-chat" aria-label="New chat" title="New chat" onClick={onNewChat}>
+        <MessageSquarePlus className="assistant-new-chat-icon" size={14} aria-hidden="true" />
+        <span className="assistant-new-chat-label">New chat</span>
       </button>
     </>
   )
@@ -214,7 +221,7 @@ export default function AssistantDrawer() {
   const [settings, setSettings] = useState<AssistantSettingsOut | null>(null)
   const [settingsFailed, setSettingsFailed] = useState(false)
   const [models, setModels] = useState<AssistantModelsOut | null>(null)
-  const [model, setModel] = useState<string>(() => readAssistantModel() ?? 'kimi-k3')
+  const [model, setModel] = useState('')
   // Sanitised on the way in: a tab closed mid-stream persisted the pending item WITH its
   // `status`, and restoring that would paint a spinner for a stream that died with the tab —
   // no event is ever coming to clear it. The mirror effect then re-persists it cleaned.
@@ -239,6 +246,9 @@ export default function AssistantDrawer() {
   const messagesRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<ChatStreamHandle | null>(null)
   const modelsRef = useRef<AssistantModelsOut | null>(null)
+  const settingsRef = useRef<AssistantSettingsOut | null>(null)
+  const settingsSeq = useRef(0)
+  const modelsSeq = useRef(0)
   // Whether the log is following new content. Flipped by the reader's own scrolling and
   // re-armed by each send — asking a question is a request to watch the answer arrive.
   const stickToBottom = useRef(true)
@@ -260,9 +270,10 @@ export default function AssistantDrawer() {
     writeAssistantTranscript(transcript)
   }, [transcript])
 
-  useEffect(() => {
-    writeAssistantModel(model)
-  }, [model])
+  const chooseModel = useCallback((key: string) => {
+    setModel(key)
+    if (settingsRef.current !== null) writeAssistantModel(key, settingsRef.current.default_model)
+  }, [])
 
   // An explicit open also raises a retained assistant from beneath its evidence panel.
   useEffect(() => {
@@ -293,28 +304,49 @@ export default function AssistantDrawer() {
     return () => window.removeEventListener('resize', measure)
   }, [])
 
-  // First open: load settings + models once. Promise continuations only (house law).
-  useEffect(() => {
-    if (!open || settings !== null) return
-    fetchAssistantSettings()
-      .then((s) => {
-        setSettings(s)
-        setSettingsFailed(false)
-        setModel((current) =>
-          resolveModel(readAssistantModel() ?? s.default_model ?? current, modelsRef.current),
-        )
-      })
-      .catch(() => setSettingsFailed(true))
+  const adoptSettings = useCallback((next: AssistantSettingsOut) => {
+    settingsRef.current = next
+    setSettings(next)
+    setSettingsFailed(false)
+    setModel(resolveModel(readAssistantModel(next.default_model) ?? next.default_model, modelsRef.current))
+  }, [])
+
+  const refreshModels = useCallback(() => {
+    const seq = ++modelsSeq.current
     fetchAssistantModels()
-      .then((m) => {
-        // Mirrored to a ref as well: the settings continuation above needs the catalog to
-        // validate against, and its own `models` closure is the null from effect time.
-        modelsRef.current = m
-        setModels(m)
-        setModel((current) => resolveModel(current, m))
+      .then((catalog) => {
+        if (seq !== modelsSeq.current) return
+        modelsRef.current = catalog
+        setModels(catalog)
+        // A catalog that arrives first must not invent a selection before Settings loads.
+        setModel(current => current === '' ? current : resolveModel(current, catalog))
       })
-      .catch(() => setModels(null))
-  }, [open, settings])
+      .catch(() => {
+        if (seq !== modelsSeq.current) return
+        modelsRef.current = null
+        setModels(null)
+      })
+  }, [])
+
+  // Refresh on each explicit open, including changes made in another browser tab. The
+  // saved default is authoritative unless the reader deliberately chose a chat override.
+  useEffect(() => {
+    if (!open) return
+    const seq = ++settingsSeq.current
+    fetchAssistantSettings()
+      .then(next => { if (seq === settingsSeq.current) adoptSettings(next) })
+      .catch(() => { if (seq === settingsSeq.current) setSettingsFailed(true) })
+    refreshModels()
+    return () => { settingsSeq.current += 1; modelsSeq.current += 1 }
+  }, [open, openRequest, adoptSettings, refreshModels])
+
+  // The panel stays mounted while Settings saves. Apply its successful echo immediately,
+  // and prevent an earlier GET from restoring the old default when it finally arrives.
+  useEffect(() => onAssistantSettingsChanged(next => {
+    settingsSeq.current += 1
+    adoptSettings(next)
+    if (open) refreshModels()
+  }), [open, adoptSettings, refreshModels])
 
   // Focus hand-off on open: into the composer if it is already there, else the drawer ROOT
   // (tabIndex -1) — settings may still be loading, or there may be no composer at all (not
@@ -434,10 +466,10 @@ export default function AssistantDrawer() {
   const send = (text: string, withModel?: string, base?: TranscriptItem[], request?: { context: AssistantContextIn; intent?: AssistantIntent }) => {
     const chosenModel = withModel ?? model
     const content = text.trim()
-    if (content === '' || streaming || (request?.intent === undefined && (settings === null || !settings.key.configured))) return
+    if (content === '' || streaming || settings === null || (request?.intent === undefined && !settings.key.configured)) return
     // Below the guard: a rejected send must not leave the model picker showing a model that
     // was never asked anything.
-    if (withModel !== undefined) setModel(withModel)
+    if (withModel !== undefined) chooseModel(withModel)
     const seq = ++sendSeq.current
     const asked = JSON.parse(JSON.stringify(request?.context ?? buildContext())) as AssistantContextIn
     lastRequest.current = { context: asked, intent: request?.intent }
@@ -613,6 +645,8 @@ export default function AssistantDrawer() {
     handleRef.current?.abort()
     setStreaming(false)
     setTranscript([])
+    clearAssistantModel()
+    setModel(settingsRef.current === null ? '' : resolveModel(settingsRef.current.default_model, modelsRef.current))
     setTab('chat')
   }, [])
 
@@ -637,8 +671,8 @@ export default function AssistantDrawer() {
   // POP any evidence panel stacked above it. The update effect keeps them current afterwards.
   const headerActionsRef = useRef<ReactNode>(null)
   useEffect(() => {
-    headerActionsRef.current = <AssistantHeaderActions model={model} models={models} streaming={streaming} onModel={setModel} onNewChat={newChat} />
-  }, [model, models, streaming, newChat])
+    headerActionsRef.current = <AssistantHeaderActions model={model} models={models} defaultModel={settings?.default_model} settingsFailed={settingsFailed} streaming={streaming} onModel={chooseModel} onNewChat={newChat} />
+  }, [model, models, settings, settingsFailed, streaming, chooseModel, newChat])
   useEffect(() => {
     if (!open || !openPanel) return
     openPanel({
@@ -652,12 +686,12 @@ export default function AssistantDrawer() {
     })
   }, [open, openRequest, openPanel, portalHost])
   // One source for the element: the ref effect above (declared first, so it commits first) builds
-  // it, and this pushes that same node. model/models/streaming/newChat stay in the dep list even
-  // though the body no longer names them — they are what makes this re-run when the actions change.
+  // it, and this pushes that same node. Its inputs stay in the dep list even though the
+  // body no longer names them — they are what makes this re-run when the actions change.
   useEffect(() => {
     if (!open || !updatePanel) return
     updatePanel('assistant', { actions: headerActionsRef.current })
-  }, [open, updatePanel, model, models, streaming, newChat])
+  }, [open, updatePanel, model, models, settings, settingsFailed, streaming, chooseModel, newChat])
   useEffect(() => () => closePanel?.('assistant'), [closePanel])
 
   useEffect(() => onExplainSelection((selection) => {
@@ -672,13 +706,13 @@ export default function AssistantDrawer() {
   const sendRef = useRef(send)
   useEffect(() => { sendRef.current = send })
   useEffect(() => {
-    if (!pendingSelection || streaming || selectionSent.current === pendingSelection) return
+    if (!pendingSelection || streaming || settings === null || selectionSent.current === pendingSelection) return
     selectionSent.current = pendingSelection
     void Promise.resolve().then(() => {
       sendRef.current(pendingSelection.prompt, undefined, undefined, { context: pendingSelection.context, intent: 'selection' })
       setPendingSelection(null)
     })
-  }, [pendingSelection, streaming])
+  }, [pendingSelection, streaming, settings])
 
   const drawer = open && (
         <div
@@ -703,7 +737,7 @@ export default function AssistantDrawer() {
               <span className="assistant-title">
                 <span aria-hidden="true">✦</span> Assistant
               </span>
-              <AssistantHeaderActions model={model} models={models} streaming={streaming} onModel={setModel} onNewChat={newChat} />
+              <AssistantHeaderActions model={model} models={models} defaultModel={settings?.default_model} settingsFailed={settingsFailed} streaming={streaming} onModel={chooseModel} onNewChat={newChat} />
               <button
                 type="button"
                 className="assistant-icon-button"
@@ -780,7 +814,7 @@ export default function AssistantDrawer() {
                 <button
                   type="button"
                   className="assistant-sample-chip"
-                  disabled={streaming}
+                  disabled={streaming || settings === null}
                   onClick={() => send('Review the latest completed month.', undefined, undefined, { context: buildContext(), intent: 'month_review' })}
                 >
                   Review latest completed month
