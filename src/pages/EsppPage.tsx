@@ -10,6 +10,7 @@ import { useDeleteWithUndo } from '../components/feedback/useDeleteWithUndo'
 import { useLatest } from '../components/reorder/useLatest'
 import { useRecordFeedback } from '../components/portfolio/useRecordFeedback'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
+import Segmented from '../components/shell/Segmented'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
@@ -1157,20 +1158,8 @@ function ModelerCard({
         />
       </h2>
       {data !== null && data.available_years.length > 1 && (
-        // The app's segmented control (panels.css .segmented / button.active).
-        <div className="segmented" role="group" aria-label="Modeled year">
-          {data.available_years.map((value) => (
-            <button
-              key={value}
-              type="button"
-              className={value === data.year ? 'active' : ''}
-              aria-pressed={value === data.year}
-              onClick={() => onYearSelect(value)}
-            >
-              {value}
-            </button>
-          ))}
-        </div>
+        <Segmented variant="toggle" ariaLabel="Modeled year" value={String(data.year)} onChange={value => onYearSelect(Number(value))}
+          options={data.available_years.map(value => ({ value: String(value), label: value }))} />
       )}
       <p className="drill-hint">
         Leave the knobs blank and the model uses your offerings for each period&apos;s

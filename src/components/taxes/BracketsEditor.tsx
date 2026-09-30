@@ -15,6 +15,7 @@ import type { Jurisdiction } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import { balancedSplit, groupWeight } from './bracketColumns'
 import InfoHint from '../InfoHint'
+import { SegmentedGroup } from '../shell/Segmented'
 import type {
   BracketCloneReviewFlags,
   FilingStatus,
@@ -806,8 +807,9 @@ export default function BracketsEditor({
           this control only picks the tables this card edits. */}
       <div className="bracket-status-row">
         <span className="eyebrow">Tables for status</span>
-        <div
-          className="segmented bracket-status-tabs"
+        <SegmentedGroup
+          variant="toggle"
+          className="bracket-status-tabs"
           role="group"
           aria-label="Tables for status"
         >
@@ -825,7 +827,7 @@ export default function BracketsEditor({
               {status === yearStatus ? ' (this year’s status)' : ''}
             </BusyButton>
           ))}
-        </div>
+        </SegmentedGroup>
         <InfoHint text="Which status' tables this card's Saves rewrite. The year's own filing status — the tables the engine walks — is changed with Change… in the scope row at the top of the page." />
       </div>
       <FeedBanner error={tabError} />

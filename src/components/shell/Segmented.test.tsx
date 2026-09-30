@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Segmented from './Segmented'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 const OPTIONS = [
   { value: 'all', label: 'All' },
@@ -11,6 +11,49 @@ const OPTIONS = [
 ] as const
 
 describe('Segmented', () => {
+  it('keeps the selected highlight aligned after a wrapped tab changes size or becomes visible', () => {
+    let width = 80
+    let top = 0
+    let visible = true
+    let resized = () => {}
+    const disconnect = vi.fn()
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe() {}
+      disconnect = disconnect
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(() => visible ? width : 0)
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(30)
+    vi.spyOn(HTMLElement.prototype, 'offsetLeft', 'get').mockImplementation(function (this: HTMLElement) { return this.textContent === 'All' ? 0 : 86 })
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(() => top)
+    const view = render(<Segmented variant="tabs" ariaLabel="Window" options={OPTIONS} value="all" onChange={vi.fn()} />)
+    const indicator = view.container.querySelector<HTMLElement>('.segmented-indicator')!
+    expect(indicator.hidden).toBe(false)
+    expect(indicator.style.transform).toBe('translate(0px, 0px)')
+    top = 36
+    view.rerender(<Segmented variant="tabs" ariaLabel="Window" options={OPTIONS} value="ytd" onChange={vi.fn()} />)
+    expect(indicator.style.transform).toBe('translate(86px, 36px)')
+    width = 112
+    resized()
+    expect(indicator.style.width).toBe('112px')
+    visible = false
+    resized()
+    expect(indicator.hidden).toBe(true)
+    visible = true
+    resized()
+    expect(indicator.hidden).toBe(false)
+    view.unmount()
+    expect(disconnect).toHaveBeenCalled()
+  })
+
+  it('keeps multiple selections independent and allows an explicit motion opt-out', () => {
+    const view = render(<Segmented<string> variant="chips" multiple ariaLabel="Accounts" options={OPTIONS} value={['all', 'ytd']} onChange={vi.fn()} />)
+    expect(view.container.querySelector('.segmented-indicator')).toBeNull()
+    expect(screen.getAllByRole('button', { pressed: true })).toHaveLength(2)
+    view.rerender(<Segmented variant="toggle" animateIndicator={false} ariaLabel="Window" options={OPTIONS} value="all" onChange={vi.fn()} />)
+    expect(view.container.querySelector('.segmented-indicator')).toBeNull()
+  })
+
   it('toggle: a group of pressed buttons, one active', () => {
     const onChange = vi.fn()
     render(<Segmented variant="toggle" ariaLabel="Time range" options={OPTIONS} value="1y" onChange={onChange} />)

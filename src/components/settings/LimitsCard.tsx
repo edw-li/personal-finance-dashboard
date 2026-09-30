@@ -10,6 +10,7 @@ import { SaveButton } from '../feedback/SaveButton'
 import { SaveStatus } from '../feedback/SaveStatus'
 import { useSaveState } from '../feedback/useSaveState'
 import { FeedBanner } from '../shell/Feed'
+import Segmented from '../shell/Segmented'
 import '../panels.css'
 import './settings.css'
 import SettingsGhost, { SETTINGS_CARD_CHROME_PX } from './SettingsGhost'
@@ -123,24 +124,9 @@ export default function LimitsCard() {
         Contribution limits
         <InfoHint text="Your own per-year caps. The dashboard ships none of its own — enter the year's published figures and the Paycheck page grades your contributions against them. A blank box means 'not entered', which the pace strip says out loud." />
       </h2>
-      <div className="segmented" role="group" aria-label="Limit year">
-        {/* Frozen while a write is in flight, exactly like the two buttons below. `save` and
-            `clone` re-seed from their response with no sequence guard of their own, so a
-            chip pressed mid-flight would land the OLD year's echo under the new year's
-            heading — the failure the load-error path above refuses to allow. */}
-        {[thisYear - 1, thisYear, thisYear + 1].map((option) => (
-          <button
-            key={option}
-            type="button"
-            className={option === year ? 'active' : ''}
-            aria-pressed={option === year}
-            disabled={busy}
-            onClick={() => pickYear(option)}
-          >
-            {option}
-          </button>
-        ))}
-      </div>
+      {/* Keep the year frozen during a write: its response re-seeds the visible fields. */}
+      <Segmented variant="toggle" ariaLabel="Limit year" value={String(year)} onChange={value => pickYear(Number(value))}
+        options={[thisYear - 1, thisYear, thisYear + 1].map(value => ({ value: String(value), label: value, disabled: busy }))} />
       <FeedBanner
         error={loadError}
         retry={() => load(year)}

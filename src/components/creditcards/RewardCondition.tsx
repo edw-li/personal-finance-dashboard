@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { X } from 'lucide-react'
+import { Plus, X } from 'lucide-react'
 import { usePopoverDismiss } from '../usePopoverDismiss'
 import { useReducedMotion } from '../useReducedMotion'
 import { MOTION_MS } from '../../theme/motion'
@@ -59,23 +59,20 @@ export default function RewardCondition({ text, card, category }: { text: string
   }, [phase, close, text])
 
   return <>
-    <button ref={triggerRef} type="button" className="mx-note reward-condition-trigger"
+    <button ref={triggerRef} type="button" className="reward-condition-trigger"
       aria-label={`Reward condition for ${card} — ${category}`}
       aria-haspopup="dialog" aria-expanded={phase === 'open'} aria-controls={phase === 'open' ? id : undefined}
       onClick={() => {
         if (phase === 'open') close()
         else { cancelClose(); setPhase('open') }
-      }}>⁺</button>
+      }}><Plus size={11} aria-hidden="true" /></button>
     {phase !== null && createPortal(
       <div ref={surfaceRef} id={id} className={`reward-condition-popover${phase === 'closing' ? ' is-closing' : ''}`}
         role="dialog" aria-label={`${card} — ${category} reward condition`} aria-describedby={`${id}-text`}
         aria-hidden={phase === 'closing' || undefined} inert={phase === 'closing'} tabIndex={-1}>
-        <div className="reward-condition-head">
-          <span>{card}<small>{category}</small></span>
-          <button type="button" className="reward-condition-close" aria-label="Dismiss reward condition"
-            onClick={() => { close(); triggerRef.current?.focus() }}><X size={15} aria-hidden="true" /></button>
-        </div>
         <p id={`${id}-text`}>{text}</p>
+        <button type="button" className="reward-condition-close" aria-label="Dismiss reward condition"
+          onClick={() => { close(); triggerRef.current?.focus() }}><X size={14} aria-hidden="true" /></button>
       </div>, document.body,
     )}
   </>

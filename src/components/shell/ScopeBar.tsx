@@ -281,7 +281,6 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
           <Segmented
             variant="toggle"
             ariaLabel="Whose"
-            animateIndicator
             options={ownerOptions}
             value={ownerChipValue}
             onChange={(value) => setScope({ owner: ownerFromValue(value) })}

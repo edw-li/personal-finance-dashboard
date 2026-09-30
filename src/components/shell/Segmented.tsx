@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef } from 'react'
-import type { KeyboardEvent, ReactNode } from 'react'
+import type { HTMLAttributes, KeyboardEvent, ReactNode } from 'react'
 // panels.css first, shell.css second: both files define `.segmented` rules at the same
 // specificity, so source order decides the winner. Pinning the order here (rather than
 // relying on whatever the importing page happens to load first) makes the control
@@ -25,7 +25,7 @@ type SegmentedProps<V extends string> = {
   options: readonly SegmentedOption<V>[]
   ariaLabel: string
   size?: 'sm' | 'md'
-  /** A sliding highlight for a single-selection toggle. */
+  /** Single-selection controls slide by default; opt out only when the host needs it. */
   animateIndicator?: boolean
   /** tabs only: the id of the panel each tab controls, by value. */
   panelIds?: Partial<Record<V, string>>
@@ -41,20 +41,33 @@ type SegmentedProps<V extends string> = {
     }
 )
 
-export default function Segmented<V extends string>(props: SegmentedProps<V>) {
-  const { variant, options, ariaLabel, size = 'md', panelIds, animateIndicator = false } = props
+/** The same selection surface for custom buttons that must keep their own save/focus behavior. */
+export function SegmentedGroup({
+  variant, size = 'md', multiple = false, animateIndicator = true, className, children, ...attributes
+}: HTMLAttributes<HTMLDivElement> & {
+  variant: SegmentedVariant
+  size?: 'sm' | 'md'
+  multiple?: boolean
+  animateIndicator?: boolean
+}) {
   const groupRef = useRef<HTMLDivElement>(null)
   const indicatorRef = useRef<HTMLSpanElement>(null)
-  const sliding = animateIndicator && !props.multiple && variant === 'toggle'
+  const sliding = animateIndicator && !multiple
   useLayoutEffect(() => {
     const group = groupRef.current
     const indicator = indicatorRef.current
     if (!sliding || group === null || indicator === null) return
     const place = () => {
       const selected = group.querySelector<HTMLButtonElement>('button.active')
-      if (selected === null) { indicator.hidden = true; delete group.dataset.indicatorReady; return }
+      if (selected === null || selected.offsetWidth === 0 || selected.offsetHeight === 0) {
+        indicator.hidden = true
+        delete group.dataset.indicatorReady
+        return
+      }
       indicator.style.width = `${selected.offsetWidth}px`
-      indicator.style.transform = `translateX(${selected.offsetLeft}px)`
+      indicator.style.height = `${selected.offsetHeight}px`
+      // Chips and steps can wrap; the highlight follows the selected button's own row.
+      indicator.style.transform = `translate(${selected.offsetLeft}px, ${selected.offsetTop}px)`
       indicator.hidden = false
       group.dataset.indicatorReady = 'true'
     }
@@ -63,7 +76,16 @@ export default function Segmented<V extends string>(props: SegmentedProps<V>) {
     observer?.observe(group)
     group.querySelectorAll('button').forEach(button => observer?.observe(button))
     return () => observer?.disconnect()
-  }, [sliding, props.value, options])
+  }, [sliding, children])
+  return <div {...attributes} ref={groupRef}
+    className={['segmented', `segmented-${variant}`, size === 'sm' ? 'segmented-sm' : '', sliding ? 'segmented-sliding' : '', className].filter(Boolean).join(' ')}>
+    {sliding && <span ref={indicatorRef} className="segmented-indicator" aria-hidden="true" hidden />}
+    {children}
+  </div>
+}
+
+export default function Segmented<V extends string>(props: SegmentedProps<V>) {
+  const { variant, options, ariaLabel, size = 'md', panelIds, animateIndicator } = props
   // Ids come from useId, not the label: two groups can legitimately share a label on one
   // page, and a value may contain characters an id cannot.
   const idBase = useId()
@@ -109,13 +131,8 @@ export default function Segmented<V extends string>(props: SegmentedProps<V>) {
     options.find((o) => !o.disabled)?.value
 
   const role = variant === 'tabs' ? 'tablist' : 'group'
-  const className = ['segmented', `segmented-${variant}`, size === 'sm' ? 'segmented-sm' : '', sliding ? 'segmented-sliding' : '']
-    .filter(Boolean)
-    .join(' ')
-
   return (
-    <div ref={groupRef} className={className} role={role} aria-label={ariaLabel}>
-      {sliding && <span ref={indicatorRef} className="segmented-indicator" aria-hidden="true" hidden />}
+    <SegmentedGroup variant={variant} size={size} multiple={props.multiple} animateIndicator={animateIndicator} role={role} aria-label={ariaLabel}>
       {options.map((option, index) => {
         const on = isOn(option.value)
         // The key stays off this object: React 19 warns when a key is spread in with the rest
@@ -156,6 +173,6 @@ export default function Segmented<V extends string>(props: SegmentedProps<V>) {
           </button>
         )
       })}
-    </div>
+    </SegmentedGroup>
   )
 }

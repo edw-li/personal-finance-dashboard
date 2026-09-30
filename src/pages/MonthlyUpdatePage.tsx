@@ -29,6 +29,7 @@ import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthRe
 import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
 import { useEntryHeaders } from '../components/monthly/useEntryHeaders'
+import { SegmentedGroup } from '../components/shell/Segmented'
 import HistoricalReview from '../components/monthly/HistoricalReview'
 import WhatsDue, { DuePartLink } from '../components/monthly/WhatsDue'
 import {
@@ -1631,19 +1632,20 @@ function MonthlyUpdateWizard() {
       <PageFrame
         title={`Monthly update — ${formatMonth(month)}`}
         subheader={
-          <div className="wizard-steps">
+          <SegmentedGroup variant="steps" className="wizard-steps" role="group" aria-label="Monthly update steps">
             {WIZARD_STEPS.map((s, i) => (
               <button
                 key={s}
                 type="button"
                 className={`wizard-step${s === step ? ' active' : ''}`}
+                aria-current={s === step ? 'step' : undefined}
                 onClick={() => setStep(s)}
               >
                 <span className="step-index">{i + 1}</span>
                 {STEP_LABELS[s]}
               </button>
             ))}
-          </div>
+          </SegmentedGroup>
         }
         scopeRow={
           <>

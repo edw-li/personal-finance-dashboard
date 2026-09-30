@@ -3,10 +3,7 @@
    table and form grammar; this file owns the page frame, the scope row, the Segmented
    control and the sidebar footer. */
 
-/* Segmented: the one "pick one of N" control. `.segmented` is the same name panels.css
-   uses for the hand-rolled groups (ChartExportMenu, RewardsMatrix, LimitsCard, the taxes
-   and ESPP pickers), which still render the bare class — panels.css first, shell.css
-   second, so both look alike. Plan 4 kept the panels.css rule for exactly that reason. */
+/* Segmented and SegmentedGroup share the same option-selection surface and motion. */
 .segmented {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -51,12 +48,15 @@
 .segmented-sliding[data-indicator-ready] > button.active { background: transparent; }
 .segmented-indicator {
   position: absolute;
-  inset: 0 auto 0 0;
+  top: 0;
+  left: 0;
   border-radius: 6px;
   background: var(--fill);
   pointer-events: none;
-  transition: transform var(--t-page) var(--ease-out), width var(--t-page) var(--ease-out);
+  transition: transform var(--t-page) var(--ease-out), width var(--t-page) var(--ease-out), height var(--t-page) var(--ease-out);
 }
+.segmented-chips > .segmented-indicator,
+.segmented-steps > .segmented-indicator { border-radius: 999px; }
 
 /* Chips: pill-shaped, no shared border box (the drill-down / trend pickers). */
 .segmented-chips {
@@ -88,6 +88,7 @@
 .segmented-steps {
   border: none;
   overflow: visible;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 

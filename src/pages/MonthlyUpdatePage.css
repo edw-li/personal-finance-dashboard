@@ -5,7 +5,7 @@
   gap: 0.4rem;
 }
 
-.wizard-step {
+.wizard-steps .wizard-step {
   display: flex;
   align-items: center;
   gap: 0.5rem;

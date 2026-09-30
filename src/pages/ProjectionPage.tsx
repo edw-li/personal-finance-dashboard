@@ -151,7 +151,7 @@ export default function ProjectionPage() {
                   hint="The projected line compounds at your assumptions; the bands show the middle 50% and 80% of simulated balances. Select a month for exact values. Reach dates and probabilities stay the same when you change chart dollars."
                   ariaLabel={`Projected investable balance over the next ${data.years} years`} option={chart} busy={sandbox.busy}
                   empty="Nothing to chart at this horizon." exportName={`projection-${display.display_dollars}-dollars`}
-                  csv={() => projectionCsv(display, references)} height={400} zoomable
+                  csv={() => projectionCsv(display, references)} height={400} fill zoomable
                   caption={`${formatMonth(data.start_month)} – ${formatMonth(data.months.at(-1) ?? data.start_month)} · ${display.display_dollars === 'future' ? 'future dollars' : "today's dollars"}`}
                   onLegendChange={(next) => setFanLegend((current) => ({ ...current, ...next }))}
                   selection={selection} onSelectionChange={select} selectionScopeKey={`projection:${data.start_month}:${data.years}`}

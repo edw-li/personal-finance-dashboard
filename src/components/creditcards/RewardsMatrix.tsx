@@ -20,6 +20,7 @@ import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/fo
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { effectiveRate, type OptimizerResult } from './rewardsMath'
 import { FeedBanner } from '../shell/Feed'
+import Segmented from '../shell/Segmented'
 import './matrix.css'
 
 type View = 'multiplier' | 'effective'
@@ -234,19 +235,8 @@ export default function RewardsMatrix({
           Rewards matrix — best card per category
           <InfoHint text="Green = best effective return (multiplier × point value), whichever view is showing. Dollar figures are estimates from your category spend weights — actual card usage isn't tracked." />
         </h2>
-        <div className="segmented" role="group" aria-label="Matrix view">
-          {(['multiplier', 'effective'] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={view === mode ? 'active' : ''}
-              aria-pressed={view === mode}
-              onClick={() => setView(mode)}
-            >
-              {mode === 'multiplier' ? 'Multiplier' : 'Effective %'}
-            </button>
-          ))}
-        </div>
+        <Segmented variant="toggle" ariaLabel="Matrix view" value={view} onChange={setView}
+          options={[{ value: 'multiplier', label: 'Multiplier' }, { value: 'effective', label: 'Effective %' }]} />
         {!editing && (
           <>
             <BusyButton ref={editButtonRef} type="button" className="button" inert={busy} onClick={startEditing}>

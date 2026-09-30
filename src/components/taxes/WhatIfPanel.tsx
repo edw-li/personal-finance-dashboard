@@ -3,6 +3,7 @@ import type { KeyboardEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import BusyButton from '../feedback/BusyButton'
+import Segmented from '../shell/Segmented'
 import { fetchLots } from '../../api/espp'
 import { fetchLimits } from '../../api/limits'
 import { fetchHoldings } from '../../api/portfolio'
@@ -845,24 +846,9 @@ export default function WhatIfPanel({
                       }}
                       onInvalid={setFormError}
                     />
-                    <div className="segmented" role="group" aria-label={`Sale ${index + 1} term`}>
-                      <button
-                        type="button"
-                        className={leg.term === 'long' ? 'active' : ''}
-                        aria-pressed={leg.term === 'long'}
-                        onClick={() => setSale(index, { term: 'long' }, true)}
-                      >
-                        Long
-                      </button>
-                      <button
-                        type="button"
-                        className={leg.term === 'short' ? 'active' : ''}
-                        aria-pressed={leg.term === 'short'}
-                        onClick={() => setSale(index, { term: 'short' }, true)}
-                      >
-                        Short
-                      </button>
-                    </div>
+                    <Segmented variant="toggle" ariaLabel={`Sale ${index + 1} term`} value={leg.term}
+                      onChange={term => setSale(index, { term }, true)}
+                      options={[{ value: 'long', label: 'Long' }, { value: 'short', label: 'Short' }]} />
                     <span className="drill-hint">{formatShares(holding?.shares)} held</span>
                     <button
                       type="button"
