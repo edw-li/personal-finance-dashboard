@@ -12,8 +12,7 @@ export function useEntryHeaders(step: string, rows: unknown, owners: unknown) {
     const updateContext = () => {
       const context = contextRef.current
       if (context === null) return
-      const inset = parseFloat(getComputedStyle(table).getPropertyValue('--sticky-inset')) || 0
-      const boundary = inset + (table.tHead?.offsetHeight ?? 0)
+      const boundary = table.tHead?.getBoundingClientRect().bottom ?? 0
       const firstVisible = entries.find(row => row.getBoundingClientRect().bottom > boundary) ?? entries.at(-1)
       const owner = firstVisible?.closest('tbody')?.dataset.entryOwner
       // This label is a visual scroll aid; the original owner/group headings remain in the
@@ -21,7 +20,6 @@ export function useEntryHeaders(step: string, rows: unknown, owners: unknown) {
       context.textContent = [owner, firstVisible?.dataset.entryGroup].filter(Boolean).join(' / ') || 'Account balances'
     }
     const measure = () => {
-      table.style.setProperty('--entry-columns-height', `${table.tHead?.rows[0]?.getBoundingClientRect().height ?? 0}px`)
       table.style.setProperty('--entry-header-height', `${table.tHead?.offsetHeight ?? 0}px`)
       updateContext()
     }

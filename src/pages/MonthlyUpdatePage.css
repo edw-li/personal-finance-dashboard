@@ -80,6 +80,9 @@
 .entry-balances {
   --entry-indent: 1.1rem;
   --entry-group-inset: 0.6rem;
+  /* Collapsed borders can expose scrolling rows through a sticky header's seams. */
+  border-collapse: separate;
+  border-spacing: 0;
 }
 .entry-balances[data-owner-groups] {
   --entry-group-inset: calc(0.6rem + var(--entry-indent));
@@ -115,7 +118,6 @@
   color: var(--muted);
 }
 .entry-subtotal-row td {
-  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.8rem;
 }
@@ -134,30 +136,30 @@
   padding-top: 0.6rem;
 }
 .entry-context-content { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem 1rem; }
-.entry-owner-jumps { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; font-size: 0.75rem; color: var(--muted); }
+.entry-owner-jumps { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; font-size: 0.75rem; font-weight: 400; color: var(--muted); }
 .entry-owner-jumps .button { padding: 0.2rem 0.55rem; font-size: inherit; }
-.entry-balances thead th, .entry-balances .entry-context-row td {
+/* Both rows stick as one opaque surface. Separately positioned cells leave a seam when
+   measured row heights are scaled or rounded differently from their sticky offsets. */
+.entry-balances thead {
   position: sticky;
   top: var(--sticky-inset, 0px);
   z-index: 4;
   background: var(--surface);
-  box-shadow: 0 1px var(--border);
+  box-shadow: 0 -1px var(--surface);
 }
 .entry-balances .entry-context-row td {
-  top: calc(var(--sticky-inset, 0px) + var(--entry-columns-height, 30px));
-  z-index: 3;
-  padding: 0.45rem 0.6rem;
+  padding: 0.2rem 0 0.4rem;
   color: var(--text);
-  font-size: 0.8rem;
-  font-weight: 500;
+  font-size: 0.95rem;
+  font-weight: 650;
   letter-spacing: 0;
   text-transform: none;
 }
-.entry-context-label { border-left: 2px solid var(--accent); padding-left: 0.6rem; }
+.entry-context-label { min-width: 0; overflow-wrap: anywhere; }
 .entry-balances .entry-owner-row th:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .entry-balances .entry-owner-row, .entry-balances input { scroll-margin-top: calc(var(--sticky-inset, 0px) + var(--entry-header-height, 60px) + 8px); }
-.entry-owner-heading {
-  display: block;
+.entry-owner-heading { display: block; }
+.entry-owner-heading, .entry-context-content {
   padding: 0.55rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -171,7 +173,6 @@
 }
 .entry-table .entry-owner-subtotal-row td {
   padding-block: 0.65rem;
-  border-top-width: 2px;
 }
 /* The same two variables .stat-delta-positive/-negative use (panels.css) — one delta
    palette across the app; the Δ column and the footer share these. The table-scoped twin
